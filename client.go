@@ -22,7 +22,7 @@ type DefaultConfig struct {
 // ClientOption defines options for configuring the client
 type ClientOption func(*Client)
 
-// New creates a new Snook client with optional configuration
+// New creates a new LiteLLM client with optional configuration
 func New(opts ...ClientOption) *Client {
 	client := &Client{
 		providers: make(map[string]Provider),
@@ -259,4 +259,28 @@ func getEnvOrDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// Quick performs a quick completion with minimal configuration
+// It creates a new client with auto-discovery and makes a simple completion request
+func Quick(model, message string) (*Response, error) {
+	client := New()
+	return client.Complete(context.Background(), &Request{
+		Model: model,
+		Messages: []Message{
+			{Role: "user", Content: message},
+		},
+	})
+}
+
+// IntPtr returns a pointer to an int value
+// Helper function to make it easier to set optional int fields
+func IntPtr(v int) *int {
+	return &v
+}
+
+// Float64Ptr returns a pointer to a float64 value
+// Helper function to make it easier to set optional float64 fields
+func Float64Ptr(v float64) *float64 {
+	return &v
 }

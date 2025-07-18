@@ -305,7 +305,7 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 		return nil, fmt.Errorf("openai: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.config.BaseURL+"/v1/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.buildURL("/chat/completions"), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("openai: create request: %w", err)
 	}
@@ -419,7 +419,7 @@ func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Requ
 	}
 
 	// Use Responses API
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.config.BaseURL+"/v1/responses", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.buildURL("/responses"), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("openai: create responses request: %w", err)
 	}
@@ -531,7 +531,7 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		return nil, fmt.Errorf("openai: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.config.BaseURL+"/v1/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.buildURL("/chat/completions"), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("openai: create request: %w", err)
 	}
@@ -555,6 +555,15 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		scanner:  bufio.NewScanner(resp.Body),
 		provider: "openai",
 	}, nil
+}
+
+// buildURL intelligently constructs the full API URL
+func (p *OpenAIProvider) buildURL(endpoint string) string {
+	baseURL := strings.TrimSuffix(p.config.BaseURL, "/")
+	if strings.HasSuffix(baseURL, "/v1") {
+		return baseURL + endpoint
+	}
+	return baseURL + "/v1" + endpoint
 }
 
 // openaiStreamReader implements StreamReader for OpenAI
