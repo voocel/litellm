@@ -35,11 +35,15 @@ func (p *OpenAIProvider) Models() []ModelInfo {
 			Capabilities: []ModelCapability{CapabilityChat, CapabilityFunctionCall, CapabilityVision},
 		},
 		{
-			ID: "gpt-4-turbo", Provider: "openai", Name: "GPT-4 Turbo", MaxTokens: 128000,
+			ID: "gpt-4.1", Provider: "openai", Name: "GPT-4.1", MaxTokens: 128000,
 			Capabilities: []ModelCapability{CapabilityChat, CapabilityFunctionCall, CapabilityVision},
 		},
 		{
-			ID: "gpt-3.5-turbo", Provider: "openai", Name: "GPT-3.5 Turbo", MaxTokens: 16385,
+			ID: "gpt-4.1-mini", Provider: "openai", Name: "GPT-4.1 Mini", MaxTokens: 16385,
+			Capabilities: []ModelCapability{CapabilityChat, CapabilityFunctionCall},
+		},
+		{
+			ID: "gpt-4.1-nano", Provider: "openai", Name: "GPT-4.1 Nano", MaxTokens: 16385,
 			Capabilities: []ModelCapability{CapabilityChat, CapabilityFunctionCall},
 		},
 		{

@@ -31,23 +31,11 @@ func NewGeminiProvider(config ProviderConfig) Provider {
 func (p *GeminiProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		{
-			ID: "gemini-1.5-pro", Provider: "gemini", Name: "Gemini 1.5 Pro", MaxTokens: 2000000,
+			ID: "gemini-2.5-pro", Provider: "gemini", Name: "Gemini 2.5 Pro", MaxTokens: 2000000,
 			Capabilities: []ModelCapability{CapabilityChat, CapabilityVision, CapabilityCode, CapabilityFunctionCall},
 		},
 		{
-			ID: "gemini-1.5-flash", Provider: "gemini", Name: "Gemini 1.5 Flash", MaxTokens: 1000000,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityVision, CapabilityFunctionCall},
-		},
-		{
-			ID: "gemini-2.0-flash-exp", Provider: "gemini", Name: "Gemini 2.0 Flash (Experimental)", MaxTokens: 1000000,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityVision, CapabilityMultimodal, CapabilityFunctionCall},
-		},
-		{
-			ID: "gemini-1.5-pro-002", Provider: "gemini", Name: "Gemini 1.5 Pro 002", MaxTokens: 2000000,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityVision, CapabilityCode, CapabilityFunctionCall},
-		},
-		{
-			ID: "gemini-1.5-flash-002", Provider: "gemini", Name: "Gemini 1.5 Flash 002", MaxTokens: 1000000,
+			ID: "gemini-2.5-flash", Provider: "gemini", Name: "Gemini 2.5 Flash", MaxTokens: 1000000,
 			Capabilities: []ModelCapability{CapabilityChat, CapabilityVision, CapabilityFunctionCall},
 		},
 	}
