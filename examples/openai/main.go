@@ -10,8 +10,48 @@ import (
 )
 
 func main() {
+	fmt.Println("=== OpenAI Complete Example ===")
+
 	// Initialize client with your API key
 	client := litellm.New(litellm.WithOpenAI("your-openai-api-key"))
+
+	// Basic conversation
+	fmt.Println("\n--- Basic Chat ---")
+	response, err := client.Complete(context.Background(), &litellm.Request{
+		Model: "gpt-4.1-mini",
+		Messages: []litellm.Message{
+			{Role: "user", Content: "Explain quantum computing in simple terms"},
+		},
+		MaxTokens:   litellm.IntPtr(150),
+		Temperature: litellm.Float64Ptr(0.7),
+	})
+	if err != nil {
+		log.Fatalf("Basic chat failed: %v", err)
+	}
+
+	fmt.Printf("Response: %s\n", response.Content)
+	fmt.Printf("Tokens: %d\n", response.Usage.TotalTokens)
+
+	// Reasoning model
+	fmt.Println("\n--- Reasoning Model (o4-mini) ---")
+	reasoningResp, err := client.Complete(context.Background(), &litellm.Request{
+		Model: "o4-mini",
+		Messages: []litellm.Message{
+			{Role: "user", Content: "Calculate 23 * 47 step by step"},
+		},
+		MaxTokens: litellm.IntPtr(500),
+	})
+	if err != nil {
+		log.Printf("Reasoning failed: %v", err)
+	} else {
+		fmt.Printf("Answer: %s\n", reasoningResp.Content)
+		if reasoningResp.Reasoning != nil {
+			fmt.Printf("Reasoning process: %s\n", reasoningResp.Reasoning.Summary)
+		}
+	}
+
+	// Streaming Tool Calls - Advanced feature
+	fmt.Println("\n--- Streaming Tool Calls (Advanced) ---")
 
 	// Define tools
 	tools := []litellm.Tool{
@@ -41,7 +81,7 @@ func main() {
 
 	// Start streaming with tool calls
 	stream, err := client.Stream(context.Background(), &litellm.Request{
-		Model: "gpt-4o-mini",
+		Model: "gpt-4.1-mini",
 		Messages: []litellm.Message{
 			{Role: "user", Content: "What's the weather like in Tokyo and New York? Use celsius."},
 		},
