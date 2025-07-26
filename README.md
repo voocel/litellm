@@ -4,18 +4,18 @@
 
 A clean and elegant Go library for unified access to multiple LLM platforms.
 
-## ✨ Features
+## Features
 
-- 🚀 **Simple & Clean** - One-line API calls to any LLM platform
-- 🔄 **Unified Interface** - Same request/response format across all providers
-- 🧠 **Reasoning Support** - Full support for OpenAI o-series reasoning models
-- 🛠 **Function Calling** - Complete Function Calling support
-- 🌊 **Streaming** - Real-time streaming responses
-- 📦 **Zero Config** - Auto-discovery from environment variables
-- 🔧 **Extensible** - Easy to add new LLM platforms
-- 🎯 **Type Safe** - Strong typing and comprehensive error handling
+- **Simple & Clean** - One-line API calls to any LLM platform
+- **Unified Interface** - Same request/response format across all providers
+- **Reasoning Support** - Full support for OpenAI o-series reasoning models
+- **Function Calling** - Complete Function Calling support
+- **Streaming** - Real-time streaming responses
+- **Zero Config** - Auto-discovery from environment variables
+- **Extensible** - Easy to add new LLM platforms
+- **Type Safe** - Strong typing and comprehensive error handling
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
@@ -88,7 +88,7 @@ func main() {
 }
 ```
 
-## 🧠 Reasoning Models
+## Reasoning Models
 
 Full support for OpenAI o-series reasoning models with both Chat API and Responses API:
 
@@ -111,7 +111,7 @@ if response.Reasoning != nil {
 }
 ```
 
-## 🌊 Streaming
+## Streaming
 
 Real-time streaming with reasoning process display:
 
@@ -139,7 +139,7 @@ for {
 }
 ```
 
-## 🛠️ Function Calling
+## Function Calling
 
 Complete Function Calling support compatible with OpenAI and Anthropic:
 
@@ -179,7 +179,7 @@ if len(response.ToolCalls) > 0 {
 }
 ```
 
-## 🔧 Extending New Platforms
+## Extending New Platforms
 
 Adding new LLM platforms is simple:
 
@@ -212,24 +212,24 @@ response, _ := client.Complete(ctx, &litellm.Request{
 })
 ```
 
-## 📋 Supported Platforms
+## Supported Platforms
 
 ### OpenAI
-- ✅ GPT-4o, GPT-4o-mini, GPT-4.1, GPT-4.1-mini, GPT-4.1-mano
-- ✅ o3, o3-mini, o4-mini (reasoning models)
-- ✅ Chat Completions API & Responses API
-- ✅ Function Calling, Vision, Streaming
+- GPT-4o, GPT-4o-mini, GPT-4.1, GPT-4.1-mini, GPT-4.1-mano
+- o3, o3-mini, o4-mini (reasoning models)
+- Chat Completions API & Responses API
+- Function Calling, Vision, Streaming
 
 ### Anthropic
-- ✅ Claude 3.7 Sonnet, Claude 4 Sonnet, Claude 4 Opus
-- ✅ Function Calling, Vision, Streaming
+- Claude 3.7 Sonnet, Claude 4 Sonnet, Claude 4 Opus
+- Function Calling, Vision, Streaming
 
 ### Google Gemini
-- ✅ Gemini 2.5 Pro, Gemini 2.5 Flash
-- ✅ Function Calling, Vision, Streaming
-- ✅ Large context window
+- Gemini 2.5 Pro, Gemini 2.5 Flash
+- Function Calling, Vision, Streaming
+- Large context window
 
-## ⚙️ Configuration
+## Configuration
 
 ### Environment Variables
 ```bash
@@ -248,7 +248,7 @@ client := litellm.New(
 )
 ```
 
-## 📊 API Reference
+## API Reference
 
 ### Core Types
 ```go
@@ -278,10 +278,10 @@ func (c *Client) Complete(ctx context.Context, req *Request) (*Response, error)
 func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error)
 ```
 
-## 📄 License
+## License
 
 Apache License
 
 ---
 
-**LiteLLM** - Making LLM API calls simple and elegant 🚀
+**LiteLLM** - Making LLM API calls simple and elegant

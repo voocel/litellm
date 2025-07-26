@@ -82,14 +82,23 @@ type anthropicUsage struct {
 }
 
 type anthropicStreamChunk struct {
-	Type  string         `json:"type"`
-	Delta anthropicDelta `json:"delta,omitempty"`
-	Usage anthropicUsage `json:"usage,omitempty"`
+	Type         string         `json:"type"`
+	Index        int            `json:"index,omitempty"`
+	Delta        anthropicDelta `json:"delta,omitempty"`
+	Usage        anthropicUsage `json:"usage,omitempty"`
+	ContentBlock *struct {
+		Type string `json:"type"`
+		ID   string `json:"id,omitempty"`
+		Name string `json:"name,omitempty"`
+	} `json:"content_block,omitempty"`
 }
 
 type anthropicDelta struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type        string `json:"type"`
+	Text        string `json:"text,omitempty"`
+	PartialJSON string `json:"partial_json,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Input       string `json:"input,omitempty"`
 }
 
 func (p *AnthropicProvider) Complete(ctx context.Context, req *Request) (*Response, error) {
@@ -212,9 +221,10 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *Request) (*Respon
 
 	// Parse content and tool calls
 	for _, content := range anthropicResp.Content {
-		if content.Type == "text" {
+		switch content.Type {
+		case "text":
 			response.Content += content.Text
-		} else if content.Type == "tool_use" {
+		case "tool_use":
 			args, _ := json.Marshal(content.Input)
 			response.ToolCalls = append(response.ToolCalls, ToolCall{
 				ID:   content.ToolUseID,
@@ -376,6 +386,32 @@ func (r *anthropicStreamReader) Read() (*StreamChunk, error) {
 				Content:  chunk.Delta.Text,
 				Done:     false,
 				Provider: r.provider,
+			}, nil
+		}
+
+		// Handle tool use deltas
+		if chunk.Type == "content_block_delta" && chunk.Delta.Type == "input_json_delta" {
+			return &StreamChunk{
+				Type:     ChunkTypeToolCallDelta,
+				Provider: r.provider,
+				ToolCallDelta: &ToolCallDelta{
+					Index:          chunk.Index,
+					ArgumentsDelta: chunk.Delta.PartialJSON,
+				},
+			}, nil
+		}
+
+		// Handle tool use start
+		if chunk.Type == "content_block_start" && chunk.ContentBlock != nil && chunk.ContentBlock.Type == "tool_use" {
+			return &StreamChunk{
+				Type:     ChunkTypeToolCallDelta,
+				Provider: r.provider,
+				ToolCallDelta: &ToolCallDelta{
+					Index:        chunk.Index,
+					ID:           chunk.ContentBlock.ID,
+					Type:         "function",
+					FunctionName: chunk.ContentBlock.Name,
+				},
 			}, nil
 		}
 	}

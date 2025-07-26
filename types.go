@@ -92,13 +92,16 @@ type Usage struct {
 type StreamChunk struct {
 	Type      ChunkType  `json:"type"`                 // Chunk type
 	Content   string     `json:"content,omitempty"`    // Content delta
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"` // Tool call deltas
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"` // Complete tool calls
 	Usage     *Usage     `json:"usage,omitempty"`      // Final usage stats
 	Done      bool       `json:"done"`                 // Stream completion flag
 	Error     error      `json:"error,omitempty"`      // Error if any
 
 	// Reasoning data
 	Reasoning *ReasoningChunk `json:"reasoning,omitempty"` // Reasoning chunk
+
+	// Tool call delta data
+	ToolCallDelta *ToolCallDelta `json:"tool_call_delta,omitempty"` // Tool call incremental data
 
 	// Metadata
 	Model        string         `json:"model,omitempty"`         // Model name
@@ -111,18 +114,28 @@ type StreamChunk struct {
 type ChunkType string
 
 const (
-	ChunkTypeContent   ChunkType = "content"   // Regular content
-	ChunkTypeReasoning ChunkType = "reasoning" // Reasoning content
-	ChunkTypeToolCall  ChunkType = "tool_call" // Tool call
-	ChunkTypeUsage     ChunkType = "usage"     // Usage statistics
-	ChunkTypeDone      ChunkType = "done"      // Completion marker
-	ChunkTypeError     ChunkType = "error"     // Error
+	ChunkTypeContent       ChunkType = "content"         // Regular content
+	ChunkTypeReasoning     ChunkType = "reasoning"       // Reasoning content
+	ChunkTypeToolCall      ChunkType = "tool_call"       // Complete tool call
+	ChunkTypeToolCallDelta ChunkType = "tool_call_delta" // Tool call arguments delta
+	ChunkTypeUsage         ChunkType = "usage"           // Usage statistics
+	ChunkTypeDone          ChunkType = "done"            // Completion marker
+	ChunkTypeError         ChunkType = "error"           // Error
 )
 
 // ReasoningChunk represents a reasoning content chunk
 type ReasoningChunk struct {
 	Content string `json:"content,omitempty"` // Reasoning content delta
 	Summary string `json:"summary,omitempty"` // Reasoning summary delta
+}
+
+// ToolCallDelta represents incremental tool call data
+type ToolCallDelta struct {
+	Index          int    `json:"index,omitempty"`           // Tool call index in the array
+	ID             string `json:"id,omitempty"`              // Tool call ID
+	Type           string `json:"type,omitempty"`            // Tool type (e.g., "function")
+	FunctionName   string `json:"function_name,omitempty"`   // Function name
+	ArgumentsDelta string `json:"arguments_delta,omitempty"` // Incremental arguments
 }
 
 // StreamReader provides an interface for reading streaming responses

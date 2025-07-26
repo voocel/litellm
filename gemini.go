@@ -420,9 +420,7 @@ func (r *geminiStreamReader) Read() (*StreamChunk, error) {
 		}
 
 		// Remove possible "data: " prefix
-		if strings.HasPrefix(line, "data: ") {
-			line = strings.TrimPrefix(line, "data: ")
-		}
+		line = strings.TrimPrefix(line, "data: ")
 
 		// Skip empty lines and non-JSON lines
 		if line == "" || (!strings.HasPrefix(line, "{") && !strings.HasPrefix(line, "[")) {
@@ -449,7 +447,7 @@ func (r *geminiStreamReader) Read() (*StreamChunk, error) {
 					return streamChunk, nil
 				}
 
-				// Handle tool calls
+				// Handle tool calls - Gemini typically returns complete tool calls
 				if part.FunctionCall != nil {
 					streamChunk.Type = ChunkTypeToolCall
 					args, _ := json.Marshal(part.FunctionCall.Args)

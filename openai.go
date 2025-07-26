@@ -47,15 +47,11 @@ func (p *OpenAIProvider) Models() []ModelInfo {
 			Capabilities: []ModelCapability{CapabilityChat, CapabilityFunctionCall},
 		},
 		{
-			ID: "o1", Provider: "openai", Name: "OpenAI o1", MaxTokens: 100000,
+			ID: "o3", Provider: "openai", Name: "OpenAI o3", MaxTokens: 100000,
 			Capabilities: []ModelCapability{CapabilityChat, CapabilityReasoning},
 		},
 		{
-			ID: "o1-mini", Provider: "openai", Name: "OpenAI o1 Mini", MaxTokens: 65536,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityReasoning},
-		},
-		{
-			ID: "o3-mini", Provider: "openai", Name: "OpenAI o3 Mini", MaxTokens: 100000,
+			ID: "o4-mini", Provider: "openai", Name: "OpenAI o4 Mini", MaxTokens: 100000,
 			Capabilities: []ModelCapability{CapabilityChat, CapabilityReasoning},
 		},
 	}
@@ -116,6 +112,19 @@ type openaiToolCallFunc struct {
 	Arguments string `json:"arguments"`
 }
 
+// openaiToolCallDelta represents incremental tool call data from OpenAI
+type openaiToolCallDelta struct {
+	Index    int                      `json:"index"`
+	ID       string                   `json:"id,omitempty"`
+	Type     string                   `json:"type,omitempty"`
+	Function *openaiToolCallFuncDelta `json:"function,omitempty"`
+}
+
+type openaiToolCallFuncDelta struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
 type openaiResponse struct {
 	ID      string         `json:"id"`
 	Object  string         `json:"object"`
@@ -138,7 +147,7 @@ type openaiReasoningSummary struct {
 
 type openaiDelta struct {
 	Content          string                  `json:"content,omitempty"`
-	ToolCalls        []openaiToolCall        `json:"tool_calls,omitempty"`
+	ToolCalls        []openaiToolCallDelta   `json:"tool_calls,omitempty"`
 	ReasoningSummary *openaiReasoningSummary `json:"reasoning_summary,omitempty"`
 }
 
@@ -621,11 +630,34 @@ func (r *openaiStreamReader) Read() (*StreamChunk, error) {
 				}
 			}
 
+			// Handle tool call deltas
+			if len(choice.Delta.ToolCalls) > 0 {
+				for _, toolCallDelta := range choice.Delta.ToolCalls {
+					streamChunk.Type = ChunkTypeToolCallDelta
+					streamChunk.ToolCallDelta = &ToolCallDelta{
+						Index: toolCallDelta.Index,
+						ID:    toolCallDelta.ID,
+						Type:  toolCallDelta.Type,
+					}
+
+					if toolCallDelta.Function != nil {
+						streamChunk.ToolCallDelta.FunctionName = toolCallDelta.Function.Name
+						streamChunk.ToolCallDelta.ArgumentsDelta = toolCallDelta.Function.Arguments
+					}
+
+					// Return immediately for each tool call delta
+					return streamChunk, nil
+				}
+			}
+
 			if choice.FinishReason != "" {
 				streamChunk.FinishReason = choice.FinishReason
 			}
 
-			return streamChunk, nil
+			// Only return if we have content, reasoning, or finish reason
+			if streamChunk.Type != "" || streamChunk.FinishReason != "" {
+				return streamChunk, nil
+			}
 		}
 	}
 

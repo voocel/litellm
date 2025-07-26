@@ -2,6 +2,7 @@ package litellm
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -196,4 +197,83 @@ func TestStreaming(t *testing.T) {
 
 	t.Logf("Streamed content: %s", content)
 	t.Logf("Chunks received: %d", chunkCount)
+}
+
+// Streaming tool calls with delta support
+func TestStreamingToolCalls(t *testing.T) {
+	client := New(WithOpenAI("sk-xxx", "xxx"))
+
+	tools := []Tool{
+		{
+			Type: "function",
+			Function: FunctionSchema{
+				Name:        "get_weather",
+				Description: "Get weather information for a city",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"city": map[string]interface{}{
+							"type":        "string",
+							"description": "The city name",
+						},
+					},
+					"required": []string{"city"},
+				},
+			},
+		},
+	}
+
+	stream, err := client.Stream(context.Background(), &Request{
+		Model: "gpt-4o-mini",
+		Messages: []Message{
+			{Role: "user", Content: "What's the weather like in Beijing?"},
+		},
+		Tools:      tools,
+		ToolChoice: "auto",
+	})
+
+	if err != nil {
+		t.Fatalf("Streaming tool calls failed: %v", err)
+	}
+	defer stream.Close()
+
+	var toolCallArgs strings.Builder
+
+	for {
+		chunk, err := stream.Read()
+		if err != nil {
+			t.Fatalf("Stream read failed: %v", err)
+		}
+
+		if chunk.Done {
+			break
+		}
+
+		switch chunk.Type {
+		case ChunkTypeContent:
+			t.Logf("Content: %s", chunk.Content)
+		case ChunkTypeToolCallDelta:
+			if chunk.ToolCallDelta != nil {
+				// New tool call started
+				if chunk.ToolCallDelta.ID != "" {
+					t.Logf("Tool call started: ID=%s, Function=%s",
+						chunk.ToolCallDelta.ID, chunk.ToolCallDelta.FunctionName)
+				}
+				// Accumulate arguments
+				if chunk.ToolCallDelta.ArgumentsDelta != "" {
+					toolCallArgs.WriteString(chunk.ToolCallDelta.ArgumentsDelta)
+					t.Logf("Arguments delta: %s", chunk.ToolCallDelta.ArgumentsDelta)
+				}
+			}
+		case ChunkTypeToolCall:
+			// Complete tool call (for providers like Gemini)
+			if len(chunk.ToolCalls) > 0 {
+				t.Logf("Complete tool call: %s", chunk.ToolCalls[0].Function.Name)
+			}
+		}
+	}
+
+	if toolCallArgs.Len() > 0 {
+		t.Logf("Final accumulated arguments: %s", toolCallArgs.String())
+	}
 }

@@ -4,18 +4,18 @@
 
 一个简洁优雅的 Go 语言库，用于统一访问多个 LLM 平台。
 
-## ✨ 特性
+## 特性
 
-- 🚀 **简洁易用** - 一行代码调用任意 LLM 平台
-- 🔄 **统一接口** - 所有平台使用相同的请求/响应格式
-- 🧠 **推理支持** - 完整支持 OpenAI o 系列推理模型
-- 🛠️ **工具调用** - 完整的 Function Calling 支持
-- 🌊 **流式处理** - 实时流式响应
-- 📦 **零配置** - 环境变量自动发现
-- 🔧 **易扩展** - 轻松添加新的 LLM 平台
-- 🎯 **类型安全** - 强类型定义和完善的错误处理
+- **简洁易用** - 一行代码调用任意 LLM 平台
+- **统一接口** - 所有平台使用相同的请求/响应格式
+- **推理支持** - 完整支持 OpenAI o 系列推理模型
+- **工具调用** - 完整的 Function Calling 支持
+- **流式处理** - 实时流式响应
+- **零配置** - 环境变量自动发现
+- **易扩展** - 轻松添加新的 LLM 平台
+- **类型安全** - 强类型定义和完善的错误处理
 
-## 🚀 快速开始
+## 快速开始
 
 ### 安装
 
@@ -88,7 +88,7 @@ func main() {
 }
 ```
 
-## 🧠 推理模型
+## 推理模型
 
 完整支持 OpenAI o 系列推理模型，包括 Chat API 和 Responses API：
 
@@ -111,7 +111,7 @@ if response.Reasoning != nil {
 }
 ```
 
-## 🌊 流式处理
+## 流式处理
 
 支持实时流式响应和推理过程展示：
 
@@ -139,7 +139,7 @@ for {
 }
 ```
 
-## 🛠️ 工具调用 (Function Calling)
+## 工具调用 (Function Calling)
 
 完整支持 Function Calling，兼容 OpenAI 和 Anthropic：
 
@@ -179,7 +179,7 @@ if len(response.ToolCalls) > 0 {
 }
 ```
 
-## 🔧 扩展新平台
+## 扩展新平台
 
 添加新的 LLM 平台非常简单：
 
@@ -212,24 +212,24 @@ response, _ := client.Complete(ctx, &litellm.Request{
 })
 ```
 
-## 📋 支持的平台
+## 支持的平台
 
 ### OpenAI
-- ✅ GPT-4o, GPT-4o-mini, GPT-4.1, GPT-4.1-mini, GPT-4.1-mano
-- ✅ o3, o3-mini, o4-mini (推理模型)
-- ✅ Chat Completions API 和 Responses API
-- ✅ Function Calling, Vision, 流式处理
+- GPT-4o, GPT-4o-mini, GPT-4.1, GPT-4.1-mini, GPT-4.1-mano
+- o3, o3-mini, o4-mini (推理模型)
+- Chat Completions API 和 Responses API
+- Function Calling, Vision, 流式处理
 
 ### Anthropic
-- ✅ Claude 3.7 Sonnet, Claude 4 Sonnet, Claude 4 Opus
-- ✅ Function Calling, Vision, 流式处理
+- Claude 3.7 Sonnet, Claude 4 Sonnet, Claude 4 Opus
+- Function Calling, Vision, 流式处理
 
 ### Google Gemini
-- ✅ Gemini 2.5 Pro, Gemini 2.5 Flash
-- ✅ Function Calling, Vision, 流式处理
-- ✅ 超大上下文窗口
+- Gemini 2.5 Pro, Gemini 2.5 Flash
+- Function Calling, Vision, 流式处理
+- 超大上下文窗口
 
-## ⚙️ 配置
+## 配置
 
 ### 环境变量
 ```bash
@@ -248,7 +248,7 @@ client := litellm.New(
 )
 ```
 
-## 📊 API 参考
+## API 参考
 
 ### 核心类型
 ```go
@@ -278,10 +278,10 @@ func (c *Client) Complete(ctx context.Context, req *Request) (*Response, error)
 func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error)
 ```
 
-## 📄 许可证
+## 许可证
 
 Apache License
 
 ---
 
-**LiteLLM** - 让 LLM API 调用变得简单优雅 🚀
+**LiteLLM** - 让 LLM API 调用变得简单优雅
