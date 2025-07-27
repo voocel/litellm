@@ -90,6 +90,19 @@ func WithGemini(apiKey string, baseURL ...string) ClientOption {
 	}
 }
 
+// WithDeepSeek adds DeepSeek provider with custom configuration
+func WithDeepSeek(apiKey string, baseURL ...string) ClientOption {
+	return func(c *Client) {
+		config := ProviderConfig{APIKey: apiKey}
+		if len(baseURL) > 0 && baseURL[0] != "" {
+			config.BaseURL = baseURL[0]
+		}
+		if provider := createDeepSeekProvider(config); provider != nil {
+			c.providers["deepseek"] = provider
+		}
+	}
+}
+
 // WithProvider adds a custom provider
 func WithProvider(name string, provider Provider) ClientOption {
 	return func(c *Client) {
@@ -142,6 +155,17 @@ func (c *Client) autoDiscoverProviders() {
 		}
 		if provider := createGeminiProvider(config); provider != nil {
 			c.providers["gemini"] = provider
+		}
+	}
+
+	// Auto-discover DeepSeek
+	if apiKey := os.Getenv("DEEPSEEK_API_KEY"); apiKey != "" {
+		config := ProviderConfig{
+			APIKey:  apiKey,
+			BaseURL: getEnvOrDefault("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+		}
+		if provider := createDeepSeekProvider(config); provider != nil {
+			c.providers["deepseek"] = provider
 		}
 	}
 }

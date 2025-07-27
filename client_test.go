@@ -277,3 +277,30 @@ func TestStreamingToolCalls(t *testing.T) {
 		t.Logf("Final accumulated arguments: %s", toolCallArgs.String())
 	}
 }
+
+// DeepSeek provider test
+func TestDeepSeek(t *testing.T) {
+	client := New(WithDeepSeek("sk-xxx", "https://api.deepseek.com/v1"))
+
+	response, err := client.Complete(context.Background(), &Request{
+		Model: "deepseek-reasoner",
+		Messages: []Message{
+			{Role: "user", Content: "who are you?"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DeepSeek test failed: %v", err)
+	}
+
+	if response.Content == "" {
+		t.Error("Expected non-empty response content")
+	}
+
+	t.Logf("DeepSeek response: %s", response.Content)
+	t.Logf("Model: %s, Provider: %s", response.Model, response.Provider)
+	t.Logf("Finish reason: %s", response.FinishReason)
+
+	if response.Reasoning != nil {
+		t.Logf("Reasoning: %s", response.Reasoning.Content)
+	}
+}

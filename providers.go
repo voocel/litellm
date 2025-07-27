@@ -80,6 +80,8 @@ func getDefaultBaseURL(provider string) string {
 		return "https://api.anthropic.com"
 	case "gemini":
 		return "https://generativelanguage.googleapis.com"
+	case "deepseek":
+		return "https://api.deepseek.com"
 	default:
 		return ""
 	}
@@ -102,6 +104,13 @@ func createAnthropicProvider(config ProviderConfig) Provider {
 
 func createGeminiProvider(config ProviderConfig) Provider {
 	if factory, exists := ProviderRegistry["gemini"]; exists {
+		return factory(config)
+	}
+	return nil
+}
+
+func createDeepSeekProvider(config ProviderConfig) Provider {
+	if factory, exists := ProviderRegistry["deepseek"]; exists {
 		return factory(config)
 	}
 	return nil
