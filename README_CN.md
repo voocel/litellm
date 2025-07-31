@@ -1,5 +1,7 @@
 # LiteLLM - Go 多平台 LLM API 客户端
 
+**LiteLLM** - 让 LLM API 调用变得简单优雅
+
 [English](README.md) | 中文
 
 一个简洁优雅的 Go 语言库，用于统一访问多个 LLM 平台。
@@ -141,6 +143,7 @@ for {
 
 ## 工具调用 (Function Calling)
 
+### 基础工具调用
 完整支持 Function Calling，兼容 OpenAI 和 Anthropic：
 
 ```go
@@ -176,6 +179,77 @@ response, err := client.Complete(context.Background(), &litellm.Request{
 // 处理工具调用
 if len(response.ToolCalls) > 0 {
     // 执行函数并继续对话...
+}
+```
+
+### 高级流式工具调用
+实时流式处理，支持增量工具调用数据处理：
+
+```go
+// 启动流式工具调用
+stream, err := client.Stream(context.Background(), &litellm.Request{
+    Model: "gpt-4.1-mini",
+    Messages: []litellm.Message{
+        {Role: "user", Content: "东京和纽约的天气怎么样？使用摄氏度。"},
+    },
+    Tools:      tools,
+    ToolChoice: "auto",
+})
+
+// 使用增量数据跟踪工具调用
+toolCalls := make(map[string]*ToolCallBuilder)
+
+defer stream.Close()
+for {
+    chunk, err := stream.Read()
+    if err != nil || chunk.Done {
+        break
+    }
+
+    switch chunk.Type {
+    case litellm.ChunkTypeContent:
+        fmt.Print(chunk.Content)
+
+    case litellm.ChunkTypeToolCallDelta:
+        // 处理增量工具调用数据
+        if chunk.ToolCallDelta != nil {
+            delta := chunk.ToolCallDelta
+
+            // 创建或获取工具调用构建器
+            if _, exists := toolCalls[delta.ID]; !exists && delta.ID != "" {
+                toolCalls[delta.ID] = &ToolCallBuilder{
+                    ID:   delta.ID,
+                    Type: delta.Type,
+                    Name: delta.FunctionName,
+                }
+                fmt.Printf("\n工具调用开始: %s", delta.FunctionName)
+            }
+
+            // 累积参数
+            if delta.ArgumentsDelta != "" && delta.ID != "" {
+                if builder, exists := toolCalls[delta.ID]; exists {
+                    builder.Arguments.WriteString(delta.ArgumentsDelta)
+                    fmt.Print(".")
+                }
+            }
+        }
+    }
+}
+
+// 处理完成的工具调用
+for id, builder := range toolCalls {
+    fmt.Printf("\n工具调用: %s(%s)", builder.Name, builder.Arguments.String())
+    // 使用累积的参数执行函数
+}
+```
+
+```go
+// ToolCallBuilder 帮助累积工具调用数据
+type ToolCallBuilder struct {
+    ID        string
+    Type      string
+    Name      string
+    Arguments strings.Builder
 }
 ```
 
@@ -229,6 +303,11 @@ response, _ := client.Complete(ctx, &litellm.Request{
 - Function Calling, Vision, 流式处理
 - 超大上下文窗口
 
+### DeepSeek
+- DeepSeek Chat, DeepSeek Reasoner
+- Function Calling, 代码生成, 推理能力
+- 超大上下文窗口
+
 ## 配置
 
 ### 环境变量
@@ -236,6 +315,7 @@ response, _ := client.Complete(ctx, &litellm.Request{
 export OPENAI_API_KEY="sk-proj-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 export GEMINI_API_KEY="AIza..."
+export DEEPSEEK_API_KEY="sk-..."
 ```
 
 ### 代码配置 (推荐)
@@ -244,6 +324,7 @@ client := litellm.New(
     litellm.WithOpenAI("your-openai-key"),
     litellm.WithAnthropic("your-anthropic-key"),
     litellm.WithGemini("your-gemini-key"),
+    litellm.WithDeepSeek("your-deepseek-key"),
     litellm.WithDefaults(2048, 0.8),
 )
 ```
@@ -281,7 +362,3 @@ func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error)
 ## 许可证
 
 Apache License
-
----
-
-**LiteLLM** - 让 LLM API 调用变得简单优雅

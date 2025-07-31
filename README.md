@@ -1,5 +1,7 @@
 # LiteLLM - Go Multi-Platform LLM API Client
 
+**LiteLLM** - Making LLM API calls simple and elegant
+
 [中文](README_CN.md) | English
 
 A clean and elegant Go library for unified access to multiple LLM platforms.
@@ -141,6 +143,7 @@ for {
 
 ## Function Calling
 
+### Basic Function Calling
 Complete Function Calling support compatible with OpenAI and Anthropic:
 
 ```go
@@ -176,6 +179,77 @@ response, err := client.Complete(context.Background(), &litellm.Request{
 // Handle tool calls
 if len(response.ToolCalls) > 0 {
     // Execute function and continue conversation...
+}
+```
+
+### Advanced Streaming Tool Calls
+Real-time streaming with incremental tool call processing:
+
+```go
+// Start streaming with tool calls
+stream, err := client.Stream(context.Background(), &litellm.Request{
+    Model: "gpt-4.1-mini",
+    Messages: []litellm.Message{
+        {Role: "user", Content: "What's the weather like in Tokyo and New York? Use celsius."},
+    },
+    Tools:      tools,
+    ToolChoice: "auto",
+})
+
+// Track tool calls with incremental data
+toolCalls := make(map[string]*ToolCallBuilder)
+
+defer stream.Close()
+for {
+    chunk, err := stream.Read()
+    if err != nil || chunk.Done {
+        break
+    }
+
+    switch chunk.Type {
+    case litellm.ChunkTypeContent:
+        fmt.Print(chunk.Content)
+
+    case litellm.ChunkTypeToolCallDelta:
+        // Handle incremental tool call data
+        if chunk.ToolCallDelta != nil {
+            delta := chunk.ToolCallDelta
+
+            // Create or get tool call builder
+            if _, exists := toolCalls[delta.ID]; !exists && delta.ID != "" {
+                toolCalls[delta.ID] = &ToolCallBuilder{
+                    ID:   delta.ID,
+                    Type: delta.Type,
+                    Name: delta.FunctionName,
+                }
+                fmt.Printf("\nTool call started: %s", delta.FunctionName)
+            }
+
+            // Accumulate arguments
+            if delta.ArgumentsDelta != "" && delta.ID != "" {
+                if builder, exists := toolCalls[delta.ID]; exists {
+                    builder.Arguments.WriteString(delta.ArgumentsDelta)
+                    fmt.Print(".")
+                }
+            }
+        }
+    }
+}
+
+// Process completed tool calls
+for id, builder := range toolCalls {
+    fmt.Printf("\nTool: %s(%s)", builder.Name, builder.Arguments.String())
+    // Execute the function with the accumulated arguments
+}
+```
+
+```go
+// ToolCallBuilder helps accumulate tool call data
+type ToolCallBuilder struct {
+    ID        string
+    Type      string
+    Name      string
+    Arguments strings.Builder
 }
 ```
 
@@ -229,6 +303,11 @@ response, _ := client.Complete(ctx, &litellm.Request{
 - Function Calling, Vision, Streaming
 - Large context window
 
+### DeepSeek
+- DeepSeek Chat, DeepSeek Reasoner
+- Function Calling, Code Generation, Reasoning
+- Large context window
+
 ## Configuration
 
 ### Environment Variables
@@ -236,6 +315,7 @@ response, _ := client.Complete(ctx, &litellm.Request{
 export OPENAI_API_KEY="sk-proj-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 export GEMINI_API_KEY="AIza..."
+export DEEPSEEK_API_KEY="sk-..."
 ```
 
 ### Code Configuration (Recommended)
@@ -244,6 +324,7 @@ client := litellm.New(
     litellm.WithOpenAI("your-openai-key"),
     litellm.WithAnthropic("your-anthropic-key"),
     litellm.WithGemini("your-gemini-key"),
+    litellm.WithDeepSeek("your-deepseek-key"),
     litellm.WithDefaults(2048, 0.8),
 )
 ```
@@ -281,7 +362,3 @@ func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error)
 ## License
 
 Apache License
-
----
-
-**LiteLLM** - Making LLM API calls simple and elegant
