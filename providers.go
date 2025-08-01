@@ -82,6 +82,8 @@ func getDefaultBaseURL(provider string) string {
 		return "https://generativelanguage.googleapis.com"
 	case "deepseek":
 		return "https://api.deepseek.com"
+	case "openrouter":
+		return "https://openrouter.ai/api/v1"
 	default:
 		return ""
 	}
@@ -111,6 +113,13 @@ func createGeminiProvider(config ProviderConfig) Provider {
 
 func createDeepSeekProvider(config ProviderConfig) Provider {
 	if factory, exists := ProviderRegistry["deepseek"]; exists {
+		return factory(config)
+	}
+	return nil
+}
+
+func createOpenRouterProvider(config ProviderConfig) Provider {
+	if factory, exists := ProviderRegistry["openrouter"]; exists {
 		return factory(config)
 	}
 	return nil

@@ -51,6 +51,10 @@ func (p *OpenAIProvider) Models() []ModelInfo {
 			Capabilities: []ModelCapability{CapabilityChat, CapabilityReasoning},
 		},
 		{
+			ID: "o3-mini", Provider: "openai", Name: "OpenAI o3 Mini", MaxTokens: 65536,
+			Capabilities: []ModelCapability{CapabilityChat, CapabilityReasoning},
+		},
+		{
 			ID: "o4-mini", Provider: "openai", Name: "OpenAI o4 Mini", MaxTokens: 100000,
 			Capabilities: []ModelCapability{CapabilityChat, CapabilityReasoning},
 		},
@@ -79,8 +83,8 @@ type openaiRequest struct {
 }
 
 type openaiReasoning struct {
-	Effort  string `json:"effort,omitempty"`
-	Summary string `json:"summary,omitempty"`
+	Effort  string `json:"effort,omitempty"`  // OpenAI format
+	Summary string `json:"summary,omitempty"` // OpenAI format
 }
 
 type openaiMessage struct {
@@ -228,7 +232,17 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *Request) (*Response,
 		response, err := p.completeWithResponsesAPI(ctx, req, modelName)
 		if err != nil {
 			// If Responses API fails, fall back to traditional mode
-			return p.completeWithChatAPI(ctx, req, modelName)
+			// For OpenRouter, keep reasoning parameters; for OpenAI, clear them
+			fallbackReq := *req
+			fallbackReq.UseResponsesAPI = false
+
+			// Only clear reasoning parameters for OpenAI endpoints
+			if !strings.Contains(p.config.BaseURL, "openrouter") {
+				fallbackReq.ReasoningEffort = ""
+				fallbackReq.ReasoningSummary = ""
+			}
+
+			return p.completeWithChatAPI(ctx, &fallbackReq, modelName)
 		}
 		return response, nil
 	}
@@ -245,14 +259,10 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 		ToolChoice: req.ToolChoice,
 	}
 
-	// Set correct parameters based on model type
-	if p.isReasoningModel(modelName) {
-		// Parameter settings for o series models (reasoning models)
-		openaiReq.MaxCompletionTokens = req.MaxTokens
-		// o series models don't support temperature and other parameters
-
-		// Set reasoning parameters
+	// Set reasoning parameters if provided (OpenAI format only)
+	if req.ReasoningEffort != "" || req.ReasoningSummary != "" {
 		reasoning := &openaiReasoning{}
+
 		if req.ReasoningEffort != "" {
 			reasoning.Effort = req.ReasoningEffort
 		}
@@ -262,9 +272,14 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 			reasoning.Summary = "auto"
 		}
 
-		if reasoning.Effort != "" || reasoning.Summary != "" {
-			openaiReq.Reasoning = reasoning
-		}
+		openaiReq.Reasoning = reasoning
+	}
+
+	// Set correct parameters based on model type
+	if p.isReasoningModel(modelName) {
+		// Parameter settings for o series models (reasoning models)
+		openaiReq.MaxCompletionTokens = req.MaxTokens
+		// o series models don't support temperature and other parameters
 	} else {
 		// Traditional models support all parameters
 		openaiReq.MaxTokens = req.MaxTokens
@@ -337,8 +352,14 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 		return nil, fmt.Errorf("openai: API error %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Read response body for debugging
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("openai: read response: %w", err)
+	}
+
 	var openaiResp openaiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&openaiResp); err != nil {
+	if err := json.Unmarshal(respBody, &openaiResp); err != nil {
 		return nil, fmt.Errorf("openai: decode response: %w", err)
 	}
 
@@ -362,7 +383,7 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 		response.Content = choice.Message.Content
 		response.FinishReason = choice.FinishReason
 
-		// Extract reasoning summary content
+		// Extract reasoning content (OpenAI format only)
 		if choice.ReasoningSummary != nil && choice.ReasoningSummary.Text != "" {
 			response.Reasoning = &ReasoningData{
 				Summary:    choice.ReasoningSummary.Text,
@@ -622,7 +643,7 @@ func (r *openaiStreamReader) Read() (*StreamChunk, error) {
 				streamChunk.Content = choice.Delta.Content
 			}
 
-			// Handle streaming reasoning summary content
+			// Handle reasoning streaming (OpenAI format only)
 			if choice.Delta.ReasoningSummary != nil && choice.Delta.ReasoningSummary.Text != "" {
 				streamChunk.Type = ChunkTypeReasoning
 				streamChunk.Reasoning = &ReasoningChunk{

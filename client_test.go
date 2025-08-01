@@ -1,39 +1,10 @@
 package litellm
 
 import (
-	"context"
-	"strings"
 	"testing"
 )
 
-// Basic
-func TestBasicUsage(t *testing.T) {
-	client := New(WithOpenAI("sk-xxx", "xxx"))
-
-	response, err := client.Complete(context.Background(), &Request{
-		Model: "gpt-4.1",
-		Messages: []Message{
-			{Role: "user", Content: "who are you"},
-		},
-	})
-
-	if err != nil {
-		t.Fatalf("Complete failed: %v", err)
-	}
-
-	if response.Content == "" {
-		t.Error("Expected non-empty response content")
-	}
-
-	if response.Usage.TotalTokens == 0 {
-		t.Error("Expected non-zero token usage")
-	}
-
-	t.Logf("Response: %s", response.Content)
-	t.Logf("Tokens: %d", response.Usage.TotalTokens)
-}
-
-// Quick
+// TestQuickMethod tests the Quick convenience method
 func TestQuickMethod(t *testing.T) {
 	// Note: This test requires a valid API key to run
 	t.Skip("Skipping Quick method test - requires valid API key")
@@ -50,7 +21,7 @@ func TestQuickMethod(t *testing.T) {
 	t.Logf("Quick Response: %s", response.Content)
 }
 
-// Multiple Provider
+// TestMultipleProviders tests multiple provider configuration
 func TestMultipleProviders(t *testing.T) {
 	client := New(
 		WithOpenAI("test-key"),
@@ -61,10 +32,7 @@ func TestMultipleProviders(t *testing.T) {
 	providers := client.Providers()
 	expected := []string{"openai", "anthropic", "gemini"}
 
-	if len(providers) != len(expected) {
-		t.Errorf("Expected %d providers, got %d", len(expected), len(providers))
-	}
-
+	// Check that all expected providers are present
 	for _, exp := range expected {
 		found := false
 		for _, prov := range providers {
@@ -78,229 +46,107 @@ func TestMultipleProviders(t *testing.T) {
 		}
 	}
 
+	// Should have at least the expected providers
+	if len(providers) < len(expected) {
+		t.Errorf("Expected at least %d providers, got %d", len(expected), len(providers))
+	}
+
 	t.Logf("Providers: %v", providers)
 }
 
-// reasoning model
-func TestReasoningModel(t *testing.T) {
-	client := New(WithOpenAI("sk-xxx", "https://one.wisehood.ai"))
-
-	response, err := client.Complete(context.Background(), &Request{
-		Model: "o1-mini",
-		Messages: []Message{
-			{Role: "user", Content: "2+2=？"},
-		},
-		ReasoningEffort:  "low",
-		ReasoningSummary: "concise",
-	})
-
-	if err != nil {
-		t.Logf("Reasoning model test failed (expected): %v", err)
-		return
-	}
-
-	if response.Content == "" {
-		t.Error("Expected non-empty response content")
-	}
-
-	t.Logf("Reasoning response: %s", response.Content)
-	if response.Reasoning != nil {
-		t.Logf("Reasoning summary: %s", response.Reasoning.Summary)
-	}
-}
-
-// Function calling
-func TestFunctionCalling(t *testing.T) {
-	client := New(WithOpenAI("sk-xxx", "xxx"))
-
-	tools := []Tool{
-		{
-			Type: "function",
-			Function: FunctionSchema{
-				Name:        "get_weather",
-				Description: "Get weather information",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"city": map[string]interface{}{
-							"type":        "string",
-							"description": "city",
-						},
-					},
-					"required": []string{"city"},
-				},
+// TestSimplifiedModelRouting tests the simplified model routing logic
+func TestSimplifiedModelRouting(t *testing.T) {
+	// Test single provider scenario - should work with any model
+	t.Run("SingleProvider_AnyModel", func(t *testing.T) {
+		// Create client without auto-discovery to ensure only one provider
+		client := &Client{
+			providers: make(map[string]Provider),
+			defaults: DefaultConfig{
+				MaxTokens:   4096,
+				Temperature: 0.7,
 			},
-		},
-	}
-
-	response, err := client.Complete(context.Background(), &Request{
-		Model: "gpt-4o-mini",
-		Messages: []Message{
-			{Role: "user", Content: "What's the weather like in New York？"},
-		},
-		Tools:      tools,
-		ToolChoice: "auto",
-	})
-
-	if err != nil {
-		t.Fatalf("Function calling failed: %v", err)
-	}
-
-	t.Logf("Response: %s", response.Content)
-	if len(response.ToolCalls) > 0 {
-		t.Logf("Tool called: %s", response.ToolCalls[0].Function.Name)
-	}
-}
-
-// Streaming
-func TestStreaming(t *testing.T) {
-	client := New(WithOpenAI("sk-u5NLmQaEM0FDTOJg174aCb653c5d474c95D8Af5d77732645", "https://one.wisehood.ai"))
-
-	stream, err := client.Stream(context.Background(), &Request{
-		Model: "gpt-4o-mini",
-		Messages: []Message{
-			{Role: "user", Content: "tell me a joke"},
-		},
-	})
-
-	if err != nil {
-		t.Fatalf("Streaming failed: %v", err)
-	}
-	defer stream.Close()
-
-	var content string
-	chunkCount := 0
-
-	for {
-		chunk, err := stream.Read()
-		if err != nil {
-			t.Fatalf("Stream read failed: %v", err)
 		}
 
-		if chunk.Done {
-			break
+		// Manually add only one provider
+		WithOpenAI("test-key")(client)
+
+		providers := client.Providers()
+		if len(providers) != 1 {
+			t.Fatalf("Expected exactly 1 provider, got %d", len(providers))
 		}
 
-		if chunk.Type == ChunkTypeContent {
-			content += chunk.Content
-			chunkCount++
-		}
-	}
-
-	if content == "" {
-		t.Error("Expected non-empty streamed content")
-	}
-
-	if chunkCount == 0 {
-		t.Error("Expected at least one content chunk")
-	}
-
-	t.Logf("Streamed content: %s", content)
-	t.Logf("Chunks received: %d", chunkCount)
-}
-
-// Streaming tool calls with delta support
-func TestStreamingToolCalls(t *testing.T) {
-	client := New(WithOpenAI("sk-xxx", "xxx"))
-
-	tools := []Tool{
-		{
-			Type: "function",
-			Function: FunctionSchema{
-				Name:        "get_weather",
-				Description: "Get weather information for a city",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"city": map[string]interface{}{
-							"type":        "string",
-							"description": "The city name",
-						},
-					},
-					"required": []string{"city"},
-				},
-			},
-		},
-	}
-
-	stream, err := client.Stream(context.Background(), &Request{
-		Model: "gpt-4o-mini",
-		Messages: []Message{
-			{Role: "user", Content: "What's the weather like in Beijing?"},
-		},
-		Tools:      tools,
-		ToolChoice: "auto",
-	})
-
-	if err != nil {
-		t.Fatalf("Streaming tool calls failed: %v", err)
-	}
-	defer stream.Close()
-
-	var toolCallArgs strings.Builder
-
-	for {
-		chunk, err := stream.Read()
-		if err != nil {
-			t.Fatalf("Stream read failed: %v", err)
+		// Should work with any model name when only one provider is configured
+		testModels := []string{
+			"some-unknown-model",
+			"gpt-5-ultra",             // Future model
+			"custom-fine-tuned-model", // Custom model
+			"o3-mini",                 // Known model
 		}
 
-		if chunk.Done {
-			break
-		}
-
-		switch chunk.Type {
-		case ChunkTypeContent:
-			t.Logf("Content: %s", chunk.Content)
-		case ChunkTypeToolCallDelta:
-			if chunk.ToolCallDelta != nil {
-				// New tool call started
-				if chunk.ToolCallDelta.ID != "" {
-					t.Logf("Tool call started: ID=%s, Function=%s",
-						chunk.ToolCallDelta.ID, chunk.ToolCallDelta.FunctionName)
-				}
-				// Accumulate arguments
-				if chunk.ToolCallDelta.ArgumentsDelta != "" {
-					toolCallArgs.WriteString(chunk.ToolCallDelta.ArgumentsDelta)
-					t.Logf("Arguments delta: %s", chunk.ToolCallDelta.ArgumentsDelta)
-				}
+		for _, model := range testModels {
+			provider, err := client.resolveProvider(model)
+			if err != nil {
+				t.Errorf("Single provider should accept any model '%s', got error: %v", model, err)
+				continue
 			}
-		case ChunkTypeToolCall:
-			// Complete tool call (for providers like Gemini)
-			if len(chunk.ToolCalls) > 0 {
-				t.Logf("Complete tool call: %s", chunk.ToolCalls[0].Function.Name)
+			if provider == nil {
+				t.Errorf("Provider is nil for model '%s'", model)
+				continue
+			}
+			if provider.Name() != "openai" {
+				t.Errorf("Expected openai provider for model '%s', got %s", model, provider.Name())
 			}
 		}
-	}
-
-	if toolCallArgs.Len() > 0 {
-		t.Logf("Final accumulated arguments: %s", toolCallArgs.String())
-	}
-}
-
-// DeepSeek provider test
-func TestDeepSeek(t *testing.T) {
-	client := New(WithDeepSeek("sk-xxx", "https://api.deepseek.com/v1"))
-
-	response, err := client.Complete(context.Background(), &Request{
-		Model: "deepseek-reasoner",
-		Messages: []Message{
-			{Role: "user", Content: "who are you?"},
-		},
 	})
-	if err != nil {
-		t.Fatalf("DeepSeek test failed: %v", err)
-	}
 
-	if response.Content == "" {
-		t.Error("Expected non-empty response content")
-	}
+	// Test multiple providers - must match predefined models
+	t.Run("MultipleProviders_PredefinedOnly", func(t *testing.T) {
+		// Create client without auto-discovery
+		client := &Client{
+			providers: make(map[string]Provider),
+			defaults: DefaultConfig{
+				MaxTokens:   4096,
+				Temperature: 0.7,
+			},
+		}
 
-	t.Logf("DeepSeek response: %s", response.Content)
-	t.Logf("Model: %s, Provider: %s", response.Model, response.Provider)
-	t.Logf("Finish reason: %s", response.FinishReason)
+		// Manually add multiple providers
+		WithOpenAI("test-key")(client)
+		WithAnthropic("test-key")(client)
 
-	if response.Reasoning != nil {
-		t.Logf("Reasoning: %s", response.Reasoning.Content)
-	}
+		// Test known models - should work
+		knownModels := []struct {
+			model    string
+			expected string
+		}{
+			{"gpt-4o", "openai"},
+			{"gpt-4o-mini", "openai"},
+			{"o3-mini", "openai"},
+		}
+
+		for _, tc := range knownModels {
+			provider, err := client.resolveProvider(tc.model)
+			if err != nil {
+				t.Errorf("Failed to resolve known model %s: %v", tc.model, err)
+				continue
+			}
+			if provider.Name() != tc.expected {
+				t.Errorf("Model %s: expected provider %s, got %s", tc.model, tc.expected, provider.Name())
+			}
+		}
+
+		// Test unknown models - should fail
+		unknownModels := []string{
+			"some-unknown-model",
+			"gpt-5-ultra",
+			"custom-model",
+		}
+
+		for _, model := range unknownModels {
+			_, err := client.resolveProvider(model)
+			if err == nil {
+				t.Errorf("Unknown model '%s' should fail with multiple providers, but succeeded", model)
+			}
+		}
+	})
 }

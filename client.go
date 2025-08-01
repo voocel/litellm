@@ -32,12 +32,14 @@ func New(opts ...ClientOption) *Client {
 		},
 	}
 
-	// Auto-discover providers from environment variables first
-	client.autoDiscoverProviders()
-
-	// Then apply options (this allows manual config to override auto-discovery)
-	for _, opt := range opts {
-		opt(client)
+	// If no options provided, use auto-discovery
+	if len(opts) == 0 {
+		client.autoDiscoverProviders()
+	} else {
+		// If manual options provided, only use those (no auto-discovery)
+		for _, opt := range opts {
+			opt(client)
+		}
 	}
 
 	return client
@@ -99,6 +101,19 @@ func WithDeepSeek(apiKey string, baseURL ...string) ClientOption {
 		}
 		if provider := createDeepSeekProvider(config); provider != nil {
 			c.providers["deepseek"] = provider
+		}
+	}
+}
+
+// WithOpenRouter adds OpenRouter provider with custom configuration
+func WithOpenRouter(apiKey string, baseURL ...string) ClientOption {
+	return func(c *Client) {
+		config := ProviderConfig{APIKey: apiKey}
+		if len(baseURL) > 0 && baseURL[0] != "" {
+			config.BaseURL = baseURL[0]
+		}
+		if provider := createOpenRouterProvider(config); provider != nil {
+			c.providers["openrouter"] = provider
 		}
 	}
 }
@@ -168,6 +183,17 @@ func (c *Client) autoDiscoverProviders() {
 			c.providers["deepseek"] = provider
 		}
 	}
+
+	// Auto-discover OpenRouter
+	if apiKey := os.Getenv("OPENROUTER_API_KEY"); apiKey != "" {
+		config := ProviderConfig{
+			APIKey:  apiKey,
+			BaseURL: getEnvOrDefault("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+		}
+		if provider := createOpenRouterProvider(config); provider != nil {
+			c.providers["openrouter"] = provider
+		}
+	}
 }
 
 // AddProvider adds a provider to the client
@@ -232,7 +258,16 @@ func (c *Client) Providers() []string {
 
 // resolveProvider resolves the provider for a model
 func (c *Client) resolveProvider(model string) (Provider, error) {
-	// Try to find a provider that supports this model
+	// Strategy 1: If only one provider is configured, use it directly
+	// This allows users to use any model name - let the API validate it
+	if len(c.providers) == 1 {
+		for _, provider := range c.providers {
+			return provider, nil
+		}
+	}
+
+	// Strategy 2: Multiple providers - must match predefined model lists
+	// This ensures correct routing when multiple providers are available
 	for _, provider := range c.providers {
 		models := provider.Models()
 		for _, modelInfo := range models {
@@ -242,14 +277,7 @@ func (c *Client) resolveProvider(model string) (Provider, error) {
 		}
 	}
 
-	// If only one provider is configured, use it (assume user knows what they're doing)
-	if len(c.providers) == 1 {
-		for _, provider := range c.providers {
-			return provider, nil
-		}
-	}
-
-	return nil, fmt.Errorf("no provider found for model '%s'. Available models: %s", model, c.getAvailableModels())
+	return nil, fmt.Errorf("no provider found for model '%s'. With multiple providers configured, the model must be in the predefined model list. Available models: %s", model, c.getAvailableModels())
 }
 
 // getAvailableModels returns a string of available models for error messages

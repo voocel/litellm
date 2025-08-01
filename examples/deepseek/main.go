@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/voocel/litellm"
 )
@@ -16,7 +17,7 @@ func main() {
 	//client := litellm.New()
 
 	// Method 2: Manual configuration
-	client := litellm.New(litellm.WithDeepSeek("sk-xxx"))
+	client := litellm.New(litellm.WithDeepSeek(os.Getenv("DEEPSEEK_API_KEY"), os.Getenv("DEEPSEEK_BASE_URL")))
 
 	// Basic conversation
 	fmt.Println("\n--- Basic Chat ---")
