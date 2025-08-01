@@ -65,6 +65,7 @@ func main() {
 		litellm.WithOpenAI("your-openai-key"),
 		litellm.WithAnthropic("your-anthropic-key"),
 		litellm.WithGemini("your-gemini-key"),
+		litellm.WithOpenRouter("your-openrouter-key"),
 		litellm.WithDefaults(2048, 0.8), // 自定义默认参数
     )
     
@@ -308,6 +309,12 @@ response, _ := client.Complete(ctx, &litellm.Request{
 - Function Calling, 代码生成, 推理能力
 - 超大上下文窗口
 
+### OpenRouter
+- 访问来自多个提供商的 200+ 模型
+- OpenAI, Anthropic, Google, Meta 等
+- 所有支持模型的统一 API
+- 推理模型支持
+
 ## 配置
 
 ### 环境变量
@@ -316,6 +323,7 @@ export OPENAI_API_KEY="sk-proj-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 export GEMINI_API_KEY="AIza..."
 export DEEPSEEK_API_KEY="sk-..."
+export OPENROUTER_API_KEY="sk-or-v1-..."
 ```
 
 ### 代码配置 (推荐)
@@ -325,6 +333,7 @@ client := litellm.New(
     litellm.WithAnthropic("your-anthropic-key"),
     litellm.WithGemini("your-gemini-key"),
     litellm.WithDeepSeek("your-deepseek-key"),
+    litellm.WithOpenRouter("your-openrouter-key"),
     litellm.WithDefaults(2048, 0.8),
 )
 ```

@@ -65,6 +65,7 @@ func main() {
 		litellm.WithOpenAI("your-openai-key"),
 		litellm.WithAnthropic("your-anthropic-key"),
 		litellm.WithGemini("your-gemini-key"),
+		litellm.WithOpenRouter("your-openrouter-key"),
 		litellm.WithDefaults(2048, 0.8), // Custom defaults
     )
     
@@ -308,6 +309,12 @@ response, _ := client.Complete(ctx, &litellm.Request{
 - Function Calling, Code Generation, Reasoning
 - Large context window
 
+### OpenRouter
+- Access to 200+ models from multiple providers
+- OpenAI, Anthropic, Google, Meta, and more
+- Unified API for all supported models
+- Reasoning models support
+
 ## Configuration
 
 ### Environment Variables
@@ -316,6 +323,7 @@ export OPENAI_API_KEY="sk-proj-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 export GEMINI_API_KEY="AIza..."
 export DEEPSEEK_API_KEY="sk-..."
+export OPENROUTER_API_KEY="sk-or-v1-..."
 ```
 
 ### Code Configuration (Recommended)
@@ -325,6 +333,7 @@ client := litellm.New(
     litellm.WithAnthropic("your-anthropic-key"),
     litellm.WithGemini("your-gemini-key"),
     litellm.WithDeepSeek("your-deepseek-key"),
+    litellm.WithOpenRouter("your-openrouter-key"),
     litellm.WithDefaults(2048, 0.8),
 )
 ```
