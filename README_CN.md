@@ -142,6 +142,34 @@ for {
 }
 ```
 
+### 思考模式 (Qwen3 Thinking)
+
+Qwen3-Coder 模型支持通过 `enable_thinking` 参数启用逐步推理，为复杂的编程和数学问题提供详细的思考过程：
+
+```go
+// 启用思考模式进行复杂问题求解
+response, err := client.Complete(ctx, &litellm.Request{
+    Model: "qwen3-coder-plus",
+    Messages: []litellm.Message{
+        {Role: "user", Content: "编写一个 Python 函数实现二分查找算法。请逐步解释你的方法。"},
+    },
+    Extra: map[string]interface{}{
+        "enable_thinking": true, // 启用 Qwen3 思考模式
+    },
+})
+
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("最终答案: %s\n", response.Content)
+if response.Reasoning != nil {
+    fmt.Printf("推理过程: %s\n", response.Reasoning.Content)
+    fmt.Printf("推理摘要: %s\n", response.Reasoning.Summary)
+    fmt.Printf("推理 Tokens: %d\n", response.Reasoning.TokensUsed)
+}
+```
+
 ## 工具调用 (Function Calling)
 
 ### 基础工具调用
@@ -267,7 +295,7 @@ type MyProvider struct {
 func (p *MyProvider) Complete(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
     // 实现 API 调用逻辑
     return &litellm.Response{
-        Content:  "来自我的 provider 的问候！",
+        Content:  "hi！",
         Model:    req.Model,
         Provider: "myprovider",
         Usage:    litellm.Usage{TotalTokens: 10},
@@ -309,6 +337,12 @@ response, _ := client.Complete(ctx, &litellm.Request{
 - Function Calling, 代码生成, 推理能力
 - 超大上下文窗口
 
+### Qwen (阿里云 DashScope)
+- Qwen3-Coder-Plus, Qwen3-Coder-Flash (支持思考模式)
+- Qwen3-Coder-480B-A35B-Instruct, Qwen3-Coder-30B-A3B-Instruct (开源模型)
+- Function Calling, 代码生成, 推理能力 (通过 `enable_thinking` 参数实现逐步思考), 超大上下文窗口 (最高 1M tokens)
+- 通过 DashScope 提供 OpenAI 兼容 API
+
 ### OpenRouter
 - 访问来自多个提供商的 200+ 模型
 - OpenAI, Anthropic, Google, Meta 等
@@ -323,6 +357,7 @@ export OPENAI_API_KEY="sk-proj-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 export GEMINI_API_KEY="AIza..."
 export DEEPSEEK_API_KEY="sk-..."
+export QWEN_API_KEY="sk-..."
 export OPENROUTER_API_KEY="sk-or-v1-..."
 ```
 
@@ -333,6 +368,7 @@ client := litellm.New(
     litellm.WithAnthropic("your-anthropic-key"),
     litellm.WithGemini("your-gemini-key"),
     litellm.WithDeepSeek("your-deepseek-key"),
+    litellm.WithQwen("your-qwen-key"),
     litellm.WithOpenRouter("your-openrouter-key"),
     litellm.WithDefaults(2048, 0.8),
 )

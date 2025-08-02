@@ -65,6 +65,7 @@ func main() {
 		litellm.WithOpenAI("your-openai-key"),
 		litellm.WithAnthropic("your-anthropic-key"),
 		litellm.WithGemini("your-gemini-key"),
+		litellm.WithQwen("your-dashscope-key"),
 		litellm.WithOpenRouter("your-openrouter-key"),
 		litellm.WithDefaults(2048, 0.8), // Custom defaults
     )
@@ -254,6 +255,34 @@ type ToolCallBuilder struct {
 }
 ```
 
+### Reasoning Mode (Qwen3 Thinking)
+
+Qwen3-Coder models support step-by-step reasoning through the `enable_thinking` parameter, providing detailed thinking process for complex coding and mathematical problems:
+
+```go
+// Enable reasoning mode for complex problem solving
+response, err := client.Complete(ctx, &litellm.Request{
+    Model: "qwen3-coder-plus",
+    Messages: []litellm.Message{
+        {Role: "user", Content: "Write a Python function to implement binary search. Explain your approach step by step."},
+    },
+    Extra: map[string]interface{}{
+        "enable_thinking": true, // Enable Qwen3 reasoning mode
+    },
+})
+
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("Final Answer: %s\n", response.Content)
+if response.Reasoning != nil {
+    fmt.Printf("Reasoning Process: %s\n", response.Reasoning.Content)
+    fmt.Printf("Reasoning Summary: %s\n", response.Reasoning.Summary)
+    fmt.Printf("Reasoning Tokens: %d\n", response.Reasoning.TokensUsed)
+}
+```
+
 ## Extending New Platforms
 
 Adding new LLM platforms is simple:
@@ -309,6 +338,12 @@ response, _ := client.Complete(ctx, &litellm.Request{
 - Function Calling, Code Generation, Reasoning
 - Large context window
 
+### Qwen (Alibaba Cloud DashScope)
+- Qwen3-Coder-Plus, Qwen3-Coder-Flash (with thinking mode support)
+- Qwen3-Coder-480B-A35B-Instruct, Qwen3-Coder-30B-A3B-Instruct (open source models)
+- Function Calling, Code Generation, Reasoning (step-by-step thinking via `enable_thinking`), Large context window (up to 1M tokens)
+- OpenAI-compatible API through DashScope
+
 ### OpenRouter
 - Access to 200+ models from multiple providers
 - OpenAI, Anthropic, Google, Meta, and more
@@ -323,6 +358,7 @@ export OPENAI_API_KEY="sk-proj-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 export GEMINI_API_KEY="AIza..."
 export DEEPSEEK_API_KEY="sk-..."
+export QWEN_API_KEY="sk-..."  # For Qwen models
 export OPENROUTER_API_KEY="sk-or-v1-..."
 ```
 
@@ -333,6 +369,7 @@ client := litellm.New(
     litellm.WithAnthropic("your-anthropic-key"),
     litellm.WithGemini("your-gemini-key"),
     litellm.WithDeepSeek("your-deepseek-key"),
+    litellm.WithQwen("your-qwen-key"),
     litellm.WithOpenRouter("your-openrouter-key"),
     litellm.WithDefaults(2048, 0.8),
 )
