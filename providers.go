@@ -84,6 +84,8 @@ func getDefaultBaseURL(provider string) string {
 		return "https://api.deepseek.com"
 	case "openrouter":
 		return "https://openrouter.ai/api/v1"
+	case "qwen":
+		return "https://dashscope.aliyuncs.com/compatible-mode/v1"
 	default:
 		return ""
 	}
@@ -120,6 +122,13 @@ func createDeepSeekProvider(config ProviderConfig) Provider {
 
 func createOpenRouterProvider(config ProviderConfig) Provider {
 	if factory, exists := ProviderRegistry["openrouter"]; exists {
+		return factory(config)
+	}
+	return nil
+}
+
+func createQwenProvider(config ProviderConfig) Provider {
+	if factory, exists := ProviderRegistry["qwen"]; exists {
 		return factory(config)
 	}
 	return nil

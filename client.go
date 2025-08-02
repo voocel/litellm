@@ -118,6 +118,19 @@ func WithOpenRouter(apiKey string, baseURL ...string) ClientOption {
 	}
 }
 
+// WithQwen adds Qwen provider with custom configuration
+func WithQwen(apiKey string, baseURL ...string) ClientOption {
+	return func(c *Client) {
+		config := ProviderConfig{APIKey: apiKey}
+		if len(baseURL) > 0 && baseURL[0] != "" {
+			config.BaseURL = baseURL[0]
+		}
+		if provider := createQwenProvider(config); provider != nil {
+			c.providers["qwen"] = provider
+		}
+	}
+}
+
 // WithProvider adds a custom provider
 func WithProvider(name string, provider Provider) ClientOption {
 	return func(c *Client) {
@@ -192,6 +205,17 @@ func (c *Client) autoDiscoverProviders() {
 		}
 		if provider := createOpenRouterProvider(config); provider != nil {
 			c.providers["openrouter"] = provider
+		}
+	}
+
+	// Auto-discover Qwen (DashScope)
+	if apiKey := os.Getenv("QWEN_API_KEY"); apiKey != "" {
+		config := ProviderConfig{
+			APIKey:  apiKey,
+			BaseURL: getEnvOrDefault("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+		}
+		if provider := createQwenProvider(config); provider != nil {
+			c.providers["qwen"] = provider
 		}
 	}
 }
