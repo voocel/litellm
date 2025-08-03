@@ -131,6 +131,19 @@ func WithQwen(apiKey string, baseURL ...string) ClientOption {
 	}
 }
 
+// WithGLM adds GLM provider with custom configuration
+func WithGLM(apiKey string, baseURL ...string) ClientOption {
+	return func(c *Client) {
+		config := ProviderConfig{APIKey: apiKey}
+		if len(baseURL) > 0 && baseURL[0] != "" {
+			config.BaseURL = baseURL[0]
+		}
+		if provider := createGLMProvider(config); provider != nil {
+			c.providers["glm"] = provider
+		}
+	}
+}
+
 // WithProvider adds a custom provider
 func WithProvider(name string, provider Provider) ClientOption {
 	return func(c *Client) {
@@ -216,6 +229,17 @@ func (c *Client) autoDiscoverProviders() {
 		}
 		if provider := createQwenProvider(config); provider != nil {
 			c.providers["qwen"] = provider
+		}
+	}
+
+	// Auto-discover GLM
+	if apiKey := os.Getenv("GLM_API_KEY"); apiKey != "" {
+		config := ProviderConfig{
+			APIKey:  apiKey,
+			BaseURL: getEnvOrDefault("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
+		}
+		if provider := createGLMProvider(config); provider != nil {
+			c.providers["glm"] = provider
 		}
 	}
 }

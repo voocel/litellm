@@ -66,6 +66,7 @@ func main() {
 		litellm.WithAnthropic("your-anthropic-key"),
 		litellm.WithGemini("your-gemini-key"),
 		litellm.WithQwen("your-dashscope-key"),
+		litellm.WithGLM("your-glm-key"),
 		litellm.WithOpenRouter("your-openrouter-key"),
 		litellm.WithDefaults(2048, 0.8), // Custom defaults
     )
@@ -283,6 +284,34 @@ if response.Reasoning != nil {
 }
 ```
 
+### Reasoning Mode (GLM-4.5 Thinking)
+
+GLM-4.5 models support hybrid reasoning capabilities through the `enable_thinking` parameter, providing step-by-step analysis for complex problems:
+
+```go
+// Enable thinking mode for GLM-4.5
+response, err := client.Complete(ctx, &litellm.Request{
+    Model: "glm-4.5",
+    Messages: []litellm.Message{
+        {Role: "user", Content: "Design an efficient algorithm to solve the traveling salesman problem and analyze its time complexity."},
+    },
+    Extra: map[string]interface{}{
+        "enable_thinking": true, // Enable GLM-4.5 thinking mode
+    },
+})
+
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("Final Answer: %s\n", response.Content)
+if response.Reasoning != nil {
+    fmt.Printf("Reasoning Process: %s\n", response.Reasoning.Content)
+    fmt.Printf("Reasoning Summary: %s\n", response.Reasoning.Summary)
+    fmt.Printf("Reasoning Tokens: %d\n", response.Reasoning.TokensUsed)
+}
+```
+
 ## Extending New Platforms
 
 Adding new LLM platforms is simple:
@@ -344,6 +373,13 @@ response, _ := client.Complete(ctx, &litellm.Request{
 - Function Calling, Code Generation, Reasoning (step-by-step thinking via `enable_thinking`), Large context window (up to 1M tokens)
 - OpenAI-compatible API through DashScope
 
+### GLM (智谱AI)
+- GLM-4.5 (355B-A32B flagship model with hybrid reasoning capabilities)
+- GLM-4.5-Air (106B-A12B lightweight version), GLM-4.5-Flash (fast version)
+- GLM-4, GLM-4-Flash, GLM-4-Air, GLM-4-AirX (previous generation models)
+- Function Calling, Code Generation, Reasoning (thinking mode), Large context window (128K tokens)
+- OpenAI-compatible API through Zhipu AI Open Platform
+
 ### OpenRouter
 - Access to 200+ models from multiple providers
 - OpenAI, Anthropic, Google, Meta, and more
@@ -359,6 +395,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 export GEMINI_API_KEY="AIza..."
 export DEEPSEEK_API_KEY="sk-..."
 export QWEN_API_KEY="sk-..."  # For Qwen models
+export GLM_API_KEY="your-glm-key"  # For GLM models
 export OPENROUTER_API_KEY="sk-or-v1-..."
 ```
 
@@ -370,6 +407,7 @@ client := litellm.New(
     litellm.WithGemini("your-gemini-key"),
     litellm.WithDeepSeek("your-deepseek-key"),
     litellm.WithQwen("your-qwen-key"),
+    litellm.WithGLM("your-glm-key"),
     litellm.WithOpenRouter("your-openrouter-key"),
     litellm.WithDefaults(2048, 0.8),
 )

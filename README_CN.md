@@ -170,6 +170,34 @@ if response.Reasoning != nil {
 }
 ```
 
+### 思考模式 (GLM-4.5 Thinking)
+
+GLM-4.5 模型支持通过 `enable_thinking` 参数启用混合推理能力，为复杂问题提供逐步分析：
+
+```go
+// 启用 GLM-4.5 思考模式
+response, err := client.Complete(ctx, &litellm.Request{
+    Model: "glm-4.5",
+    Messages: []litellm.Message{
+        {Role: "user", Content: "设计一个高效的算法来解决旅行商问题，并分析其时间复杂度。"},
+    },
+    Extra: map[string]interface{}{
+        "enable_thinking": true, // 启用 GLM-4.5 思考模式
+    },
+})
+
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("最终答案: %s\n", response.Content)
+if response.Reasoning != nil {
+    fmt.Printf("推理过程: %s\n", response.Reasoning.Content)
+    fmt.Printf("推理摘要: %s\n", response.Reasoning.Summary)
+    fmt.Printf("推理 Tokens: %d\n", response.Reasoning.TokensUsed)
+}
+```
+
 ## 工具调用 (Function Calling)
 
 ### 基础工具调用
@@ -343,6 +371,13 @@ response, _ := client.Complete(ctx, &litellm.Request{
 - Function Calling, 代码生成, 推理能力 (通过 `enable_thinking` 参数实现逐步思考), 超大上下文窗口 (最高 1M tokens)
 - 通过 DashScope 提供 OpenAI 兼容 API
 
+### GLM (智谱AI)
+- GLM-4.5 (355B-A32B 旗舰模型，具备混合推理能力)
+- GLM-4.5-Air (106B-A12B 轻量版), GLM-4.5-Flash (快速版)
+- GLM-4, GLM-4-Flash, GLM-4-Air, GLM-4-AirX (上一代模型)
+- Function Calling, 代码生成, 推理能力 (思考模式), 大上下文窗口 (128K tokens)
+- 通过智谱AI开放平台提供 OpenAI 兼容 API
+
 ### OpenRouter
 - 访问来自多个提供商的 200+ 模型
 - OpenAI, Anthropic, Google, Meta 等
@@ -358,6 +393,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 export GEMINI_API_KEY="AIza..."
 export DEEPSEEK_API_KEY="sk-..."
 export QWEN_API_KEY="sk-..."
+export GLM_API_KEY="your-glm-key"  # GLM 模型
 export OPENROUTER_API_KEY="sk-or-v1-..."
 ```
 
@@ -369,6 +405,7 @@ client := litellm.New(
     litellm.WithGemini("your-gemini-key"),
     litellm.WithDeepSeek("your-deepseek-key"),
     litellm.WithQwen("your-qwen-key"),
+    litellm.WithGLM("your-glm-key"),
     litellm.WithOpenRouter("your-openrouter-key"),
     litellm.WithDefaults(2048, 0.8),
 )

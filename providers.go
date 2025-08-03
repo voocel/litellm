@@ -86,6 +86,8 @@ func getDefaultBaseURL(provider string) string {
 		return "https://openrouter.ai/api/v1"
 	case "qwen":
 		return "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	case "glm":
+		return "https://open.bigmodel.cn/api/paas/v4"
 	default:
 		return ""
 	}
@@ -129,6 +131,13 @@ func createOpenRouterProvider(config ProviderConfig) Provider {
 
 func createQwenProvider(config ProviderConfig) Provider {
 	if factory, exists := ProviderRegistry["qwen"]; exists {
+		return factory(config)
+	}
+	return nil
+}
+
+func createGLMProvider(config ProviderConfig) Provider {
+	if factory, exists := ProviderRegistry["glm"]; exists {
 		return factory(config)
 	}
 	return nil
