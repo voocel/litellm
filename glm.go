@@ -376,9 +376,14 @@ type glmStreamReader struct {
 	scanner *bufio.Scanner
 	resp    *http.Response
 	err     error
+	done    bool
 }
 
 func (r *glmStreamReader) Read() (*StreamChunk, error) {
+	if r.done {
+		return &StreamChunk{Done: true, Provider: "glm"}, nil
+	}
+
 	for r.scanner.Scan() {
 		line := strings.TrimSpace(r.scanner.Text())
 
@@ -393,7 +398,8 @@ func (r *glmStreamReader) Read() (*StreamChunk, error) {
 
 			// Check for end of stream
 			if data == "[DONE]" {
-				return nil, io.EOF
+				r.done = true
+				return &StreamChunk{Done: true, Provider: "glm"}, nil
 			}
 
 			// Parse JSON
@@ -453,7 +459,9 @@ func (r *glmStreamReader) Read() (*StreamChunk, error) {
 		return nil, fmt.Errorf("glm: stream read error: %w", err)
 	}
 
-	return nil, io.EOF
+	// 正常结束流式读取
+	r.done = true
+	return &StreamChunk{Done: true, Provider: "glm"}, nil
 }
 
 func (r *glmStreamReader) Close() error {

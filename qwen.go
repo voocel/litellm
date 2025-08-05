@@ -383,7 +383,7 @@ type qwenStreamReader struct {
 
 func (r *qwenStreamReader) Read() (*StreamChunk, error) {
 	if r.done {
-		return nil, io.EOF
+		return &StreamChunk{Done: true, Provider: r.provider}, nil
 	}
 
 	for r.scanner.Scan() {
@@ -395,7 +395,7 @@ func (r *qwenStreamReader) Read() (*StreamChunk, error) {
 
 		if line == "data: [DONE]" {
 			r.done = true
-			return nil, io.EOF
+			return &StreamChunk{Done: true, Provider: r.provider}, nil
 		}
 
 		if !strings.HasPrefix(line, "data: ") {
@@ -405,7 +405,7 @@ func (r *qwenStreamReader) Read() (*StreamChunk, error) {
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
 			r.done = true
-			return nil, io.EOF
+			return &StreamChunk{Done: true, Provider: r.provider}, nil
 		}
 
 		var streamResp qwenStreamResponse
@@ -460,7 +460,7 @@ func (r *qwenStreamReader) Read() (*StreamChunk, error) {
 	}
 
 	r.done = true
-	return nil, io.EOF
+	return &StreamChunk{Done: true, Provider: r.provider}, nil
 }
 
 func (r *qwenStreamReader) Close() error {
