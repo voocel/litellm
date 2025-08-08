@@ -71,11 +71,20 @@ type geminiFunctionResponse struct {
 }
 
 type geminiGenerationConfig struct {
-	Temperature     *float64 `json:"temperature,omitempty"`
-	MaxOutputTokens *int     `json:"maxOutputTokens,omitempty"`
-	TopP            *float64 `json:"topP,omitempty"`
-	TopK            *int     `json:"topK,omitempty"`
-	StopSequences   []string `json:"stopSequences,omitempty"`
+	Temperature      *float64              `json:"temperature,omitempty"`
+	MaxOutputTokens  *int                  `json:"maxOutputTokens,omitempty"`
+	TopP             *float64              `json:"topP,omitempty"`
+	TopK             *int                  `json:"topK,omitempty"`
+	StopSequences    []string              `json:"stopSequences,omitempty"`
+	ResponseMimeType string                `json:"responseMimeType,omitempty"`
+	ResponseSchema   *geminiResponseSchema `json:"responseSchema,omitempty"`
+}
+
+type geminiResponseSchema struct {
+	Type        string                 `json:"type"`
+	Description string                 `json:"description,omitempty"`
+	Properties  map[string]interface{} `json:"properties,omitempty"`
+	Required    []string               `json:"required,omitempty"`
 }
 
 type geminiTool struct {
@@ -124,10 +133,40 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *Request) (*Response,
 	}
 
 	// Set generation configuration
-	if req.Temperature != nil || req.MaxTokens != nil {
+	if req.Temperature != nil || req.MaxTokens != nil || req.ResponseFormat != nil {
 		geminiReq.GenerationConfig = &geminiGenerationConfig{
 			Temperature:     req.Temperature,
 			MaxOutputTokens: req.MaxTokens,
+		}
+
+		// Handle response format
+		if req.ResponseFormat != nil {
+			switch req.ResponseFormat.Type {
+			case ResponseFormatJSONObject:
+				geminiReq.GenerationConfig.ResponseMimeType = "application/json"
+			case ResponseFormatJSONSchema:
+				geminiReq.GenerationConfig.ResponseMimeType = "application/json"
+				if req.ResponseFormat.JSONSchema != nil && req.ResponseFormat.JSONSchema.Schema != nil {
+					if schema, ok := req.ResponseFormat.JSONSchema.Schema.(map[string]interface{}); ok {
+						geminiReq.GenerationConfig.ResponseSchema = &geminiResponseSchema{
+							Type:        "object",
+							Description: req.ResponseFormat.JSONSchema.Description,
+						}
+						if props, ok := schema["properties"].(map[string]interface{}); ok {
+							geminiReq.GenerationConfig.ResponseSchema.Properties = props
+						}
+						if required, ok := schema["required"].([]interface{}); ok {
+							reqFields := make([]string, len(required))
+							for i, field := range required {
+								if fieldStr, ok := field.(string); ok {
+									reqFields[i] = fieldStr
+								}
+							}
+							geminiReq.GenerationConfig.ResponseSchema.Required = reqFields
+						}
+					}
+				}
+			}
 		}
 	}
 

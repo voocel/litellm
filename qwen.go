@@ -132,11 +132,35 @@ func (p *QwenProvider) Complete(ctx context.Context, req *Request) (*Response, e
 		}
 	}
 
+	// Handle response format - Qwen supports json_object but not json_schema
+	if req.ResponseFormat != nil {
+		switch req.ResponseFormat.Type {
+		case ResponseFormatJSONObject:
+			// Qwen supports json_object natively
+			qwenReq.openaiRequest.ResponseFormat = &openaiResponseFormat{
+				Type: req.ResponseFormat.Type,
+			}
+		case ResponseFormatJSONSchema:
+			// Qwen doesn't support json_schema, so we use json_object + prompt engineering
+			qwenReq.openaiRequest.ResponseFormat = &openaiResponseFormat{
+				Type: ResponseFormatJSONObject,
+			}
+			// The schema instructions will be added to the last user message below
+		}
+	}
+
 	// Convert messages
 	for i, msg := range req.Messages {
+		content := msg.Content
+		// Handle JSON Schema by adding instructions to the last user message
+		if req.ResponseFormat != nil && req.ResponseFormat.Type == ResponseFormatJSONSchema &&
+			i == len(req.Messages)-1 && msg.Role == "user" {
+			content = p.addJSONSchemaInstructions(content, req.ResponseFormat)
+		}
+
 		qwenReq.openaiRequest.Messages[i] = openaiMessage{
 			Role:    msg.Role,
-			Content: msg.Content,
+			Content: content,
 		}
 
 		// Handle tool calls
@@ -472,6 +496,16 @@ func (r *qwenStreamReader) Close() error {
 
 func (r *qwenStreamReader) Err() error {
 	return r.err
+}
+
+// addJSONSchemaInstructions adds JSON schema formatting instructions for Qwen
+func (p *QwenProvider) addJSONSchemaInstructions(content string, format *ResponseFormat) string {
+	if format.JSONSchema != nil && format.JSONSchema.Schema != nil {
+		schemaJSON, _ := json.Marshal(format.JSONSchema.Schema)
+		return fmt.Sprintf("%s\n\nPlease respond with a valid JSON object that strictly follows this schema:\n%s\n\nRespond with JSON only, no additional text.",
+			content, string(schemaJSON))
+	}
+	return content
 }
 
 // Register the provider

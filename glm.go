@@ -245,12 +245,36 @@ func (p *GLMProvider) convertRequest(req *Request) *glmRequest {
 		}
 	}
 
+	// Convert response format - GLM only supports json_object natively
+	if req.ResponseFormat != nil {
+		switch req.ResponseFormat.Type {
+		case ResponseFormatJSONObject:
+			// GLM natively supports json_object
+			openaiReq.ResponseFormat = &openaiResponseFormat{
+				Type: req.ResponseFormat.Type,
+			}
+		case ResponseFormatJSONSchema:
+			// GLM doesn't support json_schema, so we use json_object + prompt engineering
+			openaiReq.ResponseFormat = &openaiResponseFormat{
+				Type: ResponseFormatJSONObject,
+			}
+			// The schema instructions will be added to the last user message below
+		}
+	}
+
 	// Convert messages to OpenAI format
 	openaiReq.Messages = make([]openaiMessage, len(req.Messages))
 	for i, msg := range req.Messages {
+		content := msg.Content
+		// Handle JSON Schema by adding instructions to the last user message
+		if req.ResponseFormat != nil && req.ResponseFormat.Type == ResponseFormatJSONSchema &&
+			i == len(req.Messages)-1 && msg.Role == "user" {
+			content = p.addJSONSchemaInstructions(content, req.ResponseFormat)
+		}
+
 		openaiReq.Messages[i] = openaiMessage{
 			Role:       msg.Role,
-			Content:    msg.Content,
+			Content:    content,
 			ToolCallID: msg.ToolCallID,
 		}
 
@@ -289,6 +313,16 @@ func (p *GLMProvider) convertRequest(req *Request) *glmRequest {
 	}
 
 	return glmReq
+}
+
+// addJSONSchemaInstructions adds JSON schema formatting instructions for GLM
+func (p *GLMProvider) addJSONSchemaInstructions(content string, format *ResponseFormat) string {
+	if format.JSONSchema != nil && format.JSONSchema.Schema != nil {
+		schemaJSON, _ := json.Marshal(format.JSONSchema.Schema)
+		return fmt.Sprintf("%s\n\nPlease respond with a valid JSON object that strictly follows this schema:\n%s\n\nRespond with JSON only, no additional text.",
+			content, string(schemaJSON))
+	}
+	return content
 }
 
 // extractThinkingType extracts thinking type from various map formats
@@ -459,7 +493,6 @@ func (r *glmStreamReader) Read() (*StreamChunk, error) {
 		return nil, fmt.Errorf("glm: stream read error: %w", err)
 	}
 
-	// 正常结束流式读取
 	r.done = true
 	return &StreamChunk{Done: true, Provider: "glm"}, nil
 }

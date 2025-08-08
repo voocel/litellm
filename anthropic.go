@@ -148,9 +148,15 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *Request) (*Respon
 			Role: msg.Role,
 		}
 
-		if msg.Content != "" {
+		content := msg.Content
+		// Handle structured output by adding instructions to the last user message
+		if req.ResponseFormat != nil && i == len(req.Messages)-1 && msg.Role == "user" {
+			content = p.addStructuredOutputInstructions(content, req.ResponseFormat)
+		}
+
+		if content != "" {
 			anthropicMsg.Content = []anthropicContent{
-				{Type: "text", Text: msg.Content},
+				{Type: "text", Text: content},
 			}
 		}
 
@@ -287,9 +293,15 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 			Role: msg.Role,
 		}
 
-		if msg.Content != "" {
+		content := msg.Content
+		// Handle structured output by adding instructions to the last user message
+		if req.ResponseFormat != nil && i == len(req.Messages)-1 && msg.Role == "user" {
+			content = p.addStructuredOutputInstructions(content, req.ResponseFormat)
+		}
+
+		if content != "" {
 			anthropicMsg.Content = []anthropicContent{
-				{Type: "text", Text: msg.Content},
+				{Type: "text", Text: content},
 			}
 		}
 
@@ -431,6 +443,23 @@ func (r *anthropicStreamReader) Close() error {
 
 func (r *anthropicStreamReader) Err() error {
 	return r.err
+}
+
+// addStructuredOutputInstructions adds JSON formatting instructions for structured output
+func (p *AnthropicProvider) addStructuredOutputInstructions(content string, format *ResponseFormat) string {
+	switch format.Type {
+	case ResponseFormatJSONObject:
+		return content + "\n\nPlease respond with a valid JSON object only."
+	case ResponseFormatJSONSchema:
+		if format.JSONSchema != nil {
+			schemaJSON, _ := json.Marshal(format.JSONSchema.Schema)
+			return fmt.Sprintf("%s\n\nPlease respond with a valid JSON object that strictly follows this schema:\n%s\n\nRespond with JSON only, no additional text.",
+				content, string(schemaJSON))
+		}
+		return content + "\n\nPlease respond with a valid JSON object only."
+	default:
+		return content
+	}
 }
 
 func init() {

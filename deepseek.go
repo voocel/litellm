@@ -43,10 +43,28 @@ func (p *DeepSeekProvider) Complete(ctx context.Context, req *Request) (*Respons
 		return nil, err
 	}
 
+	// Handle response format - DeepSeek supports json_object but not json_schema
+	messages := req.Messages
+	if req.ResponseFormat != nil {
+		switch req.ResponseFormat.Type {
+		case ResponseFormatJSONObject:
+			// DeepSeek supports json_object natively
+			// Will be added to request below
+		case ResponseFormatJSONSchema:
+			// DeepSeek doesn't support json_schema, so we use json_object + prompt engineering
+			// Add schema instructions to the last user message
+			if len(messages) > 0 && messages[len(messages)-1].Role == "user" {
+				lastMsg := messages[len(messages)-1]
+				lastMsg.Content = p.addJSONSchemaInstructions(lastMsg.Content, req.ResponseFormat)
+				messages = append(messages[:len(messages)-1], lastMsg)
+			}
+		}
+	}
+
 	// Build DeepSeek request (OpenAI compatible)
 	deepseekReq := map[string]interface{}{
 		"model":    req.Model,
-		"messages": req.Messages,
+		"messages": messages,
 		"stream":   false,
 	}
 
@@ -55,6 +73,17 @@ func (p *DeepSeekProvider) Complete(ctx context.Context, req *Request) (*Respons
 	}
 	if req.Temperature != nil {
 		deepseekReq["temperature"] = *req.Temperature
+	}
+
+	// Add response format if specified
+	if req.ResponseFormat != nil {
+		switch req.ResponseFormat.Type {
+		case ResponseFormatJSONObject, ResponseFormatJSONSchema:
+			// For both cases, use json_object (schema handled via prompt engineering above)
+			deepseekReq["response_format"] = map[string]interface{}{
+				"type": "json_object",
+			}
+		}
 	}
 
 	// Handle extra parameters for provider-specific features
@@ -131,7 +160,7 @@ func (p *DeepSeekProvider) Complete(ctx context.Context, req *Request) (*Respons
 			Message struct {
 				Role             string `json:"role"`
 				Content          string `json:"content"`
-				ReasoningContent string `json:"reasoning_content,omitempty"` // DeepSeek推理内容
+				ReasoningContent string `json:"reasoning_content,omitempty"`
 				ToolCalls        []struct {
 					ID       string `json:"id"`
 					Type     string `json:"type"`
@@ -171,11 +200,10 @@ func (p *DeepSeekProvider) Complete(ctx context.Context, req *Request) (*Respons
 		FinishReason: choice.FinishReason,
 	}
 
-	// 处理推理内容（仅推理模型有此字段）
 	if choice.Message.ReasoningContent != "" {
 		response.Reasoning = &ReasoningData{
 			Content: choice.Message.ReasoningContent,
-			Summary: choice.Message.ReasoningContent, // DeepSeek没有单独的summary，使用content
+			Summary: choice.Message.ReasoningContent,
 		}
 	}
 
@@ -342,7 +370,6 @@ func (r *deepseekStreamReader) Read() (*StreamChunk, error) {
 				streamChunk.Content = choice.Delta.Content
 			}
 
-			// 处理推理内容增量
 			if choice.Delta.ReasoningContent != "" {
 				streamChunk.Type = ChunkTypeReasoning
 				streamChunk.Reasoning = &ReasoningChunk{
@@ -396,6 +423,16 @@ func (r *deepseekStreamReader) Close() error {
 
 func (r *deepseekStreamReader) Err() error {
 	return r.err
+}
+
+// addJSONSchemaInstructions adds JSON schema formatting instructions for DeepSeek
+func (p *DeepSeekProvider) addJSONSchemaInstructions(content string, format *ResponseFormat) string {
+	if format.JSONSchema != nil && format.JSONSchema.Schema != nil {
+		schemaJSON, _ := json.Marshal(format.JSONSchema.Schema)
+		return fmt.Sprintf("%s\n\nPlease respond with a valid JSON object that strictly follows this schema:\n%s\n\nRespond with JSON only, no additional text.",
+			content, string(schemaJSON))
+	}
+	return content
 }
 
 func init() {

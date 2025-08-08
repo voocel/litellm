@@ -30,18 +30,31 @@ func NewOpenRouterProvider(config ProviderConfig) Provider {
 
 // OpenRouter API request/response structures
 type openRouterRequest struct {
-	Model       string               `json:"model"`
-	Messages    []openRouterMessage  `json:"messages"`
-	MaxTokens   *int                 `json:"max_tokens,omitempty"`
-	Temperature *float64             `json:"temperature,omitempty"`
-	Stream      bool                 `json:"stream,omitempty"`
-	Tools       []openRouterTool     `json:"tools,omitempty"`
-	ToolChoice  interface{}          `json:"tool_choice,omitempty"`
-	Reasoning   *openRouterReasoning `json:"reasoning,omitempty"`
+	Model          string                    `json:"model"`
+	Messages       []openRouterMessage       `json:"messages"`
+	MaxTokens      *int                      `json:"max_tokens,omitempty"`
+	Temperature    *float64                  `json:"temperature,omitempty"`
+	Stream         bool                      `json:"stream,omitempty"`
+	Tools          []openRouterTool          `json:"tools,omitempty"`
+	ToolChoice     interface{}               `json:"tool_choice,omitempty"`
+	ResponseFormat *openRouterResponseFormat `json:"response_format,omitempty"`
+	Reasoning      *openRouterReasoning      `json:"reasoning,omitempty"`
 }
 
 type openRouterReasoning struct {
 	MaxTokens *int `json:"max_tokens,omitempty"`
+}
+
+type openRouterResponseFormat struct {
+	Type       string                `json:"type"` // "text", "json_object", "json_schema"
+	JSONSchema *openRouterJSONSchema `json:"json_schema,omitempty"`
+}
+
+type openRouterJSONSchema struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Schema      any    `json:"schema"`
+	Strict      *bool  `json:"strict,omitempty"`
 }
 
 type openRouterMessage struct {
@@ -153,6 +166,21 @@ func (p *OpenRouterProvider) Complete(ctx context.Context, req *Request) (*Respo
 		}
 
 		openRouterReq.Reasoning = reasoning
+	}
+
+	// Convert response format - OpenRouter supports both json_object and json_schema
+	if req.ResponseFormat != nil {
+		openRouterReq.ResponseFormat = &openRouterResponseFormat{
+			Type: req.ResponseFormat.Type,
+		}
+		if req.ResponseFormat.JSONSchema != nil {
+			openRouterReq.ResponseFormat.JSONSchema = &openRouterJSONSchema{
+				Name:        req.ResponseFormat.JSONSchema.Name,
+				Description: req.ResponseFormat.JSONSchema.Description,
+				Schema:      req.ResponseFormat.JSONSchema.Schema,
+				Strict:      req.ResponseFormat.JSONSchema.Strict,
+			}
+		}
 	}
 
 	// Convert tool definitions
@@ -319,6 +347,21 @@ func (p *OpenRouterProvider) Stream(ctx context.Context, req *Request) (StreamRe
 		}
 
 		openRouterReq.Reasoning = reasoning
+	}
+
+	// Convert response format - OpenRouter supports both json_object and json_schema
+	if req.ResponseFormat != nil {
+		openRouterReq.ResponseFormat = &openRouterResponseFormat{
+			Type: req.ResponseFormat.Type,
+		}
+		if req.ResponseFormat.JSONSchema != nil {
+			openRouterReq.ResponseFormat.JSONSchema = &openRouterJSONSchema{
+				Name:        req.ResponseFormat.JSONSchema.Name,
+				Description: req.ResponseFormat.JSONSchema.Description,
+				Schema:      req.ResponseFormat.JSONSchema.Schema,
+				Strict:      req.ResponseFormat.JSONSchema.Strict,
+			}
+		}
 	}
 
 	// Convert tool definitions

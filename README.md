@@ -10,6 +10,7 @@ A clean and elegant Go library for unified access to multiple LLM platforms.
 
 - **Simple & Clean** - One-line API calls to any LLM platform
 - **Unified Interface** - Same request/response format across all providers
+- **Structured Outputs** - JSON Schema validation with cross-provider support
 - **Reasoning Support** - Full support for OpenAI o-series reasoning models
 - **Function Calling** - Complete Function Calling support
 - **Streaming** - Real-time streaming responses
@@ -141,6 +142,98 @@ for {
     case litellm.ChunkTypeReasoning:
         fmt.Printf("[Thinking: %s]", chunk.Reasoning.Summary)
     }
+}
+```
+
+## Structured Outputs
+
+LiteLLM supports structured JSON outputs with JSON Schema validation, ensuring reliable and predictable responses across all providers.
+
+### Basic JSON Object Output
+
+```go
+response, err := client.Complete(context.Background(), &litellm.Request{
+    Model: "gpt-4o-mini",
+    Messages: []litellm.Message{
+        {Role: "user", Content: "Generate a person's information"},
+    },
+    ResponseFormat: litellm.NewResponseFormatJSONObject(),
+})
+
+// Response will be valid JSON
+fmt.Println(response.Content) // {"name": "John Doe", "age": 30, ...}
+```
+
+### JSON Schema with Strict Validation
+
+```go
+// Define your data structure
+personSchema := map[string]interface{}{
+    "type": "object",
+    "properties": map[string]interface{}{
+        "name": map[string]interface{}{
+            "type": "string",
+            "description": "Full name",
+        },
+        "age": map[string]interface{}{
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 150,
+        },
+        "email": map[string]interface{}{
+            "type": "string",
+            "format": "email",
+        },
+    },
+    "required": []string{"name", "age", "email"},
+}
+
+response, err := client.Complete(context.Background(), &litellm.Request{
+    Model: "gpt-4o-mini",
+    Messages: []litellm.Message{
+        {Role: "user", Content: "Generate a software engineer's profile"},
+    },
+    ResponseFormat: litellm.NewResponseFormatJSONSchema(
+        "person_profile",
+        "A person's professional profile",
+        personSchema,
+        true, // strict mode
+    ),
+})
+
+// Parse into your Go struct
+type Person struct {
+    Name  string `json:"name"`
+    Age   int    `json:"age"`
+    Email string `json:"email"`
+}
+
+var person Person
+json.Unmarshal([]byte(response.Content), &person)
+```
+
+### Cross-Provider Compatibility
+
+Structured outputs work across all providers with intelligent adaptation:
+
+- **OpenAI**: Native JSON Schema support with strict mode
+- **Anthropic**: Prompt engineering with JSON instructions
+- **Gemini**: Native response schema support
+- **Other providers**: Automatic fallback to prompt-based JSON generation
+
+```go
+// Works with any provider
+providers := []string{"gpt-4o-mini", "claude-4-sonnet", "gemini-2.5-flash"}
+
+for _, model := range providers {
+    response, _ := client.Complete(ctx, &litellm.Request{
+        Model: model,
+        Messages: []litellm.Message{
+            {Role: "user", Content: "Generate user data"},
+        },
+        ResponseFormat: litellm.NewResponseFormatJSONObject(),
+    })
+    // All providers return valid JSON
 }
 ```
 
@@ -418,13 +511,14 @@ client := litellm.New(
 ### Core Types
 ```go
 type Request struct {
-    Model            string    `json:"model"`                 // model namel
-    Messages         []Message `json:"messages"`              // Conversation messages
-    MaxTokens        *int      `json:"max_tokens,omitempty"`  // Max tokens to generate
-    Temperature      *float64  `json:"temperature,omitempty"` // Sampling temperature
-    Tools            []Tool    `json:"tools,omitempty"`       // Available tools
-    ReasoningEffort  string    `json:"reasoning_effort,omitempty"`  // Reasoning effort
-    ReasoningSummary string    `json:"reasoning_summary,omitempty"` // Reasoning summary
+    Model            string          `json:"model"`                 // Model name
+    Messages         []Message       `json:"messages"`              // Conversation messages
+    MaxTokens        *int            `json:"max_tokens,omitempty"`  // Max tokens to generate
+    Temperature      *float64        `json:"temperature,omitempty"` // Sampling temperature
+    Tools            []Tool          `json:"tools,omitempty"`       // Available tools
+    ResponseFormat   *ResponseFormat `json:"response_format,omitempty"` // Response format
+    ReasoningEffort  string          `json:"reasoning_effort,omitempty"`  // Reasoning effort
+    ReasoningSummary string          `json:"reasoning_summary,omitempty"` // Reasoning summary
 }
 
 type Response struct {
@@ -432,6 +526,18 @@ type Response struct {
     ToolCalls []ToolCall     `json:"tool_calls,omitempty"` // Tool calls
     Usage     Usage          `json:"usage"`                // Token usage
     Reasoning *ReasoningData `json:"reasoning,omitempty"`  // Reasoning data
+}
+
+type ResponseFormat struct {
+    Type       string      `json:"type"`                 // "text", "json_object", "json_schema"
+    JSONSchema *JSONSchema `json:"json_schema,omitempty"` // JSON schema for structured output
+}
+
+type JSONSchema struct {
+    Name        string `json:"name"`                  // Schema name
+    Description string `json:"description,omitempty"` // Schema description
+    Schema      any    `json:"schema"`                // JSON schema definition
+    Strict      *bool  `json:"strict,omitempty"`      // Whether to enforce strict adherence
 }
 ```
 

@@ -38,6 +38,27 @@ type FunctionSchema struct {
 	Parameters  any    `json:"parameters"`  // JSON schema for parameters
 }
 
+// ResponseFormat specifies the format of the model's output
+type ResponseFormat struct {
+	Type       string      `json:"type"`                  // "text", "json_object", "json_schema"
+	JSONSchema *JSONSchema `json:"json_schema,omitempty"` // JSON schema for structured output
+}
+
+// JSONSchema defines a JSON schema for structured output
+type JSONSchema struct {
+	Name        string `json:"name"`                  // Schema name
+	Description string `json:"description,omitempty"` // Schema description
+	Schema      any    `json:"schema"`                // JSON schema definition
+	Strict      *bool  `json:"strict,omitempty"`      // Whether to enforce strict adherence
+}
+
+// Response format type constants
+const (
+	ResponseFormatText       = "text"
+	ResponseFormatJSONObject = "json_object"
+	ResponseFormatJSONSchema = "json_schema"
+)
+
 // Request represents a completion request
 type Request struct {
 	Model       string    `json:"model"`                 // Model identifier in "provider/model" format
@@ -47,6 +68,9 @@ type Request struct {
 	Stream      bool      `json:"stream,omitempty"`      // Enable streaming
 	Tools       []Tool    `json:"tools,omitempty"`       // Available tools
 	ToolChoice  any       `json:"tool_choice,omitempty"` // Tool choice strategy
+
+	// Response format for structured outputs
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"` // Response format specification
 
 	// Reasoning model parameters (OpenAI o-series)
 	ReasoningEffort  string `json:"reasoning_effort,omitempty"`  // "low", "medium", "high"

@@ -71,20 +71,33 @@ func (p *OpenAIProvider) isReasoningModel(model string) bool {
 
 // OpenAI API request/response structures
 type openaiRequest struct {
-	Model               string           `json:"model"`
-	Messages            []openaiMessage  `json:"messages"`
-	MaxTokens           *int             `json:"max_tokens,omitempty"`
-	MaxCompletionTokens *int             `json:"max_completion_tokens,omitempty"`
-	Temperature         *float64         `json:"temperature,omitempty"`
-	Stream              bool             `json:"stream,omitempty"`
-	Tools               []openaiTool     `json:"tools,omitempty"`
-	ToolChoice          interface{}      `json:"tool_choice,omitempty"`
-	Reasoning           *openaiReasoning `json:"reasoning,omitempty"`
+	Model               string                `json:"model"`
+	Messages            []openaiMessage       `json:"messages"`
+	MaxTokens           *int                  `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int                  `json:"max_completion_tokens,omitempty"`
+	Temperature         *float64              `json:"temperature,omitempty"`
+	Stream              bool                  `json:"stream,omitempty"`
+	Tools               []openaiTool          `json:"tools,omitempty"`
+	ToolChoice          interface{}           `json:"tool_choice,omitempty"`
+	ResponseFormat      *openaiResponseFormat `json:"response_format,omitempty"`
+	Reasoning           *openaiReasoning      `json:"reasoning,omitempty"`
 }
 
 type openaiReasoning struct {
 	Effort  string `json:"effort,omitempty"`  // OpenAI format
 	Summary string `json:"summary,omitempty"` // OpenAI format
+}
+
+type openaiResponseFormat struct {
+	Type       string            `json:"type"` // "text", "json_object", "json_schema"
+	JSONSchema *openaiJSONSchema `json:"json_schema,omitempty"`
+}
+
+type openaiJSONSchema struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Schema      any    `json:"schema"`
+	Strict      *bool  `json:"strict,omitempty"`
 }
 
 type openaiMessage struct {
@@ -257,6 +270,21 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 		Model:      modelName,
 		Stream:     false,
 		ToolChoice: req.ToolChoice,
+	}
+
+	// Convert response format
+	if req.ResponseFormat != nil {
+		openaiReq.ResponseFormat = &openaiResponseFormat{
+			Type: req.ResponseFormat.Type,
+		}
+		if req.ResponseFormat.JSONSchema != nil {
+			openaiReq.ResponseFormat.JSONSchema = &openaiJSONSchema{
+				Name:        req.ResponseFormat.JSONSchema.Name,
+				Description: req.ResponseFormat.JSONSchema.Description,
+				Schema:      req.ResponseFormat.JSONSchema.Schema,
+				Strict:      req.ResponseFormat.JSONSchema.Strict,
+			}
+		}
 	}
 
 	// Set reasoning parameters if provided (OpenAI format only)
@@ -530,6 +558,21 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		Model:    modelName,
 		Messages: make([]openaiMessage, len(req.Messages)),
 		Stream:   true,
+	}
+
+	// Convert response format
+	if req.ResponseFormat != nil {
+		openaiReq.ResponseFormat = &openaiResponseFormat{
+			Type: req.ResponseFormat.Type,
+		}
+		if req.ResponseFormat.JSONSchema != nil {
+			openaiReq.ResponseFormat.JSONSchema = &openaiJSONSchema{
+				Name:        req.ResponseFormat.JSONSchema.Name,
+				Description: req.ResponseFormat.JSONSchema.Description,
+				Schema:      req.ResponseFormat.JSONSchema.Schema,
+				Strict:      req.ResponseFormat.JSONSchema.Strict,
+			}
+		}
 	}
 
 	// Set correct parameters based on model type

@@ -10,6 +10,7 @@
 
 - **简洁易用** - 一行代码调用任意 LLM 平台
 - **统一接口** - 所有平台使用相同的请求/响应格式
+- **结构化输出** - JSON Schema 验证，跨平台支持
 - **推理支持** - 完整支持 OpenAI o 系列推理模型
 - **工具调用** - 完整的 Function Calling 支持
 - **流式处理** - 实时流式响应
@@ -88,6 +89,98 @@ func main() {
         response.Usage.TotalTokens, 
         response.Usage.PromptTokens, 
         response.Usage.CompletionTokens)
+}
+```
+
+## 结构化输出
+
+LiteLLM 支持结构化 JSON 输出和 JSON Schema 验证，确保跨所有平台获得可靠且可预测的响应。
+
+### 基础 JSON 对象输出
+
+```go
+response, err := client.Complete(context.Background(), &litellm.Request{
+    Model: "gpt-4o-mini",
+    Messages: []litellm.Message{
+        {Role: "user", Content: "生成一个人的信息"},
+    },
+    ResponseFormat: litellm.NewResponseFormatJSONObject(),
+})
+
+// 响应将是有效的 JSON
+fmt.Println(response.Content) // {"name": "张三", "age": 30, ...}
+```
+
+### JSON Schema 严格验证
+
+```go
+// 定义数据结构
+personSchema := map[string]interface{}{
+    "type": "object",
+    "properties": map[string]interface{}{
+        "name": map[string]interface{}{
+            "type": "string",
+            "description": "姓名",
+        },
+        "age": map[string]interface{}{
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 150,
+        },
+        "email": map[string]interface{}{
+            "type": "string",
+            "format": "email",
+        },
+    },
+    "required": []string{"name", "age", "email"},
+}
+
+response, err := client.Complete(context.Background(), &litellm.Request{
+    Model: "gpt-4o-mini",
+    Messages: []litellm.Message{
+        {Role: "user", Content: "生成一个软件工程师的档案"},
+    },
+    ResponseFormat: litellm.NewResponseFormatJSONSchema(
+        "person_profile",
+        "个人职业档案信息",
+        personSchema,
+        true, // 严格模式
+    ),
+})
+
+// 解析为 Go 结构体
+type Person struct {
+    Name  string `json:"name"`
+    Age   int    `json:"age"`
+    Email string `json:"email"`
+}
+
+var person Person
+json.Unmarshal([]byte(response.Content), &person)
+```
+
+### 跨平台兼容性
+
+结构化输出在所有平台上都能工作，具有智能适配：
+
+- **OpenAI**: 原生 JSON Schema 支持，带严格模式
+- **Anthropic**: 通过提示工程实现 JSON 指令
+- **Gemini**: 原生响应 schema 支持
+- **其他平台**: 自动降级到基于提示的 JSON 生成
+
+```go
+// 适用于任何平台
+providers := []string{"gpt-4o-mini", "claude-4-sonnet", "gemini-2.5-flash"}
+
+for _, model := range providers {
+    response, _ := client.Complete(ctx, &litellm.Request{
+        Model: model,
+        Messages: []litellm.Message{
+            {Role: "user", Content: "生成用户数据"},
+        },
+        ResponseFormat: litellm.NewResponseFormatJSONObject(),
+    })
+    // 所有平台都返回有效的 JSON
 }
 ```
 
@@ -416,13 +509,14 @@ client := litellm.New(
 ### 核心类型
 ```go
 type Request struct {
-    Model            string    `json:"model"`                 // 模型名称
-    Messages         []Message `json:"messages"`              // 对话消息
-    MaxTokens        *int      `json:"max_tokens,omitempty"`  // 最大token数
-    Temperature      *float64  `json:"temperature,omitempty"` // 采样温度
-    Tools            []Tool    `json:"tools,omitempty"`       // 可用工具
-    ReasoningEffort  string    `json:"reasoning_effort,omitempty"`  // 推理强度
-    ReasoningSummary string    `json:"reasoning_summary,omitempty"` // 推理摘要
+    Model            string          `json:"model"`                 // 模型名称
+    Messages         []Message       `json:"messages"`              // 对话消息
+    MaxTokens        *int            `json:"max_tokens,omitempty"`  // 最大token数
+    Temperature      *float64        `json:"temperature,omitempty"` // 采样温度
+    Tools            []Tool          `json:"tools,omitempty"`       // 可用工具
+    ResponseFormat   *ResponseFormat `json:"response_format,omitempty"` // 响应格式
+    ReasoningEffort  string          `json:"reasoning_effort,omitempty"`  // 推理强度
+    ReasoningSummary string          `json:"reasoning_summary,omitempty"` // 推理摘要
 }
 
 type Response struct {
@@ -430,6 +524,18 @@ type Response struct {
     ToolCalls []ToolCall     `json:"tool_calls,omitempty"` // 工具调用
     Usage     Usage          `json:"usage"`                // Token使用统计
     Reasoning *ReasoningData `json:"reasoning,omitempty"`  // 推理数据
+}
+
+type ResponseFormat struct {
+    Type       string      `json:"type"`                 // "text", "json_object", "json_schema"
+    JSONSchema *JSONSchema `json:"json_schema,omitempty"` // 结构化输出的 JSON schema
+}
+
+type JSONSchema struct {
+    Name        string `json:"name"`                  // Schema 名称
+    Description string `json:"description,omitempty"` // Schema 描述
+    Schema      any    `json:"schema"`                // JSON schema 定义
+    Strict      *bool  `json:"strict,omitempty"`      // 是否强制严格遵守
 }
 ```
 

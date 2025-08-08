@@ -2,6 +2,7 @@ package litellm
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -283,4 +284,102 @@ func TestOpenAI_StreamingToolCalls(t *testing.T) {
 	} else {
 		t.Logf("   No tool calls - Direct response: %s", content.String())
 	}
+}
+
+// TestOpenAI_StructuredOutput tests JSON schema structured output
+func TestOpenAI_StructuredOutput(t *testing.T) {
+	if os.Getenv("OPENAI_API_KEY") == "" {
+		t.Skip("OPENAI_API_KEY not set")
+	}
+
+	client := New(WithOpenAI(os.Getenv("OPENAI_API_KEY")))
+
+	// Simple JSON object test
+	response, err := client.Complete(context.Background(), &Request{
+		Model: "gpt-4o-mini",
+		Messages: []Message{
+			{Role: "user", Content: "Generate a person's basic info with name, age, and city"},
+		},
+		ResponseFormat: NewResponseFormatJSONObject(),
+		MaxTokens:      IntPtr(150),
+	})
+
+	if err != nil {
+		t.Fatalf("JSON object request failed: %v", err)
+	}
+
+	t.Logf("✅ Structured Output - JSON Object")
+	t.Logf("   Response: %s", response.Content)
+
+	// Verify it's valid JSON
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(response.Content), &result); err != nil {
+		t.Errorf("Response is not valid JSON: %v", err)
+	} else {
+		t.Logf("   ✓ Valid JSON with keys: %v", getKeys(result))
+	}
+
+	// JSON Schema test
+	personSchema := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"name": map[string]interface{}{
+				"type": "string",
+			},
+			"age": map[string]interface{}{
+				"type":    "integer",
+				"minimum": 0,
+				"maximum": 150,
+			},
+			"city": map[string]interface{}{
+				"type": "string",
+			},
+		},
+		"required": []string{"name", "age", "city"},
+	}
+
+	response2, err := client.Complete(context.Background(), &Request{
+		Model: "gpt-4o-mini",
+		Messages: []Message{
+			{Role: "user", Content: "Generate a software engineer's profile"},
+		},
+		ResponseFormat: NewResponseFormatJSONSchema(
+			"person_profile",
+			"A person's basic profile information",
+			personSchema,
+			true, // strict mode
+		),
+		MaxTokens: IntPtr(200),
+	})
+
+	if err != nil {
+		t.Fatalf("JSON schema request failed: %v", err)
+	}
+
+	t.Logf("✅ Structured Output - JSON Schema")
+	t.Logf("   Response: %s", response2.Content)
+
+	// Verify schema compliance
+	var person map[string]interface{}
+	if err := json.Unmarshal([]byte(response2.Content), &person); err != nil {
+		t.Errorf("Schema response is not valid JSON: %v", err)
+	} else {
+		// Check required fields
+		required := []string{"name", "age", "city"}
+		for _, field := range required {
+			if _, exists := person[field]; !exists {
+				t.Errorf("Required field '%s' missing from response", field)
+			}
+		}
+		t.Logf("   ✓ Schema compliant with fields: %v", getKeys(person))
+	}
+}
+
+// Helper function to get map keys
+func getKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
