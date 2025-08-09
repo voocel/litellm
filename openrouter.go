@@ -445,6 +445,7 @@ func (p *OpenRouterProvider) Models() []ModelInfo {
 	// OpenRouter supports hundreds of models, but we'll list some popular ones
 	// In practice, you might want to fetch this dynamically from OpenRouter's models API
 	return []ModelInfo{
+		{ID: "openai/gpt-5", Name: "GPT-5", Provider: "openai"},
 		{ID: "openai/gpt-4o", Name: "GPT-4o", Provider: "openai"},
 		{ID: "openai/gpt-4o-mini", Name: "GPT-4o Mini", Provider: "openai"},
 		{ID: "anthropic/claude-3.5-sonnet", Name: "Claude 3.5 Sonnet", Provider: "anthropic"},

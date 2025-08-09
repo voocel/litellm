@@ -27,6 +27,11 @@ func NewOpenAIProvider(config ProviderConfig) Provider {
 func (p *OpenAIProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		{
+			ID: "gpt-5", Provider: "openai", Name: "GPT-5", MaxTokens: 128000,
+			Capabilities: []ModelCapability{CapabilityChat, CapabilityFunctionCall, CapabilityVision, CapabilityCode},
+		},
+
+		{
 			ID: "gpt-4o", Provider: "openai", Name: "GPT-4o", MaxTokens: 128000,
 			Capabilities: []ModelCapability{CapabilityChat, CapabilityFunctionCall, CapabilityVision},
 		},
@@ -61,12 +66,13 @@ func (p *OpenAIProvider) Models() []ModelInfo {
 	}
 }
 
-// isReasoningModel checks if the model is a reasoning model (o-series)
+// isReasoningModel checks if the model supports advanced reasoning (o-series and GPT-5)
 func (p *OpenAIProvider) isReasoningModel(model string) bool {
 	model = strings.ToLower(model)
 	return strings.HasPrefix(model, "o1") ||
 		strings.HasPrefix(model, "o3") ||
-		strings.HasPrefix(model, "o4")
+		strings.HasPrefix(model, "o4") ||
+		strings.HasPrefix(model, "gpt-5")
 }
 
 // OpenAI API request/response structures
@@ -303,13 +309,13 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 		openaiReq.Reasoning = reasoning
 	}
 
-	// Set correct parameters based on model type
-	if p.isReasoningModel(modelName) {
-		// Parameter settings for o series models (reasoning models)
+	// Set correct parameters based on model type and reasoning usage
+	if p.isReasoningModel(modelName) && (req.ReasoningEffort != "" || req.ReasoningSummary != "") {
+		// Parameter settings for reasoning usage: use completion tokens cap
 		openaiReq.MaxCompletionTokens = req.MaxTokens
-		// o series models don't support temperature and other parameters
+		// Reasoning usage typically ignores temperature and some sampling params
 	} else {
-		// Traditional models support all parameters
+		// Non-reasoning usage: traditional models parameters
 		openaiReq.MaxTokens = req.MaxTokens
 		openaiReq.Temperature = req.Temperature
 	}
@@ -575,8 +581,8 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		}
 	}
 
-	// Set correct parameters based on model type
-	if p.isReasoningModel(modelName) {
+	// Set correct parameters based on model type and reasoning usage
+	if p.isReasoningModel(modelName) && (req.ReasoningEffort != "" || req.ReasoningSummary != "") {
 		openaiReq.MaxCompletionTokens = req.MaxTokens
 		reasoning := &openaiReasoning{}
 		if req.ReasoningEffort != "" {

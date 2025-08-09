@@ -8,6 +8,31 @@ import (
 	"testing"
 )
 
+// TestOpenAI_GPT5_Basic ensures gpt-5 model name routes and returns content
+func TestOpenAI_GPT5_Basic(t *testing.T) {
+	if os.Getenv("OPENAI_API_KEY") == "" || os.Getenv("OPENAI_ENABLE_GPT5") == "" {
+		t.Skip("OPENAI_API_KEY or OPENAI_ENABLE_GPT5 not set")
+	}
+
+	client := New(WithOpenAI(os.Getenv("OPENAI_API_KEY"), os.Getenv("OPENAI_BASE_URL")))
+
+	response, err := client.Complete(context.Background(), &Request{
+		Model: "gpt-5",
+		Messages: []Message{
+			{Role: "user", Content: "Say only the word: pong"},
+		},
+		MaxTokens:   IntPtr(10),
+		Temperature: Float64Ptr(0.0),
+	})
+
+	if err != nil {
+		t.Fatalf("gpt-5 request failed: %v", err)
+	}
+	if response.Content == "" {
+		t.Errorf("expected non-empty content")
+	}
+}
+
 // TestOpenAI_BasicChat tests basic chat completion
 func TestOpenAI_BasicChat(t *testing.T) {
 	if os.Getenv("OPENAI_API_KEY") == "" {

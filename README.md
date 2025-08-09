@@ -60,7 +60,7 @@ import (
 func main() {
     // Method 1: Auto-discovery from environment variables
     client := litellm.New()
-    
+
     // Method 2: Manual configuration (recommended for production)
     client = litellm.New(
 		litellm.WithOpenAI("your-openai-key"),
@@ -71,7 +71,7 @@ func main() {
 		litellm.WithOpenRouter("your-openrouter-key"),
 		litellm.WithDefaults(2048, 0.8), // Custom defaults
     )
-    
+
     // Basic chat
     response, err := client.Complete(context.Background(), &litellm.Request{
         Model: "gpt-4o-mini",
@@ -81,15 +81,15 @@ func main() {
         MaxTokens:   litellm.IntPtr(200),
         Temperature: litellm.Float64Ptr(0.7),
     })
-    
+
     if err != nil {
         panic(err)
     }
-    
+
     fmt.Printf("Response: %s\n", response.Content)
-    fmt.Printf("Tokens: %d (input: %d, output: %d)\n", 
-        response.Usage.TotalTokens, 
-        response.Usage.PromptTokens, 
+    fmt.Printf("Tokens: %d (input: %d, output: %d)\n",
+        response.Usage.TotalTokens,
+        response.Usage.PromptTokens,
         response.Usage.CompletionTokens)
 }
 ```
@@ -135,7 +135,7 @@ for {
     if err != nil || chunk.Done {
         break
     }
-    
+
     switch chunk.Type {
     case litellm.ChunkTypeContent:
         fmt.Print(chunk.Content)
@@ -441,10 +441,16 @@ response, _ := client.Complete(ctx, &litellm.Request{
 ## Supported Platforms
 
 ### OpenAI
-- GPT-4o, GPT-4o-mini, GPT-4.1, GPT-4.1-mini, GPT-4.1-mano
+- GPT-5, GPT-4o, GPT-4o-mini, GPT-4.1, GPT-4.1-mini, GPT-4.1-mano
 - o3, o3-mini, o4-mini (reasoning models)
 - Chat Completions API & Responses API
 - Function Calling, Vision, Streaming
+
+
+#### Usage tips for GPT-5
+- For deeper reasoning, set `ReasoningEffort` and/or `ReasoningSummary`. LiteLLM will automatically switch to the Responses API and use `MaxCompletionTokens` for better reasoning behavior.
+- Consider increasing `MaxCompletionTokens` to cover both reasoning and final answer tokens.
+- Ensure your API key has access to `gpt-5`; otherwise, requests may fail. You can also try routing via OpenRouter (`openai/gpt-5`).
 
 ### Anthropic
 - Claude 3.7 Sonnet, Claude 4 Sonnet, Claude 4 Opus

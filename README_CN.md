@@ -60,7 +60,7 @@ import (
 func main() {
     // 方式1: 环境变量自动发现
     client := litellm.New()
-    
+
     // 方式2: 手动配置 (生产环境推荐)
     client = litellm.New(
 		litellm.WithOpenAI("your-openai-key"),
@@ -69,7 +69,7 @@ func main() {
 		litellm.WithOpenRouter("your-openrouter-key"),
 		litellm.WithDefaults(2048, 0.8), // 自定义默认参数
     )
-    
+
     // 基础聊天
     response, err := client.Complete(context.Background(), &litellm.Request{
         Model: "gpt-4o-mini",
@@ -79,15 +79,15 @@ func main() {
         MaxTokens:   litellm.IntPtr(200),
         Temperature: litellm.Float64Ptr(0.7),
     })
-    
+
     if err != nil {
         panic(err)
     }
-    
+
     fmt.Printf("回答: %s\n", response.Content)
-    fmt.Printf("Tokens: %d (输入: %d, 输出: %d)\n", 
-        response.Usage.TotalTokens, 
-        response.Usage.PromptTokens, 
+    fmt.Printf("Tokens: %d (输入: %d, 输出: %d)\n",
+        response.Usage.TotalTokens,
+        response.Usage.PromptTokens,
         response.Usage.CompletionTokens)
 }
 ```
@@ -225,7 +225,7 @@ for {
     if err != nil || chunk.Done {
         break
     }
-    
+
     switch chunk.Type {
     case litellm.ChunkTypeContent:
         fmt.Print(chunk.Content)
@@ -439,10 +439,16 @@ response, _ := client.Complete(ctx, &litellm.Request{
 ## 支持的平台
 
 ### OpenAI
-- GPT-4o, GPT-4o-mini, GPT-4.1, GPT-4.1-mini, GPT-4.1-mano
+- GPT-5, GPT-4o, GPT-4o-mini, GPT-4.1, GPT-4.1-mini, GPT-4.1-mano
 - o3, o3-mini, o4-mini (推理模型)
 - Chat Completions API 和 Responses API
 - Function Calling, Vision, 流式处理
+
+#### GPT-5 使用建议
+- 需要更强推理时，设置 `ReasoningEffort` 和/或 `ReasoningSummary`。LiteLLM 会自动切换到 Responses API，并使用 `MaxCompletionTokens` 以获得更稳定的推理行为。
+- 建议适当增大 `MaxCompletionTokens`，覆盖推理过程与最终回答的 tokens。
+- 请确认您的 API Key 具有 `gpt-5` 的访问权限；否则请求可能失败。也可尝试通过 OpenRouter 路由（`openai/gpt-5`）。
+
 
 ### Anthropic
 - Claude 3.7 Sonnet, Claude 4 Sonnet, Claude 4 Opus
