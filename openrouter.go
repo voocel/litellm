@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // OpenRouterProvider implements the Provider interface for OpenRouter
@@ -20,11 +19,7 @@ type OpenRouterProvider struct {
 // NewOpenRouterProvider creates a new OpenRouter provider
 func NewOpenRouterProvider(config ProviderConfig) Provider {
 	return &OpenRouterProvider{
-		BaseProvider: &BaseProvider{
-			name:       "openrouter",
-			config:     config,
-			httpClient: &http.Client{Timeout: 30 * time.Second},
-		},
+		BaseProvider: NewBaseProvider("openrouter", config),
 	}
 }
 
@@ -241,7 +236,7 @@ func (p *OpenRouterProvider) Complete(ctx context.Context, req *Request) (*Respo
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
 
-	resp, err := p.httpClient.Do(httpReq)
+	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("openrouter: request failed: %w", err)
 	}
@@ -422,7 +417,7 @@ func (p *OpenRouterProvider) Stream(ctx context.Context, req *Request) (StreamRe
 	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
 	httpReq.Header.Set("Accept", "text/event-stream")
 
-	resp, err := p.httpClient.Do(httpReq)
+	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("openrouter: request failed: %w", err)
 	}

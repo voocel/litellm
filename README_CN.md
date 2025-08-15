@@ -10,6 +10,7 @@
 
 - **简洁易用** - 一行代码调用任意 LLM 平台
 - **统一接口** - 所有平台使用相同的请求/响应格式
+- **网络弹性** - 指数退避重试机制和智能抖动
 - **结构化输出** - JSON Schema 验证，跨平台支持
 - **推理支持** - 完整支持 OpenAI o 系列推理模型
 - **工具调用** - 完整的 Function Calling 支持
@@ -205,6 +206,27 @@ if response.Reasoning != nil {
     fmt.Printf("推理过程: %s\n", response.Reasoning.Summary)
     fmt.Printf("推理 tokens: %d\n", response.Reasoning.TokensUsed)
 }
+```
+
+## 网络弹性
+
+内置自动重试机制，指数退避处理网络故障和 API 错误。
+
+```go
+// 默认：3 次重试，智能退避
+client := litellm.New(litellm.WithOpenAI("your-api-key"))
+
+// 自定义超时
+client := litellm.New(
+    litellm.WithOpenAI("your-api-key"),
+    litellm.WithTimeout(60*time.Second),
+)
+
+// 自定义重试
+client := litellm.New(
+    litellm.WithOpenAI("your-api-key"),
+    litellm.WithRetries(5, 2*time.Second), // 重试 5 次，初始延迟 2 秒
+)
 ```
 
 ## 流式处理

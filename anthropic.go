@@ -198,7 +198,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *Request) (*Respon
 	httpReq.Header.Set("x-api-key", p.config.APIKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 
-	resp, err := p.httpClient.Do(httpReq)
+	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: request failed: %w", err)
 	}
@@ -343,7 +343,7 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 	httpReq.Header.Set("x-api-key", p.config.APIKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 
-	resp, err := p.httpClient.Do(httpReq)
+	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: request failed: %w", err)
 	}

@@ -282,7 +282,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *Request) (*Response,
 
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := p.httpClient.Do(httpReq)
+	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("gemini: request failed: %w", err)
 	}
@@ -398,7 +398,7 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := p.httpClient.Do(httpReq)
+	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("gemini: request failed: %w", err)
 	}

@@ -375,7 +375,7 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
 
-	resp, err := p.httpClient.Do(httpReq)
+	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("openai: request failed: %w", err)
 	}
@@ -495,7 +495,7 @@ func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Requ
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
 
-	resp, err := p.httpClient.Do(httpReq)
+	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("openai: responses request failed: %w", err)
 	}
@@ -622,7 +622,7 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
 
-	resp, err := p.httpClient.Do(httpReq)
+	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("openai: request failed: %w", err)
 	}

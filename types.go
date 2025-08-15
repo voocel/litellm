@@ -214,7 +214,8 @@ type Provider interface {
 
 // ProviderConfig holds configuration for a provider
 type ProviderConfig struct {
-	APIKey  string         `json:"api_key"`            // API key
-	BaseURL string         `json:"base_url,omitempty"` // Custom base URL
-	Extra   map[string]any `json:"extra,omitempty"`    // Provider-specific config
+	APIKey     string           `json:"api_key"`              // API key
+	BaseURL    string           `json:"base_url,omitempty"`   // Custom base URL
+	Resilience ResilienceConfig `json:"resilience,omitempty"` // Network resilience config
+	Extra      map[string]any   `json:"extra,omitempty"`      // Provider-specific config
 }

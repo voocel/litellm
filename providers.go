@@ -2,8 +2,6 @@ package litellm
 
 import (
 	"fmt"
-	"net/http"
-	"time"
 )
 
 // ProviderRegistry holds all registered provider factories
@@ -28,9 +26,10 @@ func CreateProvider(name string, config ProviderConfig) (Provider, error) {
 
 // BaseProvider provides common functionality for all providers
 type BaseProvider struct {
-	name       string
-	config     ProviderConfig
-	httpClient *http.Client
+	name             string
+	config           ProviderConfig
+	httpClient       *ResilientHTTPClient
+	resilienceConfig ResilienceConfig
 }
 
 // NewBaseProvider creates a new base provider
@@ -39,12 +38,17 @@ func NewBaseProvider(name string, config ProviderConfig) *BaseProvider {
 		config.BaseURL = getDefaultBaseURL(name)
 	}
 
+	// Use provided resilience config, or defaults if not specified
+	resilienceConfig := config.Resilience
+	if resilienceConfig == (ResilienceConfig{}) {
+		resilienceConfig = DefaultResilienceConfig()
+	}
+
 	return &BaseProvider{
-		name:   name,
-		config: config,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		name:             name,
+		config:           config,
+		httpClient:       NewResilientHTTPClient(resilienceConfig),
+		resilienceConfig: resilienceConfig,
 	}
 }
 
@@ -58,9 +62,14 @@ func (p *BaseProvider) Config() ProviderConfig {
 	return p.config
 }
 
-// HTTPClient returns the HTTP client
-func (p *BaseProvider) HTTPClient() *http.Client {
+// HTTPClient returns the resilient HTTP client
+func (p *BaseProvider) HTTPClient() *ResilientHTTPClient {
 	return p.httpClient
+}
+
+// ResilienceConfig returns the resilience configuration
+func (p *BaseProvider) ResilienceConfig() ResilienceConfig {
+	return p.resilienceConfig
 }
 
 // Validate checks if the provider is properly configured

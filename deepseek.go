@@ -138,7 +138,7 @@ func (p *DeepSeekProvider) Complete(ctx context.Context, req *Request) (*Respons
 	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
 
 	// Send request
-	resp, err := p.httpClient.Do(httpReq)
+	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("deepseek: request failed: %w", err)
 	}
@@ -286,7 +286,7 @@ func (p *DeepSeekProvider) Stream(ctx context.Context, req *Request) (StreamRead
 	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
 	httpReq.Header.Set("Accept", "text/event-stream")
 
-	resp, err := p.httpClient.Do(httpReq)
+	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("deepseek: request failed: %w", err)
 	}

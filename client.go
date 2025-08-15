@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // Client is the main LLM client
@@ -15,8 +16,9 @@ type Client struct {
 
 // DefaultConfig holds default configuration values
 type DefaultConfig struct {
-	MaxTokens   int     `json:"max_tokens"`
-	Temperature float64 `json:"temperature"`
+	MaxTokens   int              `json:"max_tokens"`
+	Temperature float64          `json:"temperature"`
+	Resilience  ResilienceConfig `json:"resilience"`
 }
 
 // ClientOption defines options for configuring the client
@@ -29,6 +31,7 @@ func New(opts ...ClientOption) *Client {
 		defaults: DefaultConfig{
 			MaxTokens:   4096,
 			Temperature: 0.7,
+			Resilience:  DefaultResilienceConfig(),
 		},
 	}
 
@@ -53,10 +56,35 @@ func WithDefaults(maxTokens int, temperature float64) ClientOption {
 	}
 }
 
+// WithResilience sets default resilience configuration
+func WithResilience(config ResilienceConfig) ClientOption {
+	return func(c *Client) {
+		c.defaults.Resilience = config
+	}
+}
+
+// WithTimeout sets request timeout for all providers
+func WithTimeout(timeout time.Duration) ClientOption {
+	return func(c *Client) {
+		c.defaults.Resilience.RequestTimeout = timeout
+	}
+}
+
+// WithRetries sets retry configuration for all providers
+func WithRetries(maxRetries int, initialDelay time.Duration) ClientOption {
+	return func(c *Client) {
+		c.defaults.Resilience.MaxRetries = maxRetries
+		c.defaults.Resilience.InitialDelay = initialDelay
+	}
+}
+
 // WithOpenAI adds OpenAI provider with custom configuration
 func WithOpenAI(apiKey string, baseURL ...string) ClientOption {
 	return func(c *Client) {
-		config := ProviderConfig{APIKey: apiKey}
+		config := ProviderConfig{
+			APIKey:     apiKey,
+			Resilience: c.defaults.Resilience,
+		}
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
@@ -69,7 +97,10 @@ func WithOpenAI(apiKey string, baseURL ...string) ClientOption {
 // WithAnthropic adds Anthropic provider with custom configuration
 func WithAnthropic(apiKey string, baseURL ...string) ClientOption {
 	return func(c *Client) {
-		config := ProviderConfig{APIKey: apiKey}
+		config := ProviderConfig{
+			APIKey:     apiKey,
+			Resilience: c.defaults.Resilience,
+		}
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
@@ -82,7 +113,10 @@ func WithAnthropic(apiKey string, baseURL ...string) ClientOption {
 // WithGemini adds Gemini provider with custom configuration
 func WithGemini(apiKey string, baseURL ...string) ClientOption {
 	return func(c *Client) {
-		config := ProviderConfig{APIKey: apiKey}
+		config := ProviderConfig{
+			APIKey:     apiKey,
+			Resilience: c.defaults.Resilience,
+		}
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
@@ -95,7 +129,10 @@ func WithGemini(apiKey string, baseURL ...string) ClientOption {
 // WithDeepSeek adds DeepSeek provider with custom configuration
 func WithDeepSeek(apiKey string, baseURL ...string) ClientOption {
 	return func(c *Client) {
-		config := ProviderConfig{APIKey: apiKey}
+		config := ProviderConfig{
+			APIKey:     apiKey,
+			Resilience: c.defaults.Resilience,
+		}
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
@@ -108,7 +145,10 @@ func WithDeepSeek(apiKey string, baseURL ...string) ClientOption {
 // WithOpenRouter adds OpenRouter provider with custom configuration
 func WithOpenRouter(apiKey string, baseURL ...string) ClientOption {
 	return func(c *Client) {
-		config := ProviderConfig{APIKey: apiKey}
+		config := ProviderConfig{
+			APIKey:     apiKey,
+			Resilience: c.defaults.Resilience,
+		}
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
@@ -121,7 +161,10 @@ func WithOpenRouter(apiKey string, baseURL ...string) ClientOption {
 // WithQwen adds Qwen provider with custom configuration
 func WithQwen(apiKey string, baseURL ...string) ClientOption {
 	return func(c *Client) {
-		config := ProviderConfig{APIKey: apiKey}
+		config := ProviderConfig{
+			APIKey:     apiKey,
+			Resilience: c.defaults.Resilience,
+		}
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
@@ -134,7 +177,10 @@ func WithQwen(apiKey string, baseURL ...string) ClientOption {
 // WithGLM adds GLM provider with custom configuration
 func WithGLM(apiKey string, baseURL ...string) ClientOption {
 	return func(c *Client) {
-		config := ProviderConfig{APIKey: apiKey}
+		config := ProviderConfig{
+			APIKey:     apiKey,
+			Resilience: c.defaults.Resilience,
+		}
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
@@ -180,8 +226,9 @@ func (c *Client) autoDiscoverProviders() {
 	// Auto-discover Anthropic
 	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
 		config := ProviderConfig{
-			APIKey:  apiKey,
-			BaseURL: getEnvOrDefault("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+			APIKey:     apiKey,
+			BaseURL:    getEnvOrDefault("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+			Resilience: c.defaults.Resilience,
 		}
 		if provider := createAnthropicProvider(config); provider != nil {
 			c.providers["anthropic"] = provider
@@ -191,8 +238,9 @@ func (c *Client) autoDiscoverProviders() {
 	// Auto-discover Gemini
 	if apiKey := os.Getenv("GEMINI_API_KEY"); apiKey != "" {
 		config := ProviderConfig{
-			APIKey:  apiKey,
-			BaseURL: getEnvOrDefault("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com"),
+			APIKey:     apiKey,
+			BaseURL:    getEnvOrDefault("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com"),
+			Resilience: c.defaults.Resilience,
 		}
 		if provider := createGeminiProvider(config); provider != nil {
 			c.providers["gemini"] = provider
@@ -202,8 +250,9 @@ func (c *Client) autoDiscoverProviders() {
 	// Auto-discover DeepSeek
 	if apiKey := os.Getenv("DEEPSEEK_API_KEY"); apiKey != "" {
 		config := ProviderConfig{
-			APIKey:  apiKey,
-			BaseURL: getEnvOrDefault("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+			APIKey:     apiKey,
+			BaseURL:    getEnvOrDefault("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+			Resilience: c.defaults.Resilience,
 		}
 		if provider := createDeepSeekProvider(config); provider != nil {
 			c.providers["deepseek"] = provider
@@ -213,8 +262,9 @@ func (c *Client) autoDiscoverProviders() {
 	// Auto-discover OpenRouter
 	if apiKey := os.Getenv("OPENROUTER_API_KEY"); apiKey != "" {
 		config := ProviderConfig{
-			APIKey:  apiKey,
-			BaseURL: getEnvOrDefault("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+			APIKey:     apiKey,
+			BaseURL:    getEnvOrDefault("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+			Resilience: c.defaults.Resilience,
 		}
 		if provider := createOpenRouterProvider(config); provider != nil {
 			c.providers["openrouter"] = provider
@@ -224,8 +274,9 @@ func (c *Client) autoDiscoverProviders() {
 	// Auto-discover Qwen (DashScope)
 	if apiKey := os.Getenv("QWEN_API_KEY"); apiKey != "" {
 		config := ProviderConfig{
-			APIKey:  apiKey,
-			BaseURL: getEnvOrDefault("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+			APIKey:     apiKey,
+			BaseURL:    getEnvOrDefault("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+			Resilience: c.defaults.Resilience,
 		}
 		if provider := createQwenProvider(config); provider != nil {
 			c.providers["qwen"] = provider
@@ -235,8 +286,9 @@ func (c *Client) autoDiscoverProviders() {
 	// Auto-discover GLM
 	if apiKey := os.Getenv("GLM_API_KEY"); apiKey != "" {
 		config := ProviderConfig{
-			APIKey:  apiKey,
-			BaseURL: getEnvOrDefault("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
+			APIKey:     apiKey,
+			BaseURL:    getEnvOrDefault("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
+			Resilience: c.defaults.Resilience,
 		}
 		if provider := createGLMProvider(config); provider != nil {
 			c.providers["glm"] = provider

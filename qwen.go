@@ -217,7 +217,7 @@ func (p *QwenProvider) Complete(ctx context.Context, req *Request) (*Response, e
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
 
-	resp, err := p.httpClient.Do(httpReq)
+	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("qwen: request failed: %w", err)
 	}
@@ -378,7 +378,7 @@ func (p *QwenProvider) Stream(ctx context.Context, req *Request) (StreamReader, 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
 
-	resp, err := p.httpClient.Do(httpReq)
+	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("qwen: request failed: %w", err)
 	}

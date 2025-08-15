@@ -10,6 +10,7 @@ A clean and elegant Go library for unified access to multiple LLM platforms.
 
 - **Simple & Clean** - One-line API calls to any LLM platform
 - **Unified Interface** - Same request/response format across all providers
+- **Network Resilience** - Automatic retry with exponential backoff and jitter
 - **Structured Outputs** - JSON Schema validation with cross-provider support
 - **Reasoning Support** - Full support for OpenAI o-series reasoning models
 - **Function Calling** - Complete Function Calling support
@@ -115,6 +116,27 @@ if response.Reasoning != nil {
     fmt.Printf("Reasoning: %s\n", response.Reasoning.Summary)
     fmt.Printf("Reasoning tokens: %d\n", response.Reasoning.TokensUsed)
 }
+```
+
+## Network Resilience
+
+Built-in automatic retry with exponential backoff for network failures and API errors.
+
+```go
+// Default: 3 retries with smart backoff
+client := litellm.New(litellm.WithOpenAI("your-api-key"))
+
+// Custom timeout
+client := litellm.New(
+    litellm.WithOpenAI("your-api-key"),
+    litellm.WithTimeout(60*time.Second),
+)
+
+// Custom retries
+client := litellm.New(
+    litellm.WithOpenAI("your-api-key"),
+    litellm.WithRetries(5, 2*time.Second), // 5 retries, 2s initial delay
+)
 ```
 
 ## Streaming

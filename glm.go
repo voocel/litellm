@@ -149,8 +149,7 @@ func (p *GLMProvider) Complete(ctx context.Context, req *Request) (*Response, er
 	httpReq.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
 
 	// Make request
-	client := &http.Client{}
-	resp, err := client.Do(httpReq)
+	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("glm: request failed: %w", err)
 	}
@@ -386,8 +385,7 @@ func (p *GLMProvider) Stream(ctx context.Context, req *Request) (StreamReader, e
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	// Make request
-	client := &http.Client{}
-	resp, err := client.Do(httpReq)
+	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("glm: request failed: %w", err)
 	}
