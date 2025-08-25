@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -10,264 +11,238 @@ import (
 )
 
 func main() {
-	fmt.Println("=== GLM-4.5 Provider Examples ===")
-
-	// Check if API key is available
 	apiKey := os.Getenv("GLM_API_KEY")
 	if apiKey == "" {
 		log.Fatal("GLM_API_KEY environment variable is required")
 	}
 
-	// Method 1: Auto-discovery from environment variables
-	// export GLM_API_KEY="your-api-key"
-	client := litellm.New()
+	client := litellm.New(litellm.WithGLM(apiKey))
 
-	// Method 2: Manual configuration
-	// client := litellm.New(litellm.WithGLM("your-api-key"))
-
-	ctx := context.Background()
+	fmt.Println("GLM (ZhiPu) Examples - From Basic to Advanced")
+	fmt.Println("=============================================")
 
 	// Example 1: Basic Chat
-	fmt.Println("\n--- Example 1: Basic Chat ---")
-	basicChatExample(ctx, client)
+	fmt.Println("\n1. Basic Chat Example (GLM-4)")
+	fmt.Println("-----------------------------")
+	basicChat(client)
 
-	// Example 2: Code Generation
-	fmt.Println("\n--- Example 2: Code Generation ---")
-	codeGenerationExample(ctx, client)
+	// Example 2: Thinking Mode
+	fmt.Println("\n2. Thinking Mode Example")
+	fmt.Println("------------------------")
+	thinkingMode(client)
 
-	// Example 3: Streaming Response
-	fmt.Println("\n--- Example 3: Streaming Response ---")
-	streamingExample(ctx, client)
+	// Example 3: Function Calling
+	fmt.Println("\n3. Function Calling Example")
+	fmt.Println("---------------------------")
+	functionCalling(client)
 
-	// Example 4: Function Calling
-	fmt.Println("\n--- Example 4: Function Calling ---")
-	functionCallingExample(ctx, client)
+	// Example 4: Streaming Chat
+	fmt.Println("\n4. Streaming Chat Example")
+	fmt.Println("-------------------------")
+	streamingChat(client)
 
-	// Example 5: Multi-turn Conversation
-	fmt.Println("\n--- Example 5: Multi-turn Conversation ---")
-	multiTurnExample(ctx, client)
-
-	// Example 6: Thinking Mode (GLM-4.5 Reasoning)
-	fmt.Println("\n--- Example 6: Thinking Mode ---")
-	thinkingModeExample(ctx, client)
-
-	// Example 7: Different Models
-	fmt.Println("\n--- Example 7: Different Models ---")
-	differentModelsExample(ctx, client)
+	// Example 5: JSON Response Format
+	fmt.Println("\n5. JSON Response Format Example")
+	fmt.Println("-------------------------------")
+	jsonResponseFormat(client)
 }
 
-func basicChatExample(ctx context.Context, client *litellm.Client) {
-	response, err := client.Complete(ctx, &litellm.Request{
+// Example 1: Basic Chat with GLM-4
+func basicChat(client *litellm.Client) {
+	request := &litellm.Request{
 		Model: "glm-4.5",
 		Messages: []litellm.Message{
-			{Role: "user", Content: "Hello! Please introduce the features of the GLM-4.5 model."},
+			{
+				Role:    "system",
+				Content: "you are a helpful AI assistant",
+			},
+			{
+				Role:    "user",
+				Content: "who are you",
+			},
 		},
-		MaxTokens:   litellm.IntPtr(1000),
+		MaxTokens:   litellm.IntPtr(500),
 		Temperature: litellm.Float64Ptr(0.7),
-	})
+	}
 
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
 	if err != nil {
-		log.Printf("Error: %v", err)
+		log.Printf("Basic chat failed: %v", err)
 		return
 	}
 
 	fmt.Printf("Response: %s\n", response.Content)
-	fmt.Printf("Model: %s\n", response.Model)
-	fmt.Printf("Tokens: %d\n", response.Usage.TotalTokens)
+	fmt.Printf("Usage: %d prompt + %d completion = %d total tokens\n",
+		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.TotalTokens)
 }
 
-func codeGenerationExample(ctx context.Context, client *litellm.Client) {
-	response, err := client.Complete(ctx, &litellm.Request{
+// Example 3: Thinking Mode (GLM special feature)
+func thinkingMode(client *litellm.Client) {
+	request := &litellm.Request{
 		Model: "glm-4.5",
 		Messages: []litellm.Message{
-			{Role: "system", Content: "You are a professional Go developer."},
-			{Role: "user", Content: "Write a Go function to calculate the nth Fibonacci number using dynamic programming optimization."},
+			{
+				Role:    "user",
+				Content: "There was a farmer who had 17 sheep. All but 9 died. How many sheep are left? Please analyze this question in detail.",
+			},
 		},
-		MaxTokens:   litellm.IntPtr(1500),
-		Temperature: litellm.Float64Ptr(0.3),
-	})
-
-	if err != nil {
-		log.Printf("Error: %v", err)
-		return
-	}
-
-	fmt.Printf("Generated Code:\n%s\n", response.Content)
-}
-
-func streamingExample(ctx context.Context, client *litellm.Client) {
-	stream, err := client.Stream(ctx, &litellm.Request{
-		Model: "glm-4.5",
-		Messages: []litellm.Message{
-			{Role: "user", Content: "Write a poem about artificial intelligence with a rhythmic feel."},
-		},
-		MaxTokens:   litellm.IntPtr(800),
-		Temperature: litellm.Float64Ptr(0.8),
-	})
-
-	if err != nil {
-		log.Printf("Error: %v", err)
-		return
-	}
-	defer stream.Close()
-
-	fmt.Print("Streaming response: ")
-	for {
-		chunk, err := stream.Read()
-		if err != nil {
-			break
-		}
-		fmt.Print(chunk.Content)
-	}
-	fmt.Println()
-}
-
-func functionCallingExample(ctx context.Context, client *litellm.Client) {
-	tools := []litellm.Tool{
-		{
-			Type: "function",
-			Function: litellm.FunctionSchema{
-				Name:        "get_weather",
-				Description: "Get weather information for a specified city",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"city": map[string]interface{}{
-							"type":        "string",
-							"description": "City name",
-						},
-						"unit": map[string]interface{}{
-							"type":        "string",
-							"enum":        []string{"celsius", "fahrenheit"},
-							"description": "Temperature unit",
-						},
-					},
-					"required": []string{"city"},
-				},
+		MaxTokens:   litellm.IntPtr(10000),
+		Temperature: litellm.Float64Ptr(0.7),
+		Extra: map[string]interface{}{
+			"thinking": map[string]interface{}{
+				"type": "enabled", // Enable GLM thinking mode
 			},
 		},
 	}
 
-	response, err := client.Complete(ctx, &litellm.Request{
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
+	if err != nil {
+		log.Printf("Thinking mode failed: %v", err)
+		return
+	}
+
+	// Display thinking process if available
+	if response.Reasoning != nil && response.Reasoning.Content != "" {
+		fmt.Printf("Thinking Process:\n%s\n", response.Reasoning.Content)
+		fmt.Println("---")
+	}
+
+	fmt.Printf("Final Answer: %s\n", response.Content)
+	fmt.Printf("Usage: %d tokens\n", response.Usage.TotalTokens)
+}
+
+// Example 4: Function Calling
+func functionCalling(client *litellm.Client) {
+	// Define a calculator function
+	calculatorFunction := litellm.Tool{
+		Type: "function",
+		Function: litellm.FunctionDef{
+			Name:        "calculator",
+			Description: "Execute mathematical calculations",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"expression": map[string]interface{}{
+						"type":        "string",
+						"description": "Mathematical expression to evaluate, e.g., '2+3*4'",
+					},
+				},
+				"required": []string{"expression"},
+			},
+		},
+	}
+
+	request := &litellm.Request{
 		Model: "glm-4.5",
 		Messages: []litellm.Message{
-			{Role: "user", Content: "What's the weather like in Beijing today?"},
+			{
+				Role:    "user",
+				Content: "(15 + 25) * 3 - 20 = ?",
+			},
 		},
-		Tools:       tools,
-		ToolChoice:  "auto",
-		MaxTokens:   litellm.IntPtr(1000),
-		Temperature: litellm.Float64Ptr(0.7),
-	})
+		Tools:     []litellm.Tool{calculatorFunction},
+		MaxTokens: litellm.IntPtr(300),
+	}
 
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
 	if err != nil {
-		log.Printf("Error: %v", err)
+		log.Printf("Function calling failed: %v", err)
 		return
 	}
 
 	fmt.Printf("Response: %s\n", response.Content)
 	if len(response.ToolCalls) > 0 {
 		for _, toolCall := range response.ToolCalls {
-			fmt.Printf("Tool Call: %s(%s)\n", toolCall.Function.Name, toolCall.Function.Arguments)
+			fmt.Printf("Tool Call: %s with expression: %s\n",
+				toolCall.Function.Name, toolCall.Function.Arguments)
 		}
 	}
 }
 
-func multiTurnExample(ctx context.Context, client *litellm.Client) {
-	messages := []litellm.Message{
-		{Role: "system", Content: "You are a helpful AI assistant specialized in answering technical questions."},
-		{Role: "user", Content: "What is machine learning?"},
+// Example 5: Streaming Chat
+func streamingChat(client *litellm.Client) {
+	request := &litellm.Request{
+		Model: "glm-4.5-air",
+		Messages: []litellm.Message{
+			{
+				Role:    "user",
+				Content: "Please write a short prose piece about the arrival of spring, around 200 words.\n",
+			},
+		},
+		MaxTokens:   litellm.IntPtr(400),
+		Temperature: litellm.Float64Ptr(0.8),
+		Stream:      true,
 	}
 
-	// First turn
-	response1, err := client.Complete(ctx, &litellm.Request{
-		Model:       "glm-4.5",
-		Messages:    messages,
-		MaxTokens:   litellm.IntPtr(800),
-		Temperature: litellm.Float64Ptr(0.7),
-	})
-
+	ctx := context.Background()
+	stream, err := client.Stream(ctx, request)
 	if err != nil {
-		log.Printf("Error: %v", err)
+		log.Printf("Streaming failed: %v", err)
 		return
 	}
+	defer stream.Close()
 
-	fmt.Printf("AI: %s\n", response1.Content)
+	fmt.Print("Streaming response: ")
+	for {
+		chunk, err := stream.Next()
+		if err != nil {
+			log.Printf("Stream error: %v", err)
+			break
+		}
 
-	// Add AI response to conversation
-	messages = append(messages, litellm.Message{
-		Role:    "assistant",
-		Content: response1.Content,
-	})
+		if chunk.Done {
+			break
+		}
 
-	// Second turn
-	messages = append(messages, litellm.Message{
-		Role:    "user",
-		Content: "Can you give me a specific example of a machine learning algorithm?",
-	})
+		if chunk.Type == "content" && chunk.Content != "" {
+			fmt.Print(chunk.Content)
+		}
 
-	response2, err := client.Complete(ctx, &litellm.Request{
-		Model:       "glm-4.5",
-		Messages:    messages,
-		MaxTokens:   litellm.IntPtr(800),
-		Temperature: litellm.Float64Ptr(0.7),
-	})
-
-	if err != nil {
-		log.Printf("Error: %v", err)
-		return
+		if chunk.Type == "reasoning" && chunk.Reasoning != nil {
+			fmt.Printf("\n[Thinking: %s]\n", chunk.Reasoning.Content)
+		}
 	}
-
-	fmt.Printf("AI: %s\n", response2.Content)
+	fmt.Println()
 }
 
-func thinkingModeExample(ctx context.Context, client *litellm.Client) {
-	response, err := client.Complete(ctx, &litellm.Request{
+// Example 6: JSON Response Format
+func jsonResponseFormat(client *litellm.Client) {
+	request := &litellm.Request{
 		Model: "glm-4.5",
 		Messages: []litellm.Message{
-			{Role: "user", Content: "Design an efficient algorithm to solve the Traveling Salesman Problem (TSP) and analyze its time complexity."},
-		},
-		MaxTokens:   litellm.IntPtr(2000),
-		Temperature: litellm.Float64Ptr(0.3),
-		Extra: map[string]interface{}{
-			"thinking": map[string]string{
-				"type": "enabled", // Enable thinking mode
+			{
+				Role:    "system",
+				Content: "You are a data analysis expert and need to return structured data in JSON format.\n",
+			},
+			{
+				Role:    "user",
+				Content: "Please analyze the main characteristics of China’s four first-tier cities (Beijing, Shanghai, Guangzhou, Shenzhen), including information such as population, GDP, and major industries, and return the results in JSON format.",
 			},
 		},
-	})
+		ResponseFormat: &litellm.ResponseFormat{
+			Type: "json_object",
+		},
+		MaxTokens:   litellm.IntPtr(800),
+		Temperature: litellm.Float64Ptr(0.5),
+	}
 
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
 	if err != nil {
-		log.Printf("Error: %v", err)
+		log.Printf("JSON response failed: %v", err)
 		return
 	}
 
-	fmt.Printf("Response: %s\n", response.Content)
-	if response.Reasoning != nil {
-		fmt.Printf("Reasoning Process: %s\n", response.Reasoning.Content)
-		fmt.Printf("Reasoning Summary: %s\n", response.Reasoning.Summary)
-		fmt.Printf("Reasoning Tokens: %d\n", response.Reasoning.TokensUsed)
+	fmt.Printf("JSON Response: %s\n", response.Content)
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(response.Content), &result); err == nil {
+		prettyJSON, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Printf("Formatted JSON:\n%s\n", string(prettyJSON))
 	}
-}
 
-func differentModelsExample(ctx context.Context, client *litellm.Client) {
-	models := []string{"glm-4.5", "glm-4.5-air", "glm-4.5-flash", "glm-4"}
-
-	for _, model := range models {
-		fmt.Printf("\n--- Testing %s ---\n", model)
-		response, err := client.Complete(ctx, &litellm.Request{
-			Model: model, // Fixed: remove "glm/" prefix
-			Messages: []litellm.Message{
-				{Role: "user", Content: "Introduce yourself in one sentence."},
-			},
-			MaxTokens:   litellm.IntPtr(200),
-			Temperature: litellm.Float64Ptr(0.7),
-		})
-
-		if err != nil {
-			log.Printf("Error with %s: %v", model, err)
-			continue
-		}
-
-		fmt.Printf("%s: %s\n", model, response.Content)
-		fmt.Printf("Tokens: %d\n", response.Usage.TotalTokens)
-	}
+	fmt.Printf("Usage: %d tokens\n", response.Usage.TotalTokens)
 }

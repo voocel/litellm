@@ -39,7 +39,6 @@ func New(opts ...ClientOption) *Client {
 	if len(opts) == 0 {
 		client.autoDiscoverProviders()
 	} else {
-		// If manual options provided, only use those (no auto-discovery)
 		for _, opt := range opts {
 			opt(client)
 		}
@@ -88,7 +87,7 @@ func WithOpenAI(apiKey string, baseURL ...string) ClientOption {
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
-		if provider := createOpenAIProvider(config); provider != nil {
+		if provider, err := createProvider("openai", config); err == nil {
 			c.providers["openai"] = provider
 		}
 	}
@@ -104,7 +103,7 @@ func WithAnthropic(apiKey string, baseURL ...string) ClientOption {
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
-		if provider := createAnthropicProvider(config); provider != nil {
+		if provider, err := createProvider("anthropic", config); err == nil {
 			c.providers["anthropic"] = provider
 		}
 	}
@@ -120,7 +119,7 @@ func WithGemini(apiKey string, baseURL ...string) ClientOption {
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
-		if provider := createGeminiProvider(config); provider != nil {
+		if provider, err := createProvider("gemini", config); err == nil {
 			c.providers["gemini"] = provider
 		}
 	}
@@ -136,7 +135,7 @@ func WithDeepSeek(apiKey string, baseURL ...string) ClientOption {
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
-		if provider := createDeepSeekProvider(config); provider != nil {
+		if provider, err := createProvider("deepseek", config); err == nil {
 			c.providers["deepseek"] = provider
 		}
 	}
@@ -152,7 +151,7 @@ func WithOpenRouter(apiKey string, baseURL ...string) ClientOption {
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
-		if provider := createOpenRouterProvider(config); provider != nil {
+		if provider, err := createProvider("openrouter", config); err == nil {
 			c.providers["openrouter"] = provider
 		}
 	}
@@ -168,7 +167,7 @@ func WithQwen(apiKey string, baseURL ...string) ClientOption {
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
-		if provider := createQwenProvider(config); provider != nil {
+		if provider, err := createProvider("qwen", config); err == nil {
 			c.providers["qwen"] = provider
 		}
 	}
@@ -184,7 +183,7 @@ func WithGLM(apiKey string, baseURL ...string) ClientOption {
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
-		if provider := createGLMProvider(config); provider != nil {
+		if provider, err := createProvider("glm", config); err == nil {
 			c.providers["glm"] = provider
 		}
 	}
@@ -202,7 +201,7 @@ func WithProvider(name string, provider Provider) ClientOption {
 // WithProviderConfig adds a provider using ProviderConfig
 func WithProviderConfig(name string, config ProviderConfig) ClientOption {
 	return func(c *Client) {
-		if provider, err := CreateProvider(name, config); err == nil {
+		if provider, err := createProvider(name, config); err == nil {
 			if err := provider.Validate(); err == nil {
 				c.providers[name] = provider
 			}
@@ -210,112 +209,16 @@ func WithProviderConfig(name string, config ProviderConfig) ClientOption {
 	}
 }
 
-// autoDiscoverProviders automatically discovers and configures providers from environment variables
-func (c *Client) autoDiscoverProviders() {
-	// Auto-discover OpenAI
-	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
-		config := ProviderConfig{
-			APIKey:  apiKey,
-			BaseURL: getEnvOrDefault("OPENAI_BASE_URL", "https://api.openai.com"),
-		}
-		if provider := createOpenAIProvider(config); provider != nil {
-			c.providers["openai"] = provider
-		}
-	}
-
-	// Auto-discover Anthropic
-	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
-		config := ProviderConfig{
-			APIKey:     apiKey,
-			BaseURL:    getEnvOrDefault("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
-			Resilience: c.defaults.Resilience,
-		}
-		if provider := createAnthropicProvider(config); provider != nil {
-			c.providers["anthropic"] = provider
-		}
-	}
-
-	// Auto-discover Gemini
-	if apiKey := os.Getenv("GEMINI_API_KEY"); apiKey != "" {
-		config := ProviderConfig{
-			APIKey:     apiKey,
-			BaseURL:    getEnvOrDefault("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com"),
-			Resilience: c.defaults.Resilience,
-		}
-		if provider := createGeminiProvider(config); provider != nil {
-			c.providers["gemini"] = provider
-		}
-	}
-
-	// Auto-discover DeepSeek
-	if apiKey := os.Getenv("DEEPSEEK_API_KEY"); apiKey != "" {
-		config := ProviderConfig{
-			APIKey:     apiKey,
-			BaseURL:    getEnvOrDefault("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-			Resilience: c.defaults.Resilience,
-		}
-		if provider := createDeepSeekProvider(config); provider != nil {
-			c.providers["deepseek"] = provider
-		}
-	}
-
-	// Auto-discover OpenRouter
-	if apiKey := os.Getenv("OPENROUTER_API_KEY"); apiKey != "" {
-		config := ProviderConfig{
-			APIKey:     apiKey,
-			BaseURL:    getEnvOrDefault("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-			Resilience: c.defaults.Resilience,
-		}
-		if provider := createOpenRouterProvider(config); provider != nil {
-			c.providers["openrouter"] = provider
-		}
-	}
-
-	// Auto-discover Qwen (DashScope)
-	if apiKey := os.Getenv("QWEN_API_KEY"); apiKey != "" {
-		config := ProviderConfig{
-			APIKey:     apiKey,
-			BaseURL:    getEnvOrDefault("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-			Resilience: c.defaults.Resilience,
-		}
-		if provider := createQwenProvider(config); provider != nil {
-			c.providers["qwen"] = provider
-		}
-	}
-
-	// Auto-discover GLM
-	if apiKey := os.Getenv("GLM_API_KEY"); apiKey != "" {
-		config := ProviderConfig{
-			APIKey:     apiKey,
-			BaseURL:    getEnvOrDefault("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
-			Resilience: c.defaults.Resilience,
-		}
-		if provider := createGLMProvider(config); provider != nil {
-			c.providers["glm"] = provider
-		}
-	}
-}
-
-// AddProvider adds a provider to the client
-func (c *Client) AddProvider(name string, provider Provider) error {
-	if err := provider.Validate(); err != nil {
-		return fmt.Errorf("provider validation failed: %w", err)
-	}
-	c.providers[name] = provider
-	return nil
-}
-
-// Complete performs a completion request
-func (c *Client) Complete(ctx context.Context, req *Request) (*Response, error) {
+// Chat performs a completion request
+func (c *Client) Chat(ctx context.Context, req *Request) (*Response, error) {
 	provider, err := c.resolveProvider(req.Model)
 	if err != nil {
 		return nil, err
 	}
 
-	// Apply defaults
 	c.applyDefaults(req)
 
-	return provider.Complete(ctx, req)
+	return provider.Chat(ctx, req)
 }
 
 // Stream performs a streaming completion request
@@ -325,7 +228,6 @@ func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error)
 		return nil, err
 	}
 
-	// Apply defaults
 	c.applyDefaults(req)
 
 	return provider.Stream(ctx, req)
@@ -337,7 +239,6 @@ func (c *Client) Models() []ModelInfo {
 	for _, provider := range c.providers {
 		models := provider.Models()
 		for _, model := range models {
-			// Ensure provider name is set
 			if model.Provider == "" {
 				model.Provider = provider.Name()
 			}
@@ -354,6 +255,102 @@ func (c *Client) Providers() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// AddProvider adds a provider to the client
+func (c *Client) AddProvider(name string, provider Provider) error {
+	if err := provider.Validate(); err != nil {
+		return fmt.Errorf("provider validation failed: %w", err)
+	}
+	c.providers[name] = provider
+	return nil
+}
+
+// autoDiscoverProviders automatically discovers and configures providers from environment variables
+func (c *Client) autoDiscoverProviders() {
+	// Auto-discover OpenAI
+	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
+		config := ProviderConfig{
+			APIKey:     apiKey,
+			BaseURL:    getEnvOrDefault("OPENAI_BASE_URL", "https://api.openai.com"),
+			Resilience: c.defaults.Resilience,
+		}
+		if provider, err := createProvider("openai", config); err == nil {
+			c.providers["openai"] = provider
+		}
+	}
+
+	// Auto-discover Anthropic
+	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
+		config := ProviderConfig{
+			APIKey:     apiKey,
+			BaseURL:    getEnvOrDefault("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+			Resilience: c.defaults.Resilience,
+		}
+		if provider, err := createProvider("anthropic", config); err == nil {
+			c.providers["anthropic"] = provider
+		}
+	}
+
+	// Auto-discover Gemini
+	if apiKey := os.Getenv("GEMINI_API_KEY"); apiKey != "" {
+		config := ProviderConfig{
+			APIKey:     apiKey,
+			BaseURL:    getEnvOrDefault("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com"),
+			Resilience: c.defaults.Resilience,
+		}
+		if provider, err := createProvider("gemini", config); err == nil {
+			c.providers["gemini"] = provider
+		}
+	}
+
+	// Auto-discover DeepSeek
+	if apiKey := os.Getenv("DEEPSEEK_API_KEY"); apiKey != "" {
+		config := ProviderConfig{
+			APIKey:     apiKey,
+			BaseURL:    getEnvOrDefault("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+			Resilience: c.defaults.Resilience,
+		}
+		if provider, err := createProvider("deepseek", config); err == nil {
+			c.providers["deepseek"] = provider
+		}
+	}
+
+	// Auto-discover OpenRouter
+	if apiKey := os.Getenv("OPENROUTER_API_KEY"); apiKey != "" {
+		config := ProviderConfig{
+			APIKey:     apiKey,
+			BaseURL:    getEnvOrDefault("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+			Resilience: c.defaults.Resilience,
+		}
+		if provider, err := createProvider("openrouter", config); err == nil {
+			c.providers["openrouter"] = provider
+		}
+	}
+
+	// Auto-discover Qwen (DashScope)
+	if apiKey := os.Getenv("QWEN_API_KEY"); apiKey != "" {
+		config := ProviderConfig{
+			APIKey:     apiKey,
+			BaseURL:    getEnvOrDefault("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/api/v1"),
+			Resilience: c.defaults.Resilience,
+		}
+		if provider, err := createProvider("qwen", config); err == nil {
+			c.providers["qwen"] = provider
+		}
+	}
+
+	// Auto-discover GLM
+	if apiKey := os.Getenv("GLM_API_KEY"); apiKey != "" {
+		config := ProviderConfig{
+			APIKey:     apiKey,
+			BaseURL:    getEnvOrDefault("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
+			Resilience: c.defaults.Resilience,
+		}
+		if provider, err := createProvider("glm", config); err == nil {
+			c.providers["glm"] = provider
+		}
+	}
 }
 
 // resolveProvider resolves the provider for a model
@@ -417,51 +414,10 @@ func getEnvOrDefault(key, defaultValue string) string {
 // It creates a new client with auto-discovery and makes a simple completion request
 func Quick(model, message string) (*Response, error) {
 	client := New()
-	return client.Complete(context.Background(), &Request{
+	return client.Chat(context.Background(), &Request{
 		Model: model,
 		Messages: []Message{
 			{Role: "user", Content: message},
 		},
 	})
-}
-
-// IntPtr returns a pointer to an int value
-// Helper function to make it easier to set optional int fields
-func IntPtr(v int) *int {
-	return &v
-}
-
-// Float64Ptr returns a pointer to a float64 value
-// Helper function to make it easier to set optional float64 fields
-func Float64Ptr(v float64) *float64 {
-	return &v
-}
-
-// BoolPtr returns a pointer to a bool value
-// Helper function to make it easier to set optional bool fields
-func BoolPtr(v bool) *bool {
-	return &v
-}
-
-// NewResponseFormatText creates a text response format
-func NewResponseFormatText() *ResponseFormat {
-	return &ResponseFormat{Type: ResponseFormatText}
-}
-
-// NewResponseFormatJSONObject creates a JSON object response format
-func NewResponseFormatJSONObject() *ResponseFormat {
-	return &ResponseFormat{Type: ResponseFormatJSONObject}
-}
-
-// NewResponseFormatJSONSchema creates a JSON schema response format
-func NewResponseFormatJSONSchema(name, description string, schema any, strict bool) *ResponseFormat {
-	return &ResponseFormat{
-		Type: ResponseFormatJSONSchema,
-		JSONSchema: &JSONSchema{
-			Name:        name,
-			Description: description,
-			Schema:      schema,
-			Strict:      BoolPtr(strict),
-		},
-	}
 }

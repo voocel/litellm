@@ -1,4 +1,4 @@
-package litellm
+package providers
 
 import (
 	"bufio"
@@ -11,97 +11,50 @@ import (
 	"strings"
 )
 
-// AnthropicProvider implements the Provider interface for Anthropic
+// AnthropicProvider implements Anthropic Claude API integration
 type AnthropicProvider struct {
 	*BaseProvider
 }
 
-// NewAnthropicProvider creates a new Anthropic provider
-func NewAnthropicProvider(config ProviderConfig) Provider {
+// NewAnthropic creates a new Anthropic provider
+func NewAnthropic(config ProviderConfig) *AnthropicProvider {
+	baseProvider := NewBaseProvider("anthropic", config)
 	return &AnthropicProvider{
-		BaseProvider: NewBaseProvider("anthropic", config),
+		BaseProvider: baseProvider,
 	}
 }
 
-// Models returns the list of supported models
+func (p *AnthropicProvider) SupportsModel(model string) bool {
+	for _, m := range p.Models() {
+		if m.ID == model {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *AnthropicProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		{
-			ID: "claude-4-sonnet", Provider: "anthropic", Name: "Claude 4 Sonnet", MaxTokens: 2000000,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityFunctionCall, CapabilityVision},
+			ID: "claude-opus-4.1", Provider: "anthropic", Name: "Claude Opus 4.1", MaxTokens: 200000,
+			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
 		},
 		{
-			ID: "claude-4-opus", Provider: "anthropic", Name: "Claude 4 opus", MaxTokens: 2000000,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityFunctionCall},
+			ID: "claude-sonnet-4", Provider: "anthropic", Name: "Claude Sonnet 4", MaxTokens: 200000,
+			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
 		},
 		{
-			ID: "claude-3.7-sonnet", Provider: "anthropic", Name: "Claude 3.7 Sonnet", MaxTokens: 2000000,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityFunctionCall, CapabilityVision},
+			ID: "claude-haiku-3.5", Provider: "anthropic", Name: "Claude Haiku 3.5", MaxTokens: 200000,
+			Capabilities: []string{"chat", "function_call", "vision"},
+		},
+		{
+			ID: "claude-sonnet-4-20250514", Provider: "anthropic", Name: "Claude Sonnet 4 (2025-05-14)", MaxTokens: 200000,
+			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
 		},
 	}
 }
 
-// Anthropic API request/response structures
-type anthropicRequest struct {
-	Model       string             `json:"model"`
-	MaxTokens   int                `json:"max_tokens"`
-	Messages    []anthropicMessage `json:"messages"`
-	Stream      bool               `json:"stream,omitempty"`
-	Temperature *float64           `json:"temperature,omitempty"`
-	Tools       []anthropicTool    `json:"tools,omitempty"`
-}
-
-type anthropicMessage struct {
-	Role    string             `json:"role"`
-	Content []anthropicContent `json:"content"`
-}
-
-type anthropicContent struct {
-	Type      string                 `json:"type"`
-	Text      string                 `json:"text,omitempty"`
-	ToolUseID string                 `json:"tool_use_id,omitempty"`
-	Name      string                 `json:"name,omitempty"`
-	Input     map[string]interface{} `json:"input,omitempty"`
-}
-
-type anthropicTool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"input_schema"`
-}
-
-type anthropicResponse struct {
-	Content []anthropicContent `json:"content"`
-	Usage   anthropicUsage     `json:"usage"`
-	Model   string             `json:"model"`
-}
-
-type anthropicUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-}
-
-type anthropicStreamChunk struct {
-	Type         string         `json:"type"`
-	Index        int            `json:"index,omitempty"`
-	Delta        anthropicDelta `json:"delta,omitempty"`
-	Usage        anthropicUsage `json:"usage,omitempty"`
-	ContentBlock *struct {
-		Type string `json:"type"`
-		ID   string `json:"id,omitempty"`
-		Name string `json:"name,omitempty"`
-	} `json:"content_block,omitempty"`
-}
-
-type anthropicDelta struct {
-	Type        string `json:"type"`
-	Text        string `json:"text,omitempty"`
-	PartialJSON string `json:"partial_json,omitempty"`
-	Name        string `json:"name,omitempty"`
-	Input       string `json:"input,omitempty"`
-}
-
-func (p *AnthropicProvider) Complete(ctx context.Context, req *Request) (*Response, error) {
+func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
@@ -119,15 +72,14 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *Request) (*Respon
 		anthropicReq.MaxTokens = *req.MaxTokens
 	}
 
-	// Convert tool definitions
+	// Convert tool definitions to Anthropic format
 	if len(req.Tools) > 0 {
 		anthropicReq.Tools = make([]anthropicTool, len(req.Tools))
 		for i, tool := range req.Tools {
-			var inputSchema map[string]interface{}
-			if params, ok := tool.Function.Parameters.(map[string]interface{}); ok {
+			var inputSchema map[string]any
+			if params, ok := tool.Function.Parameters.(map[string]any); ok {
 				inputSchema = params
 			} else {
-				// If not a map, try to convert through JSON
 				if jsonBytes, err := json.Marshal(tool.Function.Parameters); err == nil {
 					json.Unmarshal(jsonBytes, &inputSchema)
 				}
@@ -141,7 +93,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *Request) (*Respon
 		}
 	}
 
-	// Convert messages
+	// Convert messages to Anthropic format
 	anthropicReq.Messages = make([]anthropicMessage, len(req.Messages))
 	for i, msg := range req.Messages {
 		anthropicMsg := anthropicMessage{
@@ -160,10 +112,10 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *Request) (*Respon
 			}
 		}
 
-		// Handle tool calls
+		// Handle tool calls (convert from OpenAI format to Anthropic format)
 		if len(msg.ToolCalls) > 0 {
 			for _, toolCall := range msg.ToolCalls {
-				var input map[string]interface{}
+				var input map[string]any
 				json.Unmarshal([]byte(toolCall.Function.Arguments), &input)
 				anthropicMsg.Content = append(anthropicMsg.Content, anthropicContent{
 					Type:      "tool_use",
@@ -189,14 +141,12 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *Request) (*Respon
 		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.config.BaseURL+"/v1/messages", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.buildURL("/v1/messages"), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: create request: %w", err)
 	}
 
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", p.config.APIKey)
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	p.setHeaders(httpReq)
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -265,12 +215,12 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 		anthropicReq.MaxTokens = *req.MaxTokens
 	}
 
-	// Convert tool definitions (same as Complete method)
+	// Convert tool definitions (same as Chat method)
 	if len(req.Tools) > 0 {
 		anthropicReq.Tools = make([]anthropicTool, len(req.Tools))
 		for i, tool := range req.Tools {
-			var inputSchema map[string]interface{}
-			if params, ok := tool.Function.Parameters.(map[string]interface{}); ok {
+			var inputSchema map[string]any
+			if params, ok := tool.Function.Parameters.(map[string]any); ok {
 				inputSchema = params
 			} else {
 				if jsonBytes, err := json.Marshal(tool.Function.Parameters); err == nil {
@@ -286,15 +236,13 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 		}
 	}
 
-	// Convert messages (same as Complete method)
-	anthropicReq.Messages = make([]anthropicMessage, len(req.Messages))
+	// Convert messages (same as Chat method)
 	for i, msg := range req.Messages {
 		anthropicMsg := anthropicMessage{
 			Role: msg.Role,
 		}
 
 		content := msg.Content
-		// Handle structured output by adding instructions to the last user message
 		if req.ResponseFormat != nil && i == len(req.Messages)-1 && msg.Role == "user" {
 			content = p.addStructuredOutputInstructions(content, req.ResponseFormat)
 		}
@@ -308,7 +256,7 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 		// Handle tool calls
 		if len(msg.ToolCalls) > 0 {
 			for _, toolCall := range msg.ToolCalls {
-				var input map[string]interface{}
+				var input map[string]any
 				json.Unmarshal([]byte(toolCall.Function.Arguments), &input)
 				anthropicMsg.Content = append(anthropicMsg.Content, anthropicContent{
 					Type:      "tool_use",
@@ -334,14 +282,12 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.config.BaseURL+"/v1/messages", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.buildURL("/v1/messages"), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: create request: %w", err)
 	}
 
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", p.config.APIKey)
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	p.setHeaders(httpReq)
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -361,16 +307,48 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 	}, nil
 }
 
-// anthropicStreamReader implements StreamReader for Anthropic
+func (p *AnthropicProvider) buildURL(endpoint string) string {
+	baseURL := strings.TrimSuffix(p.Config().BaseURL, "/")
+	if baseURL == "" {
+		baseURL = "https://api.anthropic.com"
+	}
+	return baseURL + endpoint
+}
+
+func (p *AnthropicProvider) setHeaders(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", p.Config().APIKey)
+	req.Header.Set("anthropic-version", "2023-06-01") // Latest stable version
+	// Add beta headers for newer features if needed
+	// req.Header.Set("anthropic-beta", "context-1m-2025-08-07")
+}
+
+// addStructuredOutputInstructions adds JSON formatting instructions for structured output
+func (p *AnthropicProvider) addStructuredOutputInstructions(content string, format *ResponseFormat) string {
+	switch format.Type {
+	case "json_object":
+		return content + "\n\nPlease respond with a valid JSON object only."
+	case "json_schema":
+		if format.JSONSchema != nil {
+			schemaJSON, _ := json.Marshal(format.JSONSchema.Schema)
+			return fmt.Sprintf("%s\n\nPlease respond with a valid JSON object that strictly follows this schema:\n%s\n\nRespond with JSON only, no additional text.",
+				content, string(schemaJSON))
+		}
+		return content + "\n\nPlease respond with a valid JSON object only."
+	default:
+		return content
+	}
+}
+
+// anthropicStreamReader implements streaming for Anthropic
 type anthropicStreamReader struct {
 	resp     *http.Response
 	scanner  *bufio.Scanner
 	provider string
-	err      error
 	done     bool
 }
 
-func (r *anthropicStreamReader) Read() (*StreamChunk, error) {
+func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
 	if r.done {
 		return &StreamChunk{Done: true, Provider: r.provider}, nil
 	}
@@ -392,9 +370,10 @@ func (r *anthropicStreamReader) Read() (*StreamChunk, error) {
 			continue
 		}
 
+		// Handle text content deltas
 		if chunk.Type == "content_block_delta" && chunk.Delta.Type == "text_delta" {
 			return &StreamChunk{
-				Type:     ChunkTypeContent,
+				Type:     "content",
 				Content:  chunk.Delta.Text,
 				Done:     false,
 				Provider: r.provider,
@@ -404,7 +383,7 @@ func (r *anthropicStreamReader) Read() (*StreamChunk, error) {
 		// Handle tool use deltas
 		if chunk.Type == "content_block_delta" && chunk.Delta.Type == "input_json_delta" {
 			return &StreamChunk{
-				Type:     ChunkTypeToolCallDelta,
+				Type:     "tool_call_delta",
 				Provider: r.provider,
 				ToolCallDelta: &ToolCallDelta{
 					Index:          chunk.Index,
@@ -416,7 +395,7 @@ func (r *anthropicStreamReader) Read() (*StreamChunk, error) {
 		// Handle tool use start
 		if chunk.Type == "content_block_start" && chunk.ContentBlock != nil && chunk.ContentBlock.Type == "tool_use" {
 			return &StreamChunk{
-				Type:     ChunkTypeToolCallDelta,
+				Type:     "tool_call_delta",
 				Provider: r.provider,
 				ToolCallDelta: &ToolCallDelta{
 					Index:        chunk.Index,
@@ -426,10 +405,17 @@ func (r *anthropicStreamReader) Read() (*StreamChunk, error) {
 				},
 			}, nil
 		}
+
+		// Handle message completion
+		if chunk.Type == "message_delta" && chunk.Delta.StopReason != "" {
+			return &StreamChunk{
+				FinishReason: chunk.Delta.StopReason,
+				Provider:     r.provider,
+			}, nil
+		}
 	}
 
 	if err := r.scanner.Err(); err != nil {
-		r.err = err
 		return nil, err
 	}
 
@@ -441,27 +427,63 @@ func (r *anthropicStreamReader) Close() error {
 	return r.resp.Body.Close()
 }
 
-func (r *anthropicStreamReader) Err() error {
-	return r.err
+// Anthropic API request/response structures
+type anthropicRequest struct {
+	Model       string             `json:"model"`
+	MaxTokens   int                `json:"max_tokens"`
+	Messages    []anthropicMessage `json:"messages"`
+	Stream      bool               `json:"stream,omitempty"`
+	Temperature *float64           `json:"temperature,omitempty"`
+	Tools       []anthropicTool    `json:"tools,omitempty"`
 }
 
-// addStructuredOutputInstructions adds JSON formatting instructions for structured output
-func (p *AnthropicProvider) addStructuredOutputInstructions(content string, format *ResponseFormat) string {
-	switch format.Type {
-	case ResponseFormatJSONObject:
-		return content + "\n\nPlease respond with a valid JSON object only."
-	case ResponseFormatJSONSchema:
-		if format.JSONSchema != nil {
-			schemaJSON, _ := json.Marshal(format.JSONSchema.Schema)
-			return fmt.Sprintf("%s\n\nPlease respond with a valid JSON object that strictly follows this schema:\n%s\n\nRespond with JSON only, no additional text.",
-				content, string(schemaJSON))
-		}
-		return content + "\n\nPlease respond with a valid JSON object only."
-	default:
-		return content
-	}
+type anthropicMessage struct {
+	Role    string             `json:"role"`
+	Content []anthropicContent `json:"content"`
 }
 
-func init() {
-	RegisterProvider("anthropic", NewAnthropicProvider)
+type anthropicContent struct {
+	Type      string         `json:"type"`
+	Text      string         `json:"text,omitempty"`
+	ToolUseID string         `json:"tool_use_id,omitempty"`
+	Name      string         `json:"name,omitempty"`
+	Input     map[string]any `json:"input,omitempty"`
+}
+
+type anthropicTool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"input_schema"`
+}
+
+type anthropicResponse struct {
+	Content []anthropicContent `json:"content"`
+	Usage   anthropicUsage     `json:"usage"`
+	Model   string             `json:"model"`
+}
+
+type anthropicUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+}
+
+type anthropicStreamChunk struct {
+	Type         string         `json:"type"`
+	Index        int            `json:"index,omitempty"`
+	Delta        anthropicDelta `json:"delta,omitempty"`
+	Usage        anthropicUsage `json:"usage,omitempty"`
+	ContentBlock *struct {
+		Type string `json:"type"`
+		ID   string `json:"id,omitempty"`
+		Name string `json:"name,omitempty"`
+	} `json:"content_block,omitempty"`
+}
+
+type anthropicDelta struct {
+	Type        string `json:"type"`
+	Text        string `json:"text,omitempty"`
+	PartialJSON string `json:"partial_json,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Input       string `json:"input,omitempty"`
+	StopReason  string `json:"stop_reason,omitempty"`
 }

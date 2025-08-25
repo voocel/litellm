@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -10,115 +11,335 @@ import (
 )
 
 func main() {
-	fmt.Println("=== OpenRouter Complete Example ===")
-
-	// Get API key from environment variable
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	if apiKey == "" {
-		log.Fatal("Please set OPENROUTER_API_KEY environment variable")
+		log.Fatal("OPENROUTER_API_KEY environment variable is required")
 	}
 
-	// Initialize client with OpenRouter provider
 	client := litellm.New(litellm.WithOpenRouter(apiKey))
 
-	// Basic conversation
-	fmt.Println("\n--- Basic Chat ---")
-	response, err := client.Complete(context.Background(), &litellm.Request{
+	fmt.Println("OpenRouter Examples - Access Multiple AI Models")
+	fmt.Println("==============================================")
+
+	// Example 1: GPT-4o via OpenRouter
+	fmt.Println("\n1. GPT-4o via OpenRouter")
+	fmt.Println("-----------------------")
+	testGPT4o(client)
+
+	// Example 2: Claude 3.5 Sonnet via OpenRouter
+	fmt.Println("\n2. Claude 3.5 Sonnet via OpenRouter")
+	fmt.Println("-----------------------------------")
+	testClaude(client)
+
+	// Example 3: Llama 3.3 via OpenRouter
+	fmt.Println("\n3. Llama 3.3 70B via OpenRouter")
+	fmt.Println("-------------------------------")
+	testLlama(client)
+
+	// Example 4: DeepSeek via OpenRouter
+	fmt.Println("\n4. DeepSeek Chat via OpenRouter")
+	fmt.Println("-------------------------------")
+	testDeepSeek(client)
+
+	// Example 5: Function Calling with Different Models
+	fmt.Println("\n5. Function Calling Example")
+	fmt.Println("---------------------------")
+	functionCalling(client)
+
+	// Example 6: Streaming Chat
+	fmt.Println("\n6. Streaming Chat Example")
+	fmt.Println("-------------------------")
+	streamingChat(client)
+
+	// Example 7: JSON Schema Response
+	fmt.Println("\n7. JSON Schema Response Example")
+	fmt.Println("-------------------------------")
+	jsonSchemaResponse(client)
+}
+
+// Example 1: GPT-4o via OpenRouter
+func testGPT4o(client *litellm.Client) {
+	request := &litellm.Request{
+		Model: "openai/gpt-4o",
+		Messages: []litellm.Message{
+			{
+				Role:    "user",
+				Content: "Explain the concept of artificial general intelligence in simple terms.",
+			},
+		},
+		MaxTokens:   litellm.IntPtr(500),
+		Temperature: litellm.Float64Ptr(0.7),
+	}
+
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
+	if err != nil {
+		log.Printf("GPT-4o via OpenRouter failed: %v", err)
+		return
+	}
+
+	fmt.Printf("Response: %s\n", response.Content)
+	fmt.Printf("Model Used: %s\n", response.Model)
+	fmt.Printf("Usage: %d prompt + %d completion = %d total tokens\n",
+		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.TotalTokens)
+}
+
+// Example 2: Claude 3.5 Sonnet via OpenRouter
+func testClaude(client *litellm.Client) {
+	request := &litellm.Request{
 		Model: "anthropic/claude-3.5-sonnet",
 		Messages: []litellm.Message{
-			{Role: "user", Content: "Explain quantum computing in simple terms"},
+			{
+				Role:    "user",
+				Content: "Write a haiku about machine learning and data science.",
+			},
 		},
-		MaxTokens:   litellm.IntPtr(150),
-		Temperature: litellm.Float64Ptr(0.7),
-	})
-	if err != nil {
-		log.Fatalf("Basic chat failed: %v", err)
+		MaxTokens:   litellm.IntPtr(300),
+		Temperature: litellm.Float64Ptr(0.8),
 	}
+
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
+	if err != nil {
+		log.Printf("Claude via OpenRouter failed: %v", err)
+		return
+	}
+
 	fmt.Printf("Response: %s\n", response.Content)
-	fmt.Printf("Usage: %+v\n", response.Usage)
+	fmt.Printf("Model Used: %s\n", response.Model)
+	fmt.Printf("Usage: %d tokens\n", response.Usage.TotalTokens)
+}
 
-	// Reasoning model example
-	fmt.Println("\n--- Reasoning Model ---")
-	reasoningResponse, err := client.Complete(context.Background(), &litellm.Request{
-		Model: "anthropic/claude-3.7-sonnet",
+// Example 3: Llama 3.3 via OpenRouter
+func testLlama(client *litellm.Client) {
+	request := &litellm.Request{
+		Model: "meta-llama/llama-3.3-70b-instruct",
 		Messages: []litellm.Message{
-			{Role: "user", Content: "Solve this step by step: What is 15 * 23 + 7?"},
+			{
+				Role:    "system",
+				Content: "You are a helpful coding assistant.",
+			},
+			{
+				Role:    "user",
+				Content: "Write a Python function to calculate the Fibonacci sequence using dynamic programming.",
+			},
 		},
-		MaxTokens:        litellm.IntPtr(2048),
-		Temperature:      litellm.Float64Ptr(0.1),
-		ReasoningEffort:  "medium",
-		ReasoningSummary: "Show your work",
-		UseResponsesAPI:  true,
-	})
-	if err != nil {
-		log.Fatalf("Reasoning request failed: %v", err)
+		MaxTokens:   litellm.IntPtr(600),
+		Temperature: litellm.Float64Ptr(0.4),
 	}
-	fmt.Printf("Response: %s\n", reasoningResponse.Content)
-	if reasoningResponse.Reasoning != nil {
-		fmt.Printf("Reasoning: %s\n", reasoningResponse.Reasoning.Summary)
-	}
-	fmt.Printf("Usage: %+v\n", reasoningResponse.Usage)
 
-	// Streaming example
-	fmt.Println("\n--- Streaming Chat ---")
-	stream, err := client.Stream(context.Background(), &litellm.Request{
-		Model: "openai/gpt-4o-mini",
-		Messages: []litellm.Message{
-			{Role: "user", Content: "Count from 1 to 5, one number per line."},
-		},
-		MaxTokens:   litellm.IntPtr(100),
-		Temperature: litellm.Float64Ptr(0.7),
-	})
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
 	if err != nil {
-		log.Fatalf("Stream request failed: %v", err)
+		log.Printf("Llama via OpenRouter failed: %v", err)
+		return
+	}
+
+	fmt.Printf("Response: %s\n", response.Content)
+	fmt.Printf("Model Used: %s\n", response.Model)
+	fmt.Printf("Usage: %d tokens\n", response.Usage.TotalTokens)
+}
+
+// Example 4: DeepSeek via OpenRouter
+func testDeepSeek(client *litellm.Client) {
+	request := &litellm.Request{
+		Model: "deepseek/deepseek-chat",
+		Messages: []litellm.Message{
+			{
+				Role:    "user",
+				Content: "What are the key advantages of using AI model routing services like OpenRouter?",
+			},
+		},
+		MaxTokens:   litellm.IntPtr(400),
+		Temperature: litellm.Float64Ptr(0.6),
+	}
+
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
+	if err != nil {
+		log.Printf("DeepSeek via OpenRouter failed: %v", err)
+		return
+	}
+
+	fmt.Printf("Response: %s\n", response.Content)
+	fmt.Printf("Model Used: %s\n", response.Model)
+	fmt.Printf("Usage: %d tokens\n", response.Usage.TotalTokens)
+}
+
+// Example 5: Function Calling with Different Models
+func functionCalling(client *litellm.Client) {
+	// Define a weather function
+	weatherFunction := litellm.Tool{
+		Type: "function",
+		Function: litellm.FunctionDef{
+			Name:        "get_weather",
+			Description: "Get the current weather in a given location",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"location": map[string]interface{}{
+						"type":        "string",
+						"description": "The city and state, e.g. San Francisco, CA",
+					},
+					"unit": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"celsius", "fahrenheit"},
+						"description": "The unit of temperature",
+					},
+				},
+				"required": []string{"location"},
+			},
+		},
+	}
+
+	request := &litellm.Request{
+		Model: "openai/gpt-4o-mini", // Use a cost-effective model for function calling
+		Messages: []litellm.Message{
+			{
+				Role:    "user",
+				Content: "What's the weather like in Tokyo?",
+			},
+		},
+		Tools:     []litellm.Tool{weatherFunction},
+		MaxTokens: litellm.IntPtr(300),
+	}
+
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
+	if err != nil {
+		log.Printf("Function calling failed: %v", err)
+		return
+	}
+
+	fmt.Printf("Response: %s\n", response.Content)
+	if len(response.ToolCalls) > 0 {
+		for _, toolCall := range response.ToolCalls {
+			fmt.Printf("Tool Call: %s with arguments: %s\n",
+				toolCall.Function.Name, toolCall.Function.Arguments)
+		}
+	}
+	fmt.Printf("Model Used: %s\n", response.Model)
+}
+
+// Example 6: Streaming Chat
+func streamingChat(client *litellm.Client) {
+	request := &litellm.Request{
+		Model: "google/gemini-2.0-flash-exp", // Use Gemini via OpenRouter for streaming
+		Messages: []litellm.Message{
+			{
+				Role:    "user",
+				Content: "Write a short story about a developer who discovers they can access any AI model through a single API.",
+			},
+		},
+		MaxTokens:   litellm.IntPtr(500),
+		Temperature: litellm.Float64Ptr(0.8),
+		Stream:      true,
+	}
+
+	ctx := context.Background()
+	stream, err := client.Stream(ctx, request)
+	if err != nil {
+		log.Printf("Streaming failed: %v", err)
+		return
 	}
 	defer stream.Close()
 
 	fmt.Print("Streaming response: ")
 	for {
-		chunk, err := stream.Read()
+		chunk, err := stream.Next()
 		if err != nil {
-			log.Fatalf("Stream read failed: %v", err)
+			log.Printf("Stream error: %v", err)
+			break
 		}
 
 		if chunk.Done {
 			break
 		}
 
-		if chunk.Type == litellm.ChunkTypeContent && chunk.Content != "" {
+		if chunk.Type == "content" && chunk.Content != "" {
 			fmt.Print(chunk.Content)
 		}
 
-		if chunk.Type == litellm.ChunkTypeReasoning && chunk.Reasoning != nil {
-			fmt.Printf("[Reasoning: %s]", chunk.Reasoning.Summary)
+		if chunk.Type == "reasoning" && chunk.Reasoning != nil {
+			fmt.Printf("\n[Reasoning: %s]\n", chunk.Reasoning.Content)
 		}
 	}
-	fmt.Println("\n--- Streaming Complete ---")
+	fmt.Println()
+}
 
-	// Multiple models example
-	fmt.Println("\n--- Multiple Models ---")
-	models := []string{
-		"openai/gpt-4o-mini",
-		"anthropic/claude-3.5-sonnet",
-		"google/gemini-pro-1.5",
-	}
-
-	for _, model := range models {
-		fmt.Printf("\nTesting model: %s\n", model)
-		response, err := client.Complete(context.Background(), &litellm.Request{
-			Model: model,
-			Messages: []litellm.Message{
-				{Role: "user", Content: "Say hello and tell me your name."},
+// Example 7: JSON Schema Response
+func jsonSchemaResponse(client *litellm.Client) {
+	// Define a schema for product information
+	schema := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"product": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{
+						"type": "string",
+					},
+					"category": map[string]interface{}{
+						"type": "string",
+					},
+					"price": map[string]interface{}{
+						"type": "number",
+					},
+					"features": map[string]interface{}{
+						"type": "array",
+						"items": map[string]interface{}{
+							"type": "string",
+						},
+					},
+					"rating": map[string]interface{}{
+						"type":    "number",
+						"minimum": 0,
+						"maximum": 5,
+					},
+				},
+				"required": []string{"name", "category", "price", "features", "rating"},
 			},
-			MaxTokens:   litellm.IntPtr(50),
-			Temperature: litellm.Float64Ptr(0.7),
-		})
-		if err != nil {
-			fmt.Printf("Error with %s: %v\n", model, err)
-			continue
-		}
-		fmt.Printf("Response: %s\n", response.Content)
+		},
+		"required": []string{"product"},
 	}
 
-	fmt.Println("\n=== OpenRouter Example Complete ===")
+	request := &litellm.Request{
+		Model: "openai/gpt-4o-mini",
+		Messages: []litellm.Message{
+			{
+				Role:    "user",
+				Content: "Generate information for a high-end wireless headphone product.",
+			},
+		},
+		ResponseFormat: &litellm.ResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &litellm.JSONSchema{
+				Name:        "product_info",
+				Description: "Product information with structured data",
+				Schema:      schema,
+				Strict:      litellm.BoolPtr(true),
+			},
+		},
+		MaxTokens:   litellm.IntPtr(400),
+		Temperature: litellm.Float64Ptr(0.5),
+	}
+
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
+	if err != nil {
+		log.Printf("JSON schema response failed: %v", err)
+		return
+	}
+
+	fmt.Printf("JSON Response: %s\n", response.Content)
+
+	// Parse and pretty print JSON
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(response.Content), &result); err == nil {
+		prettyJSON, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Printf("Formatted JSON:\n%s\n", string(prettyJSON))
+	}
+
+	fmt.Printf("Model Used: %s\n", response.Model)
+	fmt.Printf("Usage: %d tokens\n", response.Usage.TotalTokens)
 }

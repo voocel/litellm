@@ -2,220 +2,274 @@ package litellm
 
 import (
 	"context"
+	"time"
 )
 
 // Message represents a conversation message
 type Message struct {
-	Role       string     `json:"role"`                   // "user", "assistant", "system", "tool"
-	Content    string     `json:"content"`                // Message content
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // Tool calls made by assistant
-	ToolCallID string     `json:"tool_call_id,omitempty"` // ID for tool response
+	Role       string     `json:"role"` // user, assistant, system, tool
+	Content    string     `json:"content"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 }
-
-// ToolCall represents a function call request
-type ToolCall struct {
-	ID       string       `json:"id"`       // Unique identifier
-	Type     string       `json:"type"`     // Always "function" for now
-	Function FunctionCall `json:"function"` // Function details
-}
-
-// FunctionCall represents the function to be called
-type FunctionCall struct {
-	Name      string `json:"name"`      // Function name
-	Arguments string `json:"arguments"` // JSON string of arguments
-}
-
-// Tool represents a function that can be called
-type Tool struct {
-	Type     string         `json:"type"`     // Always "function" for now
-	Function FunctionSchema `json:"function"` // Function schema
-}
-
-// FunctionSchema defines a callable function
-type FunctionSchema struct {
-	Name        string `json:"name"`        // Function name
-	Description string `json:"description"` // Function description
-	Parameters  any    `json:"parameters"`  // JSON schema for parameters
-}
-
-// ResponseFormat specifies the format of the model's output
-type ResponseFormat struct {
-	Type       string      `json:"type"`                  // "text", "json_object", "json_schema"
-	JSONSchema *JSONSchema `json:"json_schema,omitempty"` // JSON schema for structured output
-}
-
-// JSONSchema defines a JSON schema for structured output
-type JSONSchema struct {
-	Name        string `json:"name"`                  // Schema name
-	Description string `json:"description,omitempty"` // Schema description
-	Schema      any    `json:"schema"`                // JSON schema definition
-	Strict      *bool  `json:"strict,omitempty"`      // Whether to enforce strict adherence
-}
-
-// Response format type constants
-const (
-	ResponseFormatText       = "text"
-	ResponseFormatJSONObject = "json_object"
-	ResponseFormatJSONSchema = "json_schema"
-)
 
 // Request represents a completion request
 type Request struct {
-	Model       string    `json:"model"`                 // Model identifier in "provider/model" format
-	Messages    []Message `json:"messages"`              // Conversation messages
-	MaxTokens   *int      `json:"max_tokens,omitempty"`  // Maximum tokens to generate
-	Temperature *float64  `json:"temperature,omitempty"` // Sampling temperature
-	Stream      bool      `json:"stream,omitempty"`      // Enable streaming
-	Tools       []Tool    `json:"tools,omitempty"`       // Available tools
-	ToolChoice  any       `json:"tool_choice,omitempty"` // Tool choice strategy
+	Model       string    `json:"model"`
+	Messages    []Message `json:"messages"`
+	MaxTokens   *int      `json:"max_tokens,omitempty"`
+	Temperature *float64  `json:"temperature,omitempty"`
+	Stream      bool      `json:"stream,omitempty"`
+	Tools       []Tool    `json:"tools,omitempty"`
+	ToolChoice  any       `json:"tool_choice,omitempty"`
 
-	// Response format for structured outputs
-	ResponseFormat *ResponseFormat `json:"response_format,omitempty"` // Response format specification
+	// Response format for structured output
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
 
-	// Reasoning model parameters (OpenAI o-series)
-	ReasoningEffort  string `json:"reasoning_effort,omitempty"`  // "low", "medium", "high"
-	ReasoningSummary string `json:"reasoning_summary,omitempty"` // "concise", "detailed", "auto"
-	UseResponsesAPI  bool   `json:"use_responses_api,omitempty"` // Force Responses API usage
+	// Reasoning parameters for advanced models
+	ReasoningEffort  string `json:"reasoning_effort,omitempty"`
+	ReasoningSummary string `json:"reasoning_summary,omitempty"`
+	UseResponsesAPI  bool   `json:"use_responses_api,omitempty"`
 
-	// Extension fields for provider-specific features
-	Extra map[string]any `json:"extra,omitempty"` // Provider-specific parameters
+	// Provider-specific extensions
+	Extra map[string]any `json:"extra,omitempty"`
 }
 
 // Response represents a completion response
 type Response struct {
-	Content   string     `json:"content"`              // Generated content
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"` // Tool calls requested
-	Usage     Usage      `json:"usage"`                // Token usage statistics
-	Model     string     `json:"model"`                // Actual model used
-	Provider  string     `json:"provider"`             // Provider name
-
-	// Reasoning data (for reasoning models)
-	Reasoning *ReasoningData `json:"reasoning,omitempty"` // Reasoning process data
-
-	// Metadata
-	FinishReason string         `json:"finish_reason,omitempty"` // Why generation stopped
-	Extra        map[string]any `json:"extra,omitempty"`         // Provider-specific data
-}
-
-// ReasoningData contains reasoning process information
-type ReasoningData struct {
-	Content    string `json:"content,omitempty"`     // Reasoning process content
-	Summary    string `json:"summary,omitempty"`     // Reasoning summary
-	TokensUsed int    `json:"tokens_used,omitempty"` // Tokens used for reasoning
+	Content      string         `json:"content"`
+	ToolCalls    []ToolCall     `json:"tool_calls,omitempty"`
+	Usage        Usage          `json:"usage"`
+	Model        string         `json:"model"`
+	Provider     string         `json:"provider"`
+	FinishReason string         `json:"finish_reason,omitempty"`
+	Reasoning    *ReasoningData `json:"reasoning,omitempty"`
 }
 
 // Usage represents token usage statistics
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`              // Input tokens
-	CompletionTokens int `json:"completion_tokens"`          // Output tokens
-	TotalTokens      int `json:"total_tokens"`               // Total tokens
-	ReasoningTokens  int `json:"reasoning_tokens,omitempty"` // Reasoning tokens (o-series)
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+	ReasoningTokens  int `json:"reasoning_tokens,omitempty"`
 }
 
-// StreamChunk represents a streaming response chunk
+// Tool represents a function tool definition
+type Tool struct {
+	Type     string      `json:"type"` // "function"
+	Function FunctionDef `json:"function"`
+}
+
+// FunctionDef represents a function definition
+type FunctionDef struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Parameters  any    `json:"parameters"`
+}
+
+// ToolCall represents a function call from the model
+type ToolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"` // "function"
+	Function FunctionCall `json:"function"`
+}
+
+// FunctionCall represents the function call details
+type FunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"` // JSON string
+}
+
+// ResponseFormat defines the response output format
+type ResponseFormat struct {
+	Type       string      `json:"type"` // "text", "json_object", "json_schema"
+	JSONSchema *JSONSchema `json:"json_schema,omitempty"`
+}
+
+// JSONSchema defines structured JSON output schema
+type JSONSchema struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Schema      any    `json:"schema"`
+	Strict      *bool  `json:"strict,omitempty"`
+}
+
+// ReasoningData contains reasoning information for advanced models
+type ReasoningData struct {
+	Content    string `json:"content,omitempty"` // Full reasoning content
+	Summary    string `json:"summary,omitempty"` // Reasoning summary
+	TokensUsed int    `json:"tokens_used,omitempty"`
+}
+
+// StreamChunk represents a single chunk in streaming response
 type StreamChunk struct {
-	Type      ChunkType  `json:"type"`                 // Chunk type
-	Content   string     `json:"content,omitempty"`    // Content delta
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"` // Complete tool calls
-	Usage     *Usage     `json:"usage,omitempty"`      // Final usage stats
-	Done      bool       `json:"done"`                 // Stream completion flag
-	Error     error      `json:"error,omitempty"`      // Error if any
-
-	// Reasoning data
-	Reasoning *ReasoningChunk `json:"reasoning,omitempty"` // Reasoning chunk
-
-	// Tool call delta data
-	ToolCallDelta *ToolCallDelta `json:"tool_call_delta,omitempty"` // Tool call incremental data
-
-	// Metadata
-	Model        string         `json:"model,omitempty"`         // Model name
-	Provider     string         `json:"provider,omitempty"`      // Provider name
-	FinishReason string         `json:"finish_reason,omitempty"` // Completion reason
-	Extra        map[string]any `json:"extra,omitempty"`         // Provider-specific data
-}
-
-// ChunkType defines the type of streaming chunk
-type ChunkType string
-
-const (
-	ChunkTypeContent       ChunkType = "content"         // Regular content
-	ChunkTypeReasoning     ChunkType = "reasoning"       // Reasoning content
-	ChunkTypeToolCall      ChunkType = "tool_call"       // Complete tool call
-	ChunkTypeToolCallDelta ChunkType = "tool_call_delta" // Tool call arguments delta
-	ChunkTypeUsage         ChunkType = "usage"           // Usage statistics
-	ChunkTypeDone          ChunkType = "done"            // Completion marker
-	ChunkTypeError         ChunkType = "error"           // Error
-)
-
-// ReasoningChunk represents a reasoning content chunk
-type ReasoningChunk struct {
-	Content string `json:"content,omitempty"` // Reasoning content delta
-	Summary string `json:"summary,omitempty"` // Reasoning summary delta
+	Type          string          `json:"type"`
+	Content       string          `json:"content,omitempty"`
+	ToolCallDelta *ToolCallDelta  `json:"tool_call_delta,omitempty"`
+	Reasoning     *ReasoningChunk `json:"reasoning,omitempty"`
+	FinishReason  string          `json:"finish_reason,omitempty"`
+	Done          bool            `json:"done"`
+	Provider      string          `json:"provider"`
+	Model         string          `json:"model,omitempty"`
 }
 
 // ToolCallDelta represents incremental tool call data
 type ToolCallDelta struct {
-	Index          int    `json:"index,omitempty"`           // Tool call index in the array
-	ID             string `json:"id,omitempty"`              // Tool call ID
-	Type           string `json:"type,omitempty"`            // Tool type (e.g., "function")
-	FunctionName   string `json:"function_name,omitempty"`   // Function name
-	ArgumentsDelta string `json:"arguments_delta,omitempty"` // Incremental arguments
+	Index          int    `json:"index"`
+	ID             string `json:"id,omitempty"`
+	Type           string `json:"type,omitempty"`
+	FunctionName   string `json:"function_name,omitempty"`
+	ArgumentsDelta string `json:"arguments_delta,omitempty"`
 }
 
-// StreamReader provides an interface for reading streaming responses
+// ReasoningChunk represents incremental reasoning data
+type ReasoningChunk struct {
+	Content string `json:"content,omitempty"`
+	Summary string `json:"summary,omitempty"`
+}
+
+// StreamReader provides a unified interface for reading streaming responses
 type StreamReader interface {
-	Read() (*StreamChunk, error) // Read next chunk
-	Close() error                // Close the stream
-	Err() error                  // Get any error that occurred
+	// Next returns the next chunk or io.EOF when done
+	Next() (*StreamChunk, error)
+	// Close closes the stream
+	Close() error
 }
 
-// ModelInfo represents information about a model
+// ModelInfo contains information about a model
 type ModelInfo struct {
-	ID           string            `json:"id"`                     // Model identifier
-	Provider     string            `json:"provider"`               // Provider name
-	Name         string            `json:"name"`                   // Display name
-	Description  string            `json:"description,omitempty"`  // Model description
-	MaxTokens    int               `json:"max_tokens,omitempty"`   // Maximum context tokens
-	Capabilities []ModelCapability `json:"capabilities,omitempty"` // Model capabilities
-	Extra        map[string]any    `json:"extra,omitempty"`        // Provider-specific info
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Provider     string            `json:"provider"`
+	MaxTokens    int               `json:"max_tokens"`
+	Capabilities []ModelCapability `json:"capabilities"`
 }
 
 // ModelCapability represents what a model can do
 type ModelCapability string
 
 const (
-	CapabilityChat         ModelCapability = "chat"          // Chat completion
-	CapabilityCompletion   ModelCapability = "completion"    // Text completion
-	CapabilityEmbedding    ModelCapability = "embedding"     // Text embedding
-	CapabilityFunctionCall ModelCapability = "function_call" // Function calling
-	CapabilityVision       ModelCapability = "vision"        // Image understanding
-	CapabilityReasoning    ModelCapability = "reasoning"     // Step-by-step reasoning
-	CapabilityCode         ModelCapability = "code"          // Code generation
-	CapabilityMultimodal   ModelCapability = "multimodal"    // Multiple input types
+	CapabilityChat         ModelCapability = "chat"
+	CapabilityFunctionCall ModelCapability = "function_call"
+	CapabilityVision       ModelCapability = "vision"
+	CapabilityReasoning    ModelCapability = "reasoning"
+	CapabilityCode         ModelCapability = "code"
 )
 
-// Provider defines the interface that all LLM providers must implement
-type Provider interface {
-	// Name returns the provider name
-	Name() string
+// Chunk types for streaming
+const (
+	ChunkTypeContent       = "content"
+	ChunkTypeToolCallDelta = "tool_call_delta"
+	ChunkTypeReasoning     = "reasoning"
+)
 
-	// Complete performs a completion request
-	Complete(ctx context.Context, req *Request) (*Response, error)
+// Response format types
+const (
+	ResponseFormatText       = "text"
+	ResponseFormatJSONObject = "json_object"
+	ResponseFormatJSONSchema = "json_schema"
+)
 
-	// Stream performs a streaming completion request
+// Config holds client configuration
+type Config struct {
+	MaxTokens   int            `json:"max_tokens"`
+	Temperature float64        `json:"temperature"`
+	Timeout     time.Duration  `json:"timeout"`
+	Retries     int            `json:"retries"`
+	Extra       map[string]any `json:"extra,omitempty"`
+}
+
+// Option is a functional option for configuring the client
+type Option func(*Client)
+
+// ProviderConfig contains provider-specific configuration
+type ProviderConfig struct {
+	APIKey  string `json:"api_key"`
+	BaseURL string `json:"base_url,omitempty"`
+
+	// Resilience configuration integrated directly
+	Resilience ResilienceConfig `json:"resilience,omitempty"`
+
+	// Provider-specific extras
+	Extra map[string]any `json:"extra,omitempty"`
+}
+
+// Context keys for request metadata
+type contextKey string
+
+const (
+	ContextKeyRequestID  contextKey = "request_id"
+	ContextKeyRetryCount contextKey = "retry_count"
+	ContextKeyProvider   contextKey = "provider"
+)
+
+// ChatProvider defines the basic chat completion capability
+type ChatProvider interface {
+	Chat(ctx context.Context, req *Request) (*Response, error)
+}
+
+// StreamProvider defines streaming capability
+type StreamProvider interface {
 	Stream(ctx context.Context, req *Request) (StreamReader, error)
+}
 
-	// Models returns the list of supported models
+// ModelProvider defines model information capability
+type ModelProvider interface {
 	Models() []ModelInfo
+	SupportsModel(model string) bool
+}
 
-	// Validate checks if the provider is properly configured
+// Provider combines all capabilities through interface composition
+// Implementations can choose which interfaces to support
+type Provider interface {
+	ChatProvider
+	StreamProvider
+	ModelProvider
+
+	// Basic provider info
+	Name() string
 	Validate() error
 }
 
-// ProviderConfig holds configuration for a provider
-type ProviderConfig struct {
-	APIKey     string           `json:"api_key"`              // API key
-	BaseURL    string           `json:"base_url,omitempty"`   // Custom base URL
-	Resilience ResilienceConfig `json:"resilience,omitempty"` // Network resilience config
-	Extra      map[string]any   `json:"extra,omitempty"`      // Provider-specific config
+// ProviderFactory is a function that creates a provider instance
+type ProviderFactory func(config ProviderConfig) Provider
+
+// IntPtr returns a pointer to an int value
+func IntPtr(v int) *int {
+	return &v
+}
+
+// Float64Ptr returns a pointer to a float64 value
+func Float64Ptr(v float64) *float64 {
+	return &v
+}
+
+// BoolPtr returns a pointer to a bool value
+func BoolPtr(v bool) *bool {
+	return &v
+}
+
+// Response format helpers
+
+// NewResponseFormatText creates a text response format
+func NewResponseFormatText() *ResponseFormat {
+	return &ResponseFormat{Type: ResponseFormatText}
+}
+
+// NewResponseFormatJSONObject creates a JSON object response format
+func NewResponseFormatJSONObject() *ResponseFormat {
+	return &ResponseFormat{Type: ResponseFormatJSONObject}
+}
+
+// NewResponseFormatJSONSchema creates a JSON schema response format
+func NewResponseFormatJSONSchema(name, description string, schema any, strict bool) *ResponseFormat {
+	return &ResponseFormat{
+		Type: ResponseFormatJSONSchema,
+		JSONSchema: &JSONSchema{
+			Name:        name,
+			Description: description,
+			Schema:      schema,
+			Strict:      BoolPtr(strict),
+		},
+	}
 }

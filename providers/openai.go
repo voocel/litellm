@@ -1,4 +1,4 @@
-package litellm
+package providers
 
 import (
 	"bufio"
@@ -11,70 +11,622 @@ import (
 	"strings"
 )
 
-// OpenAIProvider implements the Provider interface for OpenAI
+// OpenAIProvider implements OpenAI API integration
 type OpenAIProvider struct {
 	*BaseProvider
 }
 
-// NewOpenAIProvider creates a new OpenAI provider
-func NewOpenAIProvider(config ProviderConfig) Provider {
+// NewOpenAI creates a new OpenAI provider
+func NewOpenAI(config ProviderConfig) *OpenAIProvider {
+	baseProvider := NewBaseProvider("openai", config)
+
 	return &OpenAIProvider{
-		BaseProvider: NewBaseProvider("openai", config),
+		BaseProvider: baseProvider,
 	}
 }
 
-// Models returns the list of supported models
+func (p *OpenAIProvider) SupportsModel(model string) bool {
+	for _, m := range p.Models() {
+		if m.ID == model {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *OpenAIProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		{
 			ID: "gpt-5", Provider: "openai", Name: "GPT-5", MaxTokens: 128000,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityFunctionCall, CapabilityVision, CapabilityCode},
+			Capabilities: []string{"chat", "function_call", "vision", "code"},
 		},
-
 		{
 			ID: "gpt-4o", Provider: "openai", Name: "GPT-4o", MaxTokens: 128000,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityFunctionCall, CapabilityVision},
+			Capabilities: []string{"chat", "function_call", "vision"},
 		},
 		{
 			ID: "gpt-4o-mini", Provider: "openai", Name: "GPT-4o Mini", MaxTokens: 128000,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityFunctionCall, CapabilityVision},
+			Capabilities: []string{"chat", "function_call", "vision"},
 		},
 		{
 			ID: "gpt-4.1", Provider: "openai", Name: "GPT-4.1", MaxTokens: 128000,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityFunctionCall, CapabilityVision},
+			Capabilities: []string{"chat", "function_call", "vision"},
 		},
 		{
 			ID: "gpt-4.1-mini", Provider: "openai", Name: "GPT-4.1 Mini", MaxTokens: 16385,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityFunctionCall},
+			Capabilities: []string{"chat", "function_call"},
 		},
 		{
 			ID: "gpt-4.1-nano", Provider: "openai", Name: "GPT-4.1 Nano", MaxTokens: 16385,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityFunctionCall},
+			Capabilities: []string{"chat", "function_call"},
 		},
 		{
 			ID: "o3", Provider: "openai", Name: "OpenAI o3", MaxTokens: 100000,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityReasoning},
+			Capabilities: []string{"chat", "reasoning"},
 		},
 		{
 			ID: "o3-mini", Provider: "openai", Name: "OpenAI o3 Mini", MaxTokens: 65536,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityReasoning},
+			Capabilities: []string{"chat", "reasoning"},
 		},
 		{
 			ID: "o4-mini", Provider: "openai", Name: "OpenAI o4 Mini", MaxTokens: 100000,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityReasoning},
+			Capabilities: []string{"chat", "reasoning"},
 		},
 	}
 }
 
 // isReasoningModel checks if the model supports advanced reasoning (o-series and GPT-5)
 func (p *OpenAIProvider) isReasoningModel(model string) bool {
-	model = strings.ToLower(model)
-	return strings.HasPrefix(model, "o1") ||
-		strings.HasPrefix(model, "o3") ||
-		strings.HasPrefix(model, "o4") ||
-		strings.HasPrefix(model, "gpt-5")
+	modelLower := strings.ToLower(model)
+	return strings.HasPrefix(modelLower, "o1") ||
+		strings.HasPrefix(modelLower, "o3") ||
+		strings.HasPrefix(modelLower, "o4") ||
+		strings.HasPrefix(modelLower, "gpt-5")
 }
 
+func (p *OpenAIProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+
+	modelName := req.Model
+
+	// Check if should use Responses API
+	shouldUseResponsesAPI := req.UseResponsesAPI ||
+		(p.isReasoningModel(modelName) && (req.ReasoningEffort != "" || req.ReasoningSummary != ""))
+
+	if shouldUseResponsesAPI {
+		// Try using Responses API
+		response, err := p.completeWithResponsesAPI(ctx, req, modelName)
+		if err != nil {
+			// If Responses API fails, fall back to traditional mode
+			fallbackReq := *req
+			fallbackReq.UseResponsesAPI = false
+
+			// Only clear reasoning parameters for OpenAI endpoints
+			if !strings.Contains(p.Config().BaseURL, "openrouter") {
+				fallbackReq.ReasoningEffort = ""
+				fallbackReq.ReasoningSummary = ""
+			}
+
+			return p.completeWithChatAPI(ctx, &fallbackReq, modelName)
+		}
+		return response, nil
+	}
+
+	// Use traditional Chat Completions API
+	return p.completeWithChatAPI(ctx, req, modelName)
+}
+
+// completeWithChatAPI uses traditional Chat Completions API
+func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, modelName string) (*Response, error) {
+	openaiReq := openaiRequest{
+		Model:      modelName,
+		Stream:     false,
+		ToolChoice: req.ToolChoice,
+	}
+
+	// Convert response format
+	if req.ResponseFormat != nil {
+		openaiReq.ResponseFormat = &openaiResponseFormat{
+			Type: req.ResponseFormat.Type,
+		}
+		if req.ResponseFormat.JSONSchema != nil {
+			openaiReq.ResponseFormat.JSONSchema = &openaiJSONSchema{
+				Name:        req.ResponseFormat.JSONSchema.Name,
+				Description: req.ResponseFormat.JSONSchema.Description,
+				Schema:      req.ResponseFormat.JSONSchema.Schema,
+				Strict:      req.ResponseFormat.JSONSchema.Strict,
+			}
+		}
+	}
+
+	// Set reasoning parameters if provided (OpenAI format only)
+	if req.ReasoningEffort != "" || req.ReasoningSummary != "" {
+		reasoning := &openaiReasoning{}
+
+		if req.ReasoningEffort != "" {
+			reasoning.Effort = req.ReasoningEffort
+		}
+		if req.ReasoningSummary != "" {
+			reasoning.Summary = req.ReasoningSummary
+		} else {
+			reasoning.Summary = "auto"
+		}
+
+		openaiReq.Reasoning = reasoning
+	}
+
+	// Set correct parameters based on model type
+	if p.isReasoningModel(modelName) {
+		// Reasoning models always use max_completion_tokens
+		openaiReq.MaxCompletionTokens = req.MaxTokens
+		// Only set reasoning parameters if provided
+		if req.ReasoningEffort != "" || req.ReasoningSummary != "" {
+			// Reasoning parameters provided - these will be used
+		}
+		// Reasoning models typically ignore temperature
+	} else {
+		// Traditional models use max_tokens and temperature
+		openaiReq.MaxTokens = req.MaxTokens
+		openaiReq.Temperature = req.Temperature
+	}
+
+	// Convert tool definitions
+	if len(req.Tools) > 0 {
+		openaiReq.Tools = make([]openaiTool, len(req.Tools))
+		for i, tool := range req.Tools {
+			openaiReq.Tools[i] = openaiTool{
+				Type: tool.Type,
+				Function: openaiToolFunction{
+					Name:        tool.Function.Name,
+					Description: tool.Function.Description,
+					Parameters:  tool.Function.Parameters,
+				},
+			}
+		}
+	}
+
+	openaiReq.Messages = make([]openaiMessage, len(req.Messages))
+	for i, msg := range req.Messages {
+		openaiMsg := openaiMessage{
+			Role:       msg.Role,
+			Content:    msg.Content,
+			ToolCallID: msg.ToolCallID,
+		}
+
+		// Convert tool calls
+		if len(msg.ToolCalls) > 0 {
+			openaiMsg.ToolCalls = make([]openaiToolCall, len(msg.ToolCalls))
+			for j, toolCall := range msg.ToolCalls {
+				openaiMsg.ToolCalls[j] = openaiToolCall{
+					ID:   toolCall.ID,
+					Type: toolCall.Type,
+					Function: openaiToolCallFunc{
+						Name:      toolCall.Function.Name,
+						Arguments: toolCall.Function.Arguments,
+					},
+				}
+			}
+		}
+
+		openaiReq.Messages[i] = openaiMsg
+	}
+
+	body, err := json.Marshal(openaiReq)
+	if err != nil {
+		return nil, fmt.Errorf("openai: marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.buildURL("/chat/completions"), bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("openai: create request: %w", err)
+	}
+
+	p.setHeaders(httpReq)
+
+	resp, err := p.HTTPClient().Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("openai: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("openai: API error %d: %s", resp.StatusCode, string(body))
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("openai: read response: %w", err)
+	}
+
+	var openaiResp openaiResponse
+	if err := json.Unmarshal(respBody, &openaiResp); err != nil {
+		return nil, fmt.Errorf("openai: decode response: %w", err)
+	}
+
+	response := &Response{
+		Usage: Usage{
+			PromptTokens:     openaiResp.Usage.PromptTokens,
+			CompletionTokens: openaiResp.Usage.CompletionTokens,
+			TotalTokens:      openaiResp.Usage.TotalTokens,
+		},
+		Model:    openaiResp.Model,
+		Provider: "openai",
+	}
+
+	// Handle reasoning tokens for reasoning models
+	if openaiResp.Usage.CompletionTokensDetails != nil {
+		response.Usage.ReasoningTokens = openaiResp.Usage.CompletionTokensDetails.ReasoningTokens
+	}
+
+	if len(openaiResp.Choices) > 0 {
+		choice := openaiResp.Choices[0]
+		response.Content = choice.Message.Content
+		response.FinishReason = choice.FinishReason
+
+		// Extract reasoning content (OpenAI format only)
+		if choice.ReasoningSummary != nil && choice.ReasoningSummary.Text != "" {
+			response.Reasoning = &ReasoningData{
+				Summary:    choice.ReasoningSummary.Text,
+				TokensUsed: response.Usage.ReasoningTokens,
+			}
+		}
+
+		// Convert tool calls
+		if len(choice.Message.ToolCalls) > 0 {
+			response.ToolCalls = make([]ToolCall, len(choice.Message.ToolCalls))
+			for i, toolCall := range choice.Message.ToolCalls {
+				response.ToolCalls[i] = ToolCall{
+					ID:   toolCall.ID,
+					Type: toolCall.Type,
+					Function: FunctionCall{
+						Name:      toolCall.Function.Name,
+						Arguments: toolCall.Function.Arguments,
+					},
+				}
+			}
+		}
+	}
+
+	return response, nil
+}
+
+// completeWithResponsesAPI uses OpenAI Responses API to handle reasoning models
+func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Request, modelName string) (*Response, error) {
+	responsesReq := responsesAPIRequest{
+		Model: modelName,
+		Input: req.Messages,
+	}
+
+	if req.ReasoningEffort != "" || req.ReasoningSummary != "" {
+		reasoning := &responsesAPIReasoning{}
+		if req.ReasoningEffort != "" {
+			reasoning.Effort = req.ReasoningEffort
+		}
+		if req.ReasoningSummary != "" {
+			reasoning.Summary = req.ReasoningSummary
+		} else {
+			reasoning.Summary = "auto"
+		}
+		responsesReq.Reasoning = reasoning
+	}
+
+	// Convert tool definitions
+	if len(req.Tools) > 0 {
+		responsesReq.Tools = make([]openaiTool, len(req.Tools))
+		for i, tool := range req.Tools {
+			responsesReq.Tools[i] = openaiTool{
+				Type: tool.Type,
+				Function: openaiToolFunction{
+					Name:        tool.Function.Name,
+					Description: tool.Function.Description,
+					Parameters:  tool.Function.Parameters,
+				},
+			}
+		}
+	}
+
+	body, err := json.Marshal(responsesReq)
+	if err != nil {
+		return nil, fmt.Errorf("openai: marshal responses request: %w", err)
+	}
+
+	// Use Responses API
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.buildURL("/responses"), bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("openai: create responses request: %w", err)
+	}
+
+	p.setHeaders(httpReq)
+
+	resp, err := p.HTTPClient().Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("openai: responses request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("openai: responses API error %d: %s", resp.StatusCode, string(body))
+	}
+
+	var responsesResp responsesAPIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&responsesResp); err != nil {
+		return nil, fmt.Errorf("openai: decode responses response: %w", err)
+	}
+
+	response := &Response{
+		Content: responsesResp.OutputText,
+		Usage: Usage{
+			PromptTokens:     responsesResp.Usage.InputTokens,
+			CompletionTokens: responsesResp.Usage.OutputTokens,
+			TotalTokens:      responsesResp.Usage.TotalTokens,
+		},
+		Model:    responsesResp.Model,
+		Provider: "openai",
+	}
+
+	if responsesResp.Usage.OutputTokensDetails != nil {
+		response.Usage.ReasoningTokens = responsesResp.Usage.OutputTokensDetails.ReasoningTokens
+	}
+
+	// Extract reasoning summary content
+	for _, outputItem := range responsesResp.Output {
+		if outputItem.Type == "reasoning" && len(outputItem.Summary) > 0 {
+			// Merge all reasoning summary texts
+			var reasoningText strings.Builder
+			for _, summary := range outputItem.Summary {
+				if summary.Text != "" {
+					if reasoningText.Len() > 0 {
+						reasoningText.WriteString("\n")
+					}
+					reasoningText.WriteString(summary.Text)
+				}
+			}
+			if reasoningText.Len() > 0 {
+				response.Reasoning = &ReasoningData{
+					Content:    reasoningText.String(),
+					TokensUsed: response.Usage.ReasoningTokens,
+				}
+			}
+			break
+		}
+	}
+
+	return response, nil
+}
+
+func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+
+	modelName := req.Model
+
+	openaiReq := openaiRequest{
+		Model:    modelName,
+		Messages: make([]openaiMessage, len(req.Messages)),
+		Stream:   true,
+	}
+
+	// Convert response format
+	if req.ResponseFormat != nil {
+		openaiReq.ResponseFormat = &openaiResponseFormat{
+			Type: req.ResponseFormat.Type,
+		}
+		if req.ResponseFormat.JSONSchema != nil {
+			openaiReq.ResponseFormat.JSONSchema = &openaiJSONSchema{
+				Name:        req.ResponseFormat.JSONSchema.Name,
+				Description: req.ResponseFormat.JSONSchema.Description,
+				Schema:      req.ResponseFormat.JSONSchema.Schema,
+				Strict:      req.ResponseFormat.JSONSchema.Strict,
+			}
+		}
+	}
+
+	// Set correct parameters based on model type
+	if p.isReasoningModel(modelName) {
+		// Reasoning models always use max_completion_tokens
+		openaiReq.MaxCompletionTokens = req.MaxTokens
+		// Only set reasoning parameters if provided
+		if req.ReasoningEffort != "" || req.ReasoningSummary != "" {
+			reasoning := &openaiReasoning{}
+			if req.ReasoningEffort != "" {
+				reasoning.Effort = req.ReasoningEffort
+			}
+			if req.ReasoningSummary != "" {
+				reasoning.Summary = req.ReasoningSummary
+			} else {
+				reasoning.Summary = "auto"
+			}
+			openaiReq.Reasoning = reasoning
+		}
+	} else {
+		// Traditional models use max_tokens and temperature
+		openaiReq.MaxTokens = req.MaxTokens
+		openaiReq.Temperature = req.Temperature
+	}
+
+	for i, msg := range req.Messages {
+		openaiReq.Messages[i] = openaiMessage{
+			Role:    msg.Role,
+			Content: msg.Content,
+		}
+	}
+
+	body, err := json.Marshal(openaiReq)
+	if err != nil {
+		return nil, fmt.Errorf("openai: marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.buildURL("/chat/completions"), bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("openai: create request: %w", err)
+	}
+
+	p.setHeaders(httpReq)
+
+	resp, err := p.HTTPClient().Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("openai: request failed: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("openai: API error %d: %s", resp.StatusCode, string(body))
+	}
+
+	return &openaiStreamReader{
+		resp:     resp,
+		scanner:  bufio.NewScanner(resp.Body),
+		provider: "openai",
+	}, nil
+}
+
+func (p *OpenAIProvider) convertMessages(messages []Message) []openaiMessage {
+	openaiMessages := make([]openaiMessage, len(messages))
+	for i, msg := range messages {
+		openaiMessages[i] = openaiMessage{
+			Role:    msg.Role,
+			Content: msg.Content,
+		}
+	}
+	return openaiMessages
+}
+
+func (p *OpenAIProvider) convertResponse(resp *openaiResponse) *Response {
+	response := &Response{
+		Usage: Usage{
+			PromptTokens:     resp.Usage.PromptTokens,
+			CompletionTokens: resp.Usage.CompletionTokens,
+			TotalTokens:      resp.Usage.TotalTokens,
+		},
+		Model:    resp.Model,
+		Provider: "openai",
+	}
+
+	if len(resp.Choices) > 0 {
+		choice := resp.Choices[0]
+		response.Content = choice.Message.Content
+		response.FinishReason = choice.FinishReason
+	}
+
+	return response
+}
+
+func (p *OpenAIProvider) buildURL(endpoint string) string {
+	baseURL := strings.TrimSuffix(p.Config().BaseURL, "/")
+	if baseURL == "" {
+		baseURL = "https://api.openai.com"
+	}
+	if strings.HasSuffix(baseURL, "/v1") {
+		return baseURL + endpoint
+	}
+	return baseURL + "/v1" + endpoint
+}
+
+func (p *OpenAIProvider) setHeaders(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
+}
+
+// openaiStreamReader implements streaming for OpenAI
+type openaiStreamReader struct {
+	resp     *http.Response
+	scanner  *bufio.Scanner
+	provider string
+	done     bool
+}
+
+func (r *openaiStreamReader) Next() (*StreamChunk, error) {
+	if r.done {
+		return &StreamChunk{Done: true, Provider: r.provider}, nil
+	}
+
+	for r.scanner.Scan() {
+		line := r.scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			r.done = true
+			return &StreamChunk{Done: true, Provider: r.provider}, nil
+		}
+
+		var chunk openaiStreamChunk
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			continue
+		}
+
+		if len(chunk.Choices) > 0 {
+			choice := chunk.Choices[0]
+			streamChunk := &StreamChunk{
+				Provider: r.provider,
+				Model:    chunk.Model,
+			}
+
+			if choice.Delta.Content != "" {
+				streamChunk.Type = "content"
+				streamChunk.Content = choice.Delta.Content
+			}
+
+			// Handle reasoning streaming (OpenAI format only)
+			if choice.Delta.ReasoningSummary != nil && choice.Delta.ReasoningSummary.Text != "" {
+				streamChunk.Type = "reasoning"
+				streamChunk.Reasoning = &ReasoningChunk{
+					Summary: choice.Delta.ReasoningSummary.Text,
+				}
+			}
+
+			// Handle tool call deltas
+			if len(choice.Delta.ToolCalls) > 0 {
+				for _, toolCallDelta := range choice.Delta.ToolCalls {
+					streamChunk.Type = "tool_call_delta"
+					streamChunk.ToolCallDelta = &ToolCallDelta{
+						Index: toolCallDelta.Index,
+						ID:    toolCallDelta.ID,
+						Type:  toolCallDelta.Type,
+					}
+
+					if toolCallDelta.Function != nil {
+						streamChunk.ToolCallDelta.FunctionName = toolCallDelta.Function.Name
+						streamChunk.ToolCallDelta.ArgumentsDelta = toolCallDelta.Function.Arguments
+					}
+
+					// Return immediately for each tool call delta
+					return streamChunk, nil
+				}
+			}
+
+			if choice.FinishReason != "" {
+				streamChunk.FinishReason = choice.FinishReason
+			}
+
+			// Only return if we have content, reasoning, or finish reason
+			if streamChunk.Type != "" || streamChunk.FinishReason != "" {
+				return streamChunk, nil
+			}
+		}
+	}
+
+	if err := r.scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	r.done = true
+	return &StreamChunk{Done: true, Provider: r.provider}, nil
+}
+
+func (r *openaiStreamReader) Close() error {
+	return r.resp.Body.Close()
+}
+
+// OpenAI API structures
 // OpenAI API request/response structures
 type openaiRequest struct {
 	Model               string                `json:"model"`
@@ -84,7 +636,7 @@ type openaiRequest struct {
 	Temperature         *float64              `json:"temperature,omitempty"`
 	Stream              bool                  `json:"stream,omitempty"`
 	Tools               []openaiTool          `json:"tools,omitempty"`
-	ToolChoice          interface{}           `json:"tool_choice,omitempty"`
+	ToolChoice          any                   `json:"tool_choice,omitempty"`
 	ResponseFormat      *openaiResponseFormat `json:"response_format,omitempty"`
 	Reasoning           *openaiReasoning      `json:"reasoning,omitempty"`
 }
@@ -195,7 +747,7 @@ type openaiStreamChunk struct {
 // Responses API structures
 type responsesAPIRequest struct {
 	Model     string                 `json:"model"`
-	Input     interface{}            `json:"input"`
+	Input     any                    `json:"input"`
 	Reasoning *responsesAPIReasoning `json:"reasoning,omitempty"`
 	Tools     []openaiTool           `json:"tools,omitempty"`
 }
@@ -233,521 +785,4 @@ type responsesAPIUsage struct {
 
 type responsesAPIOutputTokensDetails struct {
 	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
-}
-
-func (p *OpenAIProvider) Complete(ctx context.Context, req *Request) (*Response, error) {
-	if err := p.Validate(); err != nil {
-		return nil, err
-	}
-
-	modelName := req.Model
-
-	// Check if should use Responses API
-	shouldUseResponsesAPI := req.UseResponsesAPI ||
-		(p.isReasoningModel(modelName) && (req.ReasoningEffort != "" || req.ReasoningSummary != ""))
-
-	if shouldUseResponsesAPI {
-		// Try using Responses API
-		response, err := p.completeWithResponsesAPI(ctx, req, modelName)
-		if err != nil {
-			// If Responses API fails, fall back to traditional mode
-			// For OpenRouter, keep reasoning parameters; for OpenAI, clear them
-			fallbackReq := *req
-			fallbackReq.UseResponsesAPI = false
-
-			// Only clear reasoning parameters for OpenAI endpoints
-			if !strings.Contains(p.config.BaseURL, "openrouter") {
-				fallbackReq.ReasoningEffort = ""
-				fallbackReq.ReasoningSummary = ""
-			}
-
-			return p.completeWithChatAPI(ctx, &fallbackReq, modelName)
-		}
-		return response, nil
-	}
-
-	// Use traditional Chat Completions API
-	return p.completeWithChatAPI(ctx, req, modelName)
-}
-
-// completeWithChatAPI uses traditional Chat Completions API
-func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, modelName string) (*Response, error) {
-	openaiReq := openaiRequest{
-		Model:      modelName,
-		Stream:     false,
-		ToolChoice: req.ToolChoice,
-	}
-
-	// Convert response format
-	if req.ResponseFormat != nil {
-		openaiReq.ResponseFormat = &openaiResponseFormat{
-			Type: req.ResponseFormat.Type,
-		}
-		if req.ResponseFormat.JSONSchema != nil {
-			openaiReq.ResponseFormat.JSONSchema = &openaiJSONSchema{
-				Name:        req.ResponseFormat.JSONSchema.Name,
-				Description: req.ResponseFormat.JSONSchema.Description,
-				Schema:      req.ResponseFormat.JSONSchema.Schema,
-				Strict:      req.ResponseFormat.JSONSchema.Strict,
-			}
-		}
-	}
-
-	// Set reasoning parameters if provided (OpenAI format only)
-	if req.ReasoningEffort != "" || req.ReasoningSummary != "" {
-		reasoning := &openaiReasoning{}
-
-		if req.ReasoningEffort != "" {
-			reasoning.Effort = req.ReasoningEffort
-		}
-		if req.ReasoningSummary != "" {
-			reasoning.Summary = req.ReasoningSummary
-		} else {
-			reasoning.Summary = "auto"
-		}
-
-		openaiReq.Reasoning = reasoning
-	}
-
-	// Set correct parameters based on model type and reasoning usage
-	if p.isReasoningModel(modelName) && (req.ReasoningEffort != "" || req.ReasoningSummary != "") {
-		// Parameter settings for reasoning usage: use completion tokens cap
-		openaiReq.MaxCompletionTokens = req.MaxTokens
-		// Reasoning usage typically ignores temperature and some sampling params
-	} else {
-		// Non-reasoning usage: traditional models parameters
-		openaiReq.MaxTokens = req.MaxTokens
-		openaiReq.Temperature = req.Temperature
-	}
-
-	// Convert tool definitions
-	if len(req.Tools) > 0 {
-		openaiReq.Tools = make([]openaiTool, len(req.Tools))
-		for i, tool := range req.Tools {
-			openaiReq.Tools[i] = openaiTool{
-				Type: tool.Type,
-				Function: openaiToolFunction{
-					Name:        tool.Function.Name,
-					Description: tool.Function.Description,
-					Parameters:  tool.Function.Parameters,
-				},
-			}
-		}
-	}
-
-	// Convert messages
-	openaiReq.Messages = make([]openaiMessage, len(req.Messages))
-	for i, msg := range req.Messages {
-		openaiMsg := openaiMessage{
-			Role:       msg.Role,
-			Content:    msg.Content,
-			ToolCallID: msg.ToolCallID,
-		}
-
-		// Convert tool calls
-		if len(msg.ToolCalls) > 0 {
-			openaiMsg.ToolCalls = make([]openaiToolCall, len(msg.ToolCalls))
-			for j, toolCall := range msg.ToolCalls {
-				openaiMsg.ToolCalls[j] = openaiToolCall{
-					ID:   toolCall.ID,
-					Type: toolCall.Type,
-					Function: openaiToolCallFunc{
-						Name:      toolCall.Function.Name,
-						Arguments: toolCall.Function.Arguments,
-					},
-				}
-			}
-		}
-
-		openaiReq.Messages[i] = openaiMsg
-	}
-
-	body, err := json.Marshal(openaiReq)
-	if err != nil {
-		return nil, fmt.Errorf("openai: marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.buildURL("/chat/completions"), bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("openai: create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
-
-	resp, err := p.HTTPClient().Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("openai: request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("openai: API error %d: %s", resp.StatusCode, string(body))
-	}
-
-	// Read response body for debugging
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("openai: read response: %w", err)
-	}
-
-	var openaiResp openaiResponse
-	if err := json.Unmarshal(respBody, &openaiResp); err != nil {
-		return nil, fmt.Errorf("openai: decode response: %w", err)
-	}
-
-	response := &Response{
-		Usage: Usage{
-			PromptTokens:     openaiResp.Usage.PromptTokens,
-			CompletionTokens: openaiResp.Usage.CompletionTokens,
-			TotalTokens:      openaiResp.Usage.TotalTokens,
-		},
-		Model:    openaiResp.Model,
-		Provider: "openai",
-	}
-
-	// Handle reasoning tokens for reasoning models
-	if openaiResp.Usage.CompletionTokensDetails != nil {
-		response.Usage.ReasoningTokens = openaiResp.Usage.CompletionTokensDetails.ReasoningTokens
-	}
-
-	if len(openaiResp.Choices) > 0 {
-		choice := openaiResp.Choices[0]
-		response.Content = choice.Message.Content
-		response.FinishReason = choice.FinishReason
-
-		// Extract reasoning content (OpenAI format only)
-		if choice.ReasoningSummary != nil && choice.ReasoningSummary.Text != "" {
-			response.Reasoning = &ReasoningData{
-				Summary:    choice.ReasoningSummary.Text,
-				TokensUsed: response.Usage.ReasoningTokens,
-			}
-		}
-
-		// Convert tool calls
-		if len(choice.Message.ToolCalls) > 0 {
-			response.ToolCalls = make([]ToolCall, len(choice.Message.ToolCalls))
-			for i, toolCall := range choice.Message.ToolCalls {
-				response.ToolCalls[i] = ToolCall{
-					ID:   toolCall.ID,
-					Type: toolCall.Type,
-					Function: FunctionCall{
-						Name:      toolCall.Function.Name,
-						Arguments: toolCall.Function.Arguments,
-					},
-				}
-			}
-		}
-	}
-
-	return response, nil
-}
-
-// completeWithResponsesAPI uses OpenAI Responses API to handle reasoning models
-func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Request, modelName string) (*Response, error) {
-	// Build Responses API request
-	responsesReq := responsesAPIRequest{
-		Model: modelName,
-		Input: req.Messages, // Pass messages array directly
-	}
-
-	// Set reasoning parameters
-	if req.ReasoningEffort != "" || req.ReasoningSummary != "" {
-		reasoning := &responsesAPIReasoning{}
-		if req.ReasoningEffort != "" {
-			reasoning.Effort = req.ReasoningEffort
-		}
-		if req.ReasoningSummary != "" {
-			reasoning.Summary = req.ReasoningSummary
-		} else {
-			reasoning.Summary = "auto"
-		}
-		responsesReq.Reasoning = reasoning
-	}
-
-	// Convert tool definitions
-	if len(req.Tools) > 0 {
-		responsesReq.Tools = make([]openaiTool, len(req.Tools))
-		for i, tool := range req.Tools {
-			responsesReq.Tools[i] = openaiTool{
-				Type: tool.Type,
-				Function: openaiToolFunction{
-					Name:        tool.Function.Name,
-					Description: tool.Function.Description,
-					Parameters:  tool.Function.Parameters,
-				},
-			}
-		}
-	}
-
-	body, err := json.Marshal(responsesReq)
-	if err != nil {
-		return nil, fmt.Errorf("openai: marshal responses request: %w", err)
-	}
-
-	// Use Responses API
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.buildURL("/responses"), bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("openai: create responses request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
-
-	resp, err := p.HTTPClient().Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("openai: responses request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("openai: responses API error %d: %s", resp.StatusCode, string(body))
-	}
-
-	var responsesResp responsesAPIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&responsesResp); err != nil {
-		return nil, fmt.Errorf("openai: decode responses response: %w", err)
-	}
-
-	// Build unified response format
-	response := &Response{
-		Content: responsesResp.OutputText,
-		Usage: Usage{
-			PromptTokens:     responsesResp.Usage.InputTokens,
-			CompletionTokens: responsesResp.Usage.OutputTokens,
-			TotalTokens:      responsesResp.Usage.TotalTokens,
-		},
-		Model:    responsesResp.Model,
-		Provider: "openai",
-	}
-
-	if responsesResp.Usage.OutputTokensDetails != nil {
-		response.Usage.ReasoningTokens = responsesResp.Usage.OutputTokensDetails.ReasoningTokens
-	}
-
-	// Extract reasoning summary content
-	for _, outputItem := range responsesResp.Output {
-		if outputItem.Type == "reasoning" && len(outputItem.Summary) > 0 {
-			// Merge all reasoning summary texts
-			var reasoningText strings.Builder
-			for _, summary := range outputItem.Summary {
-				if summary.Text != "" {
-					if reasoningText.Len() > 0 {
-						reasoningText.WriteString("\n")
-					}
-					reasoningText.WriteString(summary.Text)
-				}
-			}
-			if reasoningText.Len() > 0 {
-				response.Reasoning = &ReasoningData{
-					Content:    reasoningText.String(),
-					TokensUsed: response.Usage.ReasoningTokens,
-				}
-			}
-			break
-		}
-	}
-
-	return response, nil
-}
-
-func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader, error) {
-	if err := p.Validate(); err != nil {
-		return nil, err
-	}
-
-	modelName := req.Model
-
-	openaiReq := openaiRequest{
-		Model:    modelName,
-		Messages: make([]openaiMessage, len(req.Messages)),
-		Stream:   true,
-	}
-
-	// Convert response format
-	if req.ResponseFormat != nil {
-		openaiReq.ResponseFormat = &openaiResponseFormat{
-			Type: req.ResponseFormat.Type,
-		}
-		if req.ResponseFormat.JSONSchema != nil {
-			openaiReq.ResponseFormat.JSONSchema = &openaiJSONSchema{
-				Name:        req.ResponseFormat.JSONSchema.Name,
-				Description: req.ResponseFormat.JSONSchema.Description,
-				Schema:      req.ResponseFormat.JSONSchema.Schema,
-				Strict:      req.ResponseFormat.JSONSchema.Strict,
-			}
-		}
-	}
-
-	// Set correct parameters based on model type and reasoning usage
-	if p.isReasoningModel(modelName) && (req.ReasoningEffort != "" || req.ReasoningSummary != "") {
-		openaiReq.MaxCompletionTokens = req.MaxTokens
-		reasoning := &openaiReasoning{}
-		if req.ReasoningEffort != "" {
-			reasoning.Effort = req.ReasoningEffort
-		}
-		if req.ReasoningSummary != "" {
-			reasoning.Summary = req.ReasoningSummary
-		} else {
-			reasoning.Summary = "auto"
-		}
-
-		if reasoning.Effort != "" || reasoning.Summary != "" {
-			openaiReq.Reasoning = reasoning
-		}
-	} else {
-		openaiReq.MaxTokens = req.MaxTokens
-		openaiReq.Temperature = req.Temperature
-	}
-
-	for i, msg := range req.Messages {
-		openaiReq.Messages[i] = openaiMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		}
-	}
-
-	body, err := json.Marshal(openaiReq)
-	if err != nil {
-		return nil, fmt.Errorf("openai: marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.buildURL("/chat/completions"), bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("openai: create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
-
-	resp, err := p.HTTPClient().Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("openai: request failed: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, fmt.Errorf("openai: API error %d: %s", resp.StatusCode, string(body))
-	}
-
-	return &openaiStreamReader{
-		resp:     resp,
-		scanner:  bufio.NewScanner(resp.Body),
-		provider: "openai",
-	}, nil
-}
-
-// buildURL intelligently constructs the full API URL
-func (p *OpenAIProvider) buildURL(endpoint string) string {
-	baseURL := strings.TrimSuffix(p.config.BaseURL, "/")
-	if strings.HasSuffix(baseURL, "/v1") {
-		return baseURL + endpoint
-	}
-	return baseURL + "/v1" + endpoint
-}
-
-// openaiStreamReader implements StreamReader for OpenAI
-type openaiStreamReader struct {
-	resp     *http.Response
-	scanner  *bufio.Scanner
-	provider string
-	err      error
-	done     bool
-}
-
-func (r *openaiStreamReader) Read() (*StreamChunk, error) {
-	if r.done {
-		return &StreamChunk{Done: true, Provider: r.provider}, nil
-	}
-
-	for r.scanner.Scan() {
-		line := r.scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			r.done = true
-			return &StreamChunk{Done: true, Provider: r.provider}, nil
-		}
-
-		var chunk openaiStreamChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			continue
-		}
-
-		if len(chunk.Choices) > 0 {
-			choice := chunk.Choices[0]
-			streamChunk := &StreamChunk{
-				Provider: r.provider,
-				Model:    chunk.Model,
-			}
-
-			if choice.Delta.Content != "" {
-				streamChunk.Type = ChunkTypeContent
-				streamChunk.Content = choice.Delta.Content
-			}
-
-			// Handle reasoning streaming (OpenAI format only)
-			if choice.Delta.ReasoningSummary != nil && choice.Delta.ReasoningSummary.Text != "" {
-				streamChunk.Type = ChunkTypeReasoning
-				streamChunk.Reasoning = &ReasoningChunk{
-					Summary: choice.Delta.ReasoningSummary.Text,
-				}
-			}
-
-			// Handle tool call deltas
-			if len(choice.Delta.ToolCalls) > 0 {
-				for _, toolCallDelta := range choice.Delta.ToolCalls {
-					streamChunk.Type = ChunkTypeToolCallDelta
-					streamChunk.ToolCallDelta = &ToolCallDelta{
-						Index: toolCallDelta.Index,
-						ID:    toolCallDelta.ID,
-						Type:  toolCallDelta.Type,
-					}
-
-					if toolCallDelta.Function != nil {
-						streamChunk.ToolCallDelta.FunctionName = toolCallDelta.Function.Name
-						streamChunk.ToolCallDelta.ArgumentsDelta = toolCallDelta.Function.Arguments
-					}
-
-					// Return immediately for each tool call delta
-					return streamChunk, nil
-				}
-			}
-
-			if choice.FinishReason != "" {
-				streamChunk.FinishReason = choice.FinishReason
-			}
-
-			// Only return if we have content, reasoning, or finish reason
-			if streamChunk.Type != "" || streamChunk.FinishReason != "" {
-				return streamChunk, nil
-			}
-		}
-	}
-
-	if err := r.scanner.Err(); err != nil {
-		r.err = err
-		return nil, err
-	}
-
-	r.done = true
-	return &StreamChunk{Done: true, Provider: r.provider}, nil
-}
-
-func (r *openaiStreamReader) Close() error {
-	return r.resp.Body.Close()
-}
-
-func (r *openaiStreamReader) Err() error {
-	return r.err
-}
-
-func init() {
-	RegisterProvider("openai", NewOpenAIProvider)
 }

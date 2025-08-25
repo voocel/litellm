@@ -2,153 +2,233 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/voocel/litellm"
 )
 
 func main() {
-	fmt.Println("=== Anthropic Claude Complete Example ===")
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	if apiKey == "" {
+		log.Fatal("ANTHROPIC_API_KEY environment variable is required")
+	}
 
-	client := litellm.New(litellm.WithAnthropic("your-anthropic-key"))
+	client := litellm.New(litellm.WithAnthropic(apiKey))
 
-	// Basic conversation
-	fmt.Println("\n--- Basic Chat ---")
-	response, err := client.Complete(context.Background(), &litellm.Request{
-		Model: "claude-4-sonnet",
+	fmt.Println("Anthropic Claude Examples - From Simple to Complex")
+	fmt.Println("================================================")
+
+	// Example 1: Basic Chat
+	fmt.Println("\n1. Basic Chat Example")
+	fmt.Println("---------------------")
+	basicChat(client)
+
+	// Example 2: Streaming Chat
+	fmt.Println("\n2. Streaming Chat Example")
+	fmt.Println("-------------------------")
+	streamingChat(client)
+
+	// Example 3: Function/Tool Calling
+	fmt.Println("\n3. Function/Tool Calling Example")
+	fmt.Println("--------------------------------")
+	functionCalling(client)
+
+	// Example 4: JSON Schema Response Format
+	fmt.Println("\n4. JSON Schema Response Format Example")
+	fmt.Println("--------------------------------------")
+	jsonSchemaExample(client)
+}
+
+// Example 1: Basic Chat
+func basicChat(client *litellm.Client) {
+	request := &litellm.Request{
+		Model: "claude-haiku-3.5",
 		Messages: []litellm.Message{
-			{Role: "user", Content: "Explain the concept of recursion in programming"},
+			{
+				Role:    "user",
+				Content: "What are the main benefits of renewable energy?",
+			},
 		},
 		MaxTokens:   litellm.IntPtr(200),
 		Temperature: litellm.Float64Ptr(0.7),
-	})
+	}
+
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
 	if err != nil {
-		log.Fatalf("Basic chat failed: %v", err)
+		log.Printf("Basic chat failed: %v", err)
+		return
 	}
 
 	fmt.Printf("Response: %s\n", response.Content)
-	fmt.Printf("Tokens: %d\n", response.Usage.TotalTokens)
+	fmt.Printf("Usage: %d prompt + %d completion = %d total tokens\n",
+		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.TotalTokens)
+}
 
-	// Streaming conversation
-	fmt.Println("\n--- Streaming Chat ---")
-	stream, err := client.Stream(context.Background(), &litellm.Request{
-		Model: "claude-4-sonnet",
+// Example 2: Streaming Chat
+func streamingChat(client *litellm.Client) {
+	request := &litellm.Request{
+		Model: "claude-haiku-3.5",
 		Messages: []litellm.Message{
-			{Role: "user", Content: "Write a creative story about a robot learning to paint"},
+			{
+				Role:    "user",
+				Content: "Write a short poem about artificial intelligence",
+			},
 		},
-		MaxTokens:   litellm.IntPtr(300),
-		Temperature: litellm.Float64Ptr(0.9),
-	})
+		MaxTokens:   litellm.IntPtr(150),
+		Temperature: litellm.Float64Ptr(0.8),
+		Stream:      true,
+	}
+
+	ctx := context.Background()
+	stream, err := client.Stream(ctx, request)
 	if err != nil {
-		log.Fatalf("Streaming failed: %v", err)
+		log.Printf("Streaming failed: %v", err)
+		return
 	}
 	defer stream.Close()
 
-	fmt.Print("Streaming story: ")
+	fmt.Print("Streaming response: ")
 	for {
-		chunk, err := stream.Read()
+		chunk, err := stream.Next()
 		if err != nil {
-			log.Fatalf("Stream read failed: %v", err)
+			log.Printf("Stream error: %v", err)
+			break
 		}
 
 		if chunk.Done {
 			break
 		}
 
-		if chunk.Type == litellm.ChunkTypeContent {
+		if chunk.Type == "content" && chunk.Content != "" {
 			fmt.Print(chunk.Content)
 		}
 	}
 	fmt.Println()
+}
 
-	// Function calling
-	fmt.Println("\n--- Function Calling ---")
-	tools := []litellm.Tool{
-		{
-			Type: "function",
-			Function: litellm.FunctionSchema{
-				Name:        "calculate",
-				Description: "Perform mathematical calculations",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"expression": map[string]interface{}{
-							"type":        "string",
-							"description": "Mathematical expression to evaluate",
-						},
-						"operation": map[string]interface{}{
-							"type": "string",
-							"enum": []string{"add", "subtract", "multiply", "divide"},
-						},
+// Example 3: Function/Tool Calling
+func functionCalling(client *litellm.Client) {
+	calculatorFunction := litellm.Tool{
+		Type: "function",
+		Function: litellm.FunctionDef{
+			Name:        "calculate",
+			Description: "Perform basic arithmetic operations",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"operation": map[string]interface{}{
+						"type":        "string",
+						"description": "The operation to perform",
+						"enum":        []string{"add", "subtract", "multiply", "divide"},
 					},
-					"required": []string{"expression"},
+					"a": map[string]interface{}{
+						"type":        "number",
+						"description": "First number",
+					},
+					"b": map[string]interface{}{
+						"type":        "number",
+						"description": "Second number",
+					},
 				},
+				"required": []string{"operation", "a", "b"},
 			},
 		},
 	}
 
-	toolResp, err := client.Complete(context.Background(), &litellm.Request{
-		Model: "claude-4-sonnet",
+	request := &litellm.Request{
+		Model: "claude-sonnet-4",
 		Messages: []litellm.Message{
-			{Role: "user", Content: "Calculate 156 + 789 for me"},
+			{
+				Role:    "user",
+				Content: "What is 15 multiplied by 23?",
+			},
 		},
-		Tools:      tools,
-		ToolChoice: "auto",
-	})
+		Tools:     []litellm.Tool{calculatorFunction},
+		MaxTokens: litellm.IntPtr(300),
+	}
+
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
 	if err != nil {
-		log.Fatalf("Function calling failed: %v", err)
-	}
-
-	if len(toolResp.ToolCalls) > 0 {
-		fmt.Printf("Tool called: %s\n", toolResp.ToolCalls[0].Function.Name)
-		fmt.Printf("Arguments: %s\n", toolResp.ToolCalls[0].Function.Arguments)
-	} else {
-		fmt.Printf("Response: %s\n", toolResp.Content)
-	}
-
-	// Multi-turn conversation
-	fmt.Println("\n--- Multi-turn Conversation ---")
-	messages := []litellm.Message{
-		{Role: "user", Content: "What is machine learning?"},
-	}
-
-	// First round
-	resp1, err := client.Complete(context.Background(), &litellm.Request{
-		Model:       "claude-4-sonnet",
-		Messages:    messages,
-		MaxTokens:   litellm.IntPtr(100),
-		Temperature: litellm.Float64Ptr(0.5),
-	})
-	if err != nil {
-		log.Printf("Multi-turn round 1 failed: %v", err)
+		log.Printf("Function calling failed: %v", err)
 		return
 	}
 
-	fmt.Printf("Claude: %s\n", resp1.Content)
+	fmt.Printf("Response: %s\n", response.Content)
+	if len(response.ToolCalls) > 0 {
+		for _, toolCall := range response.ToolCalls {
+			fmt.Printf("Tool Call: %s with arguments: %s\n",
+				toolCall.Function.Name, toolCall.Function.Arguments)
+		}
+	}
+}
 
-	// Add assistant response to conversation history
-	messages = append(messages, litellm.Message{
-		Role:    "assistant",
-		Content: resp1.Content,
-	})
+// Example 4: JSON Schema Response Format
+func jsonSchemaExample(client *litellm.Client) {
+	schema := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"recommendations": map[string]interface{}{
+				"type": "array",
+				"items": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"title": map[string]interface{}{
+							"type": "string",
+						},
+						"author": map[string]interface{}{
+							"type": "string",
+						},
+						"genre": map[string]interface{}{
+							"type": "string",
+						},
+						"summary": map[string]interface{}{
+							"type": "string",
+						},
+					},
+					"required": []string{"title", "author", "genre", "summary"},
+				},
+			},
+		},
+		"required": []string{"recommendations"},
+	}
 
-	// Second round
-	messages = append(messages, litellm.Message{
-		Role:    "user",
-		Content: "Can you give me a simple example?",
-	})
+	request := &litellm.Request{
+		Model: "claude-sonnet-4",
+		Messages: []litellm.Message{
+			{
+				Role:    "user",
+				Content: "Recommend 3 science fiction books from different decades",
+			},
+		},
+		ResponseFormat: &litellm.ResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &litellm.JSONSchema{
+				Name:        "book_recommendations",
+				Description: "A list of book recommendations",
+				Schema:      schema,
+				Strict:      litellm.BoolPtr(true),
+			},
+		},
+		MaxTokens: litellm.IntPtr(500),
+	}
 
-	resp2, err := client.Complete(context.Background(), &litellm.Request{
-		Model:       "claude-4-sonnet",
-		Messages:    messages,
-		MaxTokens:   litellm.IntPtr(150),
-		Temperature: litellm.Float64Ptr(0.5),
-	})
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
 	if err != nil {
-		log.Printf("Multi-turn round 2 failed: %v", err)
+		log.Printf("JSON schema failed: %v", err)
 		return
 	}
 
-	fmt.Printf("Claude: %s\n", resp2.Content)
+	fmt.Printf("Structured JSON Response: %s\n", response.Content)
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(response.Content), &result); err == nil {
+		prettyJSON, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Printf("Formatted JSON:\n%s\n", string(prettyJSON))
+	}
 }

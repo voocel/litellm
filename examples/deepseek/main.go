@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -10,149 +11,271 @@ import (
 )
 
 func main() {
-	fmt.Println("=== DeepSeek Complete Example ===")
+	apiKey := os.Getenv("DEEPSEEK_API_KEY")
+	if apiKey == "" {
+		log.Fatal("DEEPSEEK_API_KEY environment variable is required")
+	}
 
-	// Method 1: Environment variable
-	// export DEEPSEEK_API_KEY="your-deepseek-api-key"
-	//client := litellm.New()
+	client := litellm.New(litellm.WithDeepSeek(apiKey))
 
-	// Method 2: Manual configuration
-	client := litellm.New(litellm.WithDeepSeek(os.Getenv("DEEPSEEK_API_KEY"), os.Getenv("DEEPSEEK_BASE_URL")))
+	fmt.Println("DeepSeek Examples - From Basic to Advanced")
+	fmt.Println("=========================================")
 
-	// Basic conversation
-	fmt.Println("\n--- Basic Chat ---")
-	response, err := client.Complete(context.Background(), &litellm.Request{
+	// Example 1: Basic Chat
+	fmt.Println("\n1. Basic Chat Example (DeepSeek Chat)")
+	fmt.Println("-------------------------------------")
+	basicChat(client)
+
+	// Example 2: Reasoning Mode
+	fmt.Println("\n2. Reasoning Mode Example (DeepSeek Reasoner)")
+	fmt.Println("--------------------------------------------")
+	reasoningChat(client)
+
+	// Example 3: Code Generation
+	fmt.Println("\n3. Code Generation Example (DeepSeek Coder)")
+	fmt.Println("------------------------------------------")
+	codeGeneration(client)
+
+	// Example 4: Function Calling
+	fmt.Println("\n4. Function Calling Example")
+	fmt.Println("---------------------------")
+	functionCalling(client)
+
+	// Example 5: Streaming Chat
+	fmt.Println("\n5. Streaming Chat Example")
+	fmt.Println("-------------------------")
+	streamingChat(client)
+
+	// Example 6: JSON Response Format
+	fmt.Println("\n6. JSON Response Format Example")
+	fmt.Println("-------------------------------")
+	jsonResponseFormat(client)
+}
+
+// Example 1: Basic Chat with DeepSeek Chat
+func basicChat(client *litellm.Client) {
+	request := &litellm.Request{
 		Model: "deepseek-chat",
 		Messages: []litellm.Message{
-			{Role: "user", Content: "Explain the concept of artificial intelligence"},
+			{
+				Role:    "system",
+				Content: "You are a helpful AI assistant.",
+			},
+			{
+				Role:    "user",
+				Content: "Explain what DeepSeek is in simple terms.",
+			},
 		},
-		MaxTokens:   litellm.IntPtr(200),
+		MaxTokens:   litellm.IntPtr(500),
 		Temperature: litellm.Float64Ptr(0.7),
-	})
+	}
+
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
 	if err != nil {
-		log.Fatalf("Basic chat failed: %v", err)
+		log.Printf("Basic chat failed: %v", err)
+		return
 	}
 
 	fmt.Printf("Response: %s\n", response.Content)
-	fmt.Printf("Tokens: %d\n", response.Usage.TotalTokens)
+	fmt.Printf("Usage: %d prompt + %d completion = %d total tokens\n",
+		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.TotalTokens)
+}
 
-	// Reasoning model - DeepSeek's signature feature
-	fmt.Println("\n--- Reasoning Model (DeepSeek-R1) ---")
-	reasoningResp, err := client.Complete(context.Background(), &litellm.Request{
+// Example 2: Reasoning Mode with DeepSeek Reasoner
+func reasoningChat(client *litellm.Client) {
+	request := &litellm.Request{
 		Model: "deepseek-reasoner",
 		Messages: []litellm.Message{
-			{Role: "user", Content: "who are you?"},
+			{
+				Role:    "user",
+				Content: "A farmer has 17 sheep, and all but 9 die. How many sheep are left? Think through this step by step.",
+			},
 		},
-		MaxTokens:   litellm.IntPtr(500),
-		Temperature: litellm.Float64Ptr(0.1),
-	})
+		MaxTokens:   litellm.IntPtr(2000),
+		Temperature: litellm.Float64Ptr(0.3),
+	}
+
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
 	if err != nil {
-		log.Fatalf("Reasoning failed: %v", err)
+		log.Printf("Reasoning chat failed: %v", err)
+		return
 	}
 
-	fmt.Printf("Answer: %s\n", reasoningResp.Content)
-	if reasoningResp.Reasoning != nil {
-		fmt.Printf("Reasoning process: %s\n", reasoningResp.Reasoning.Content)
+	// Display reasoning if available
+	if response.Reasoning != nil && response.Reasoning.Content != "" {
+		fmt.Printf("Reasoning Process:\n%s\n", response.Reasoning.Content)
+		fmt.Printf("Reasoning Tokens: %d\n", response.Reasoning.TokensUsed)
+		fmt.Println("---")
+	} else {
+		fmt.Println("DEBUG: No reasoning content found in response")
+		fmt.Printf("DEBUG: Response object - Reasoning field: %v\n", response.Reasoning)
+		fmt.Printf("DEBUG: Usage - ReasoningTokens: %d, CompletionTokens: %d\n",
+			response.Usage.ReasoningTokens, response.Usage.CompletionTokens)
 	}
 
-	// Streaming conversation
-	fmt.Println("\n--- Streaming Chat ---")
-	stream, err := client.Stream(context.Background(), &litellm.Request{
-		Model: "deepseek-reasoner",
+	fmt.Printf("Final Answer: %s\n", response.Content)
+	fmt.Printf("Usage: %d prompt + %d completion + %d reasoning = %d total tokens\n",
+		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.ReasoningTokens, response.Usage.TotalTokens)
+}
+
+// Example 3: Code Generation with DeepSeek Coder
+func codeGeneration(client *litellm.Client) {
+	request := &litellm.Request{
+		Model: "deepseek-coder",
 		Messages: []litellm.Message{
-			{Role: "user", Content: "Write a creative story about a programmer who discovers AI consciousness"},
+			{
+				Role:    "user",
+				Content: "Write a Python function to find the longest common subsequence of two strings. Include comments and examples.",
+			},
 		},
-		MaxTokens:   litellm.IntPtr(300),
+		MaxTokens:   litellm.IntPtr(800),
+		Temperature: litellm.Float64Ptr(0.2),
+	}
+
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
+	if err != nil {
+		log.Printf("Code generation failed: %v", err)
+		return
+	}
+
+	fmt.Printf("Generated Code:\n%s\n", response.Content)
+	fmt.Printf("Usage: %d tokens\n", response.Usage.TotalTokens)
+}
+
+// Example 4: Function Calling
+func functionCalling(client *litellm.Client) {
+	// Define a weather function
+	weatherFunction := litellm.Tool{
+		Type: "function",
+		Function: litellm.FunctionDef{
+			Name:        "get_weather",
+			Description: "Get the current weather in a given location",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"location": map[string]interface{}{
+						"type":        "string",
+						"description": "The city and state, e.g. San Francisco, CA",
+					},
+					"unit": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"celsius", "fahrenheit"},
+						"description": "The unit of temperature",
+					},
+				},
+				"required": []string{"location"},
+			},
+		},
+	}
+
+	request := &litellm.Request{
+		Model: "deepseek-chat",
+		Messages: []litellm.Message{
+			{
+				Role:    "user",
+				Content: "What's the weather like in Beijing?",
+			},
+		},
+		Tools:     []litellm.Tool{weatherFunction},
+		MaxTokens: litellm.IntPtr(300),
+	}
+
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
+	if err != nil {
+		log.Printf("Function calling failed: %v", err)
+		return
+	}
+
+	fmt.Printf("Response: %s\n", response.Content)
+	if len(response.ToolCalls) > 0 {
+		for _, toolCall := range response.ToolCalls {
+			fmt.Printf("Tool Call: %s with arguments: %s\n",
+				toolCall.Function.Name, toolCall.Function.Arguments)
+		}
+	}
+}
+
+// Example 5: Streaming Chat
+func streamingChat(client *litellm.Client) {
+	request := &litellm.Request{
+		Model: "deepseek-chat",
+		Messages: []litellm.Message{
+			{
+				Role:    "user",
+				Content: "Write a short story about artificial intelligence in 3 paragraphs",
+			},
+		},
+		MaxTokens:   litellm.IntPtr(400),
 		Temperature: litellm.Float64Ptr(0.8),
-	})
+		Stream:      true,
+	}
+
+	ctx := context.Background()
+	stream, err := client.Stream(ctx, request)
 	if err != nil {
-		log.Fatalf("Streaming failed: %v", err)
+		log.Printf("Streaming failed: %v", err)
+		return
 	}
 	defer stream.Close()
 
-	fmt.Print("Streaming story: ")
+	fmt.Print("Streaming response: ")
 	for {
-		chunk, err := stream.Read()
+		chunk, err := stream.Next()
 		if err != nil {
-			log.Fatalf("Stream read failed: %v", err)
+			log.Printf("Stream error: %v", err)
+			break
 		}
 
 		if chunk.Done {
 			break
 		}
 
-		if chunk.Type == litellm.ChunkTypeContent {
+		if chunk.Type == "content" && chunk.Content != "" {
 			fmt.Print(chunk.Content)
-		} else if chunk.Type == litellm.ChunkTypeReasoning {
-			// DeepSeek reasoning model's streaming reasoning process
-			fmt.Printf("[Thinking: %s]", chunk.Reasoning.Content)
 		}
 	}
 	fmt.Println()
+}
 
-	// Function calling
-	fmt.Println("\n--- Function Calling ---")
-	tools := []litellm.Tool{
-		{
-			Type: "function",
-			Function: litellm.FunctionSchema{
-				Name:        "code_analyzer",
-				Description: "Analyze code for bugs and improvements",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"code": map[string]interface{}{
-							"type":        "string",
-							"description": "Code to analyze",
-						},
-						"language": map[string]interface{}{
-							"type": "string",
-							"enum": []string{"python", "javascript", "go", "java"},
-						},
-					},
-					"required": []string{"code", "language"},
-				},
+// Example 6: JSON Response Format
+func jsonResponseFormat(client *litellm.Client) {
+	request := &litellm.Request{
+		Model: "deepseek-chat",
+		Messages: []litellm.Message{
+			{
+				Role:    "system",
+				Content: "You are a helpful assistant that responds only in valid JSON format.",
+			},
+			{
+				Role:    "user",
+				Content: "Generate a product description for a smart phone with name, price, features, and specifications in JSON format.",
 			},
 		},
+		ResponseFormat: &litellm.ResponseFormat{
+			Type: "json_object",
+		},
+		MaxTokens:   litellm.IntPtr(400),
+		Temperature: litellm.Float64Ptr(0.5),
 	}
 
-	toolResp, err := client.Complete(context.Background(), &litellm.Request{
-		Model: "deepseek-chat",
-		Messages: []litellm.Message{
-			{Role: "user", Content: "Analyze this Python code: def factorial(n): return n * factorial(n-1)"},
-		},
-		Tools:      tools,
-		ToolChoice: "auto",
-	})
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
 	if err != nil {
-		log.Fatalf("Function calling failed: %v", err)
+		log.Printf("JSON response failed: %v", err)
+		return
 	}
 
-	if len(toolResp.ToolCalls) > 0 {
-		fmt.Printf("Tool called: %s\n", toolResp.ToolCalls[0].Function.Name)
-		fmt.Printf("Arguments: %s\n", toolResp.ToolCalls[0].Function.Arguments)
-	} else {
-		fmt.Printf("Response: %s\n", toolResp.Content)
+	fmt.Printf("JSON Response: %s\n", response.Content)
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(response.Content), &result); err == nil {
+		prettyJSON, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Printf("Formatted JSON:\n%s\n", string(prettyJSON))
 	}
 
-	// Advanced parameters
-	fmt.Println("\n--- Advanced Parameters ---")
-	advancedResp, err := client.Complete(context.Background(), &litellm.Request{
-		Model: "deepseek-chat",
-		Messages: []litellm.Message{
-			{Role: "user", Content: "Generate a unique and creative product name for an AI-powered coding assistant"},
-		},
-		MaxTokens:   litellm.IntPtr(100),
-		Temperature: litellm.Float64Ptr(0.9),
-		Extra: map[string]interface{}{
-			"top_p":             0.95,
-			"frequency_penalty": 0.2,
-			"presence_penalty":  0.1,
-		},
-	})
-	if err != nil {
-		log.Fatalf("Advanced parameters failed: %v", err)
-	}
-
-	fmt.Printf("Creative response: %s\n", advancedResp.Content)
+	fmt.Printf("Usage: %d tokens\n", response.Usage.TotalTokens)
 }

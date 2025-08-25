@@ -1,4 +1,4 @@
-package litellm
+package providers
 
 import (
 	"bufio"
@@ -12,128 +12,67 @@ import (
 	"time"
 )
 
-// GeminiProvider implements the Provider interface for Google Gemini
+// GeminiProvider implements Google Gemini API integration
 type GeminiProvider struct {
 	*BaseProvider
 }
 
-// NewGeminiProvider creates a new Gemini provider
-func NewGeminiProvider(config ProviderConfig) Provider {
-	if config.BaseURL == "" {
-		config.BaseURL = "https://generativelanguage.googleapis.com"
-	}
+// NewGemini creates a new Gemini provider
+func NewGemini(config ProviderConfig) *GeminiProvider {
+	baseProvider := NewBaseProvider("gemini", config)
+
 	return &GeminiProvider{
-		BaseProvider: NewBaseProvider("gemini", config),
+		BaseProvider: baseProvider,
 	}
 }
 
-// Models returns the list of supported models
+func (p *GeminiProvider) SupportsModel(model string) bool {
+	for _, m := range p.Models() {
+		if m.ID == model {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *GeminiProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		{
 			ID: "gemini-2.5-pro", Provider: "gemini", Name: "Gemini 2.5 Pro", MaxTokens: 2000000,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityVision, CapabilityCode, CapabilityFunctionCall},
+			Capabilities: []string{"chat", "vision", "code", "function_call", "thinking"},
 		},
 		{
 			ID: "gemini-2.5-flash", Provider: "gemini", Name: "Gemini 2.5 Flash", MaxTokens: 1000000,
-			Capabilities: []ModelCapability{CapabilityChat, CapabilityVision, CapabilityFunctionCall},
+			Capabilities: []string{"chat", "vision", "function_call", "thinking"},
+		},
+		{
+			ID: "gemini-2.0-flash", Provider: "gemini", Name: "Gemini 2.0 Flash", MaxTokens: 1000000,
+			Capabilities: []string{"chat", "vision", "function_call", "tool_use"},
+		},
+		{
+			ID: "gemini-2.0-flash-lite", Provider: "gemini", Name: "Gemini 2.0 Flash Lite", MaxTokens: 1000000,
+			Capabilities: []string{"chat", "function_call"},
+		},
+		{
+			ID: "gemini-2.0-pro", Provider: "gemini", Name: "Gemini 2.0 Pro Experimental", MaxTokens: 2000000,
+			Capabilities: []string{"chat", "vision", "code", "function_call", "tool_use"},
 		},
 	}
 }
 
-// Gemini API request/response structures
-type geminiRequest struct {
-	Contents          []geminiContent         `json:"contents"`
-	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
-	Tools             []geminiTool            `json:"tools,omitempty"`
-	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
-}
-
-type geminiContent struct {
-	Role  string       `json:"role,omitempty"`
-	Parts []geminiPart `json:"parts"`
-}
-
-type geminiPart struct {
-	Text             string                  `json:"text,omitempty"`
-	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
-	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
-}
-
-type geminiFunctionCall struct {
-	Name string                 `json:"name"`
-	Args map[string]interface{} `json:"args"`
-}
-
-type geminiFunctionResponse struct {
-	Name     string                 `json:"name"`
-	Response map[string]interface{} `json:"response"`
-}
-
-type geminiGenerationConfig struct {
-	Temperature      *float64              `json:"temperature,omitempty"`
-	MaxOutputTokens  *int                  `json:"maxOutputTokens,omitempty"`
-	TopP             *float64              `json:"topP,omitempty"`
-	TopK             *int                  `json:"topK,omitempty"`
-	StopSequences    []string              `json:"stopSequences,omitempty"`
-	ResponseMimeType string                `json:"responseMimeType,omitempty"`
-	ResponseSchema   *geminiResponseSchema `json:"responseSchema,omitempty"`
-}
-
-type geminiResponseSchema struct {
-	Type        string                 `json:"type"`
-	Description string                 `json:"description,omitempty"`
-	Properties  map[string]interface{} `json:"properties,omitempty"`
-	Required    []string               `json:"required,omitempty"`
-}
-
-type geminiTool struct {
-	FunctionDeclarations []geminiFunctionDeclaration `json:"functionDeclarations"`
-}
-
-type geminiFunctionDeclaration struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Parameters  map[string]interface{} `json:"parameters"`
-}
-
-type geminiResponse struct {
-	Candidates    []geminiCandidate    `json:"candidates"`
-	UsageMetadata *geminiUsageMetadata `json:"usageMetadata,omitempty"`
-}
-
-type geminiCandidate struct {
-	Content      geminiContent `json:"content"`
-	FinishReason string        `json:"finishReason,omitempty"`
-	Index        int           `json:"index,omitempty"`
-}
-
-type geminiUsageMetadata struct {
-	PromptTokenCount     int `json:"promptTokenCount"`
-	CandidatesTokenCount int `json:"candidatesTokenCount"`
-	TotalTokenCount      int `json:"totalTokenCount"`
-}
-
-// Streaming structures
-type geminiStreamResponse struct {
-	Candidates    []geminiCandidate    `json:"candidates,omitempty"`
-	UsageMetadata *geminiUsageMetadata `json:"usageMetadata,omitempty"`
-}
-
-func (p *GeminiProvider) Complete(ctx context.Context, req *Request) (*Response, error) {
+func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
 
 	modelName := req.Model
 
-	// Build Gemini request
 	geminiReq := geminiRequest{
 		Contents: make([]geminiContent, 0),
 	}
 
-	// Set generation configuration
-	if req.Temperature != nil || req.MaxTokens != nil || req.ResponseFormat != nil {
+	// Set generation configuration - always set for 2.5 models to enable thinking
+	if req.Temperature != nil || req.MaxTokens != nil || req.ResponseFormat != nil || strings.Contains(modelName, "2.5") {
 		geminiReq.GenerationConfig = &geminiGenerationConfig{
 			Temperature:     req.Temperature,
 			MaxOutputTokens: req.MaxTokens,
@@ -142,20 +81,20 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *Request) (*Response,
 		// Handle response format
 		if req.ResponseFormat != nil {
 			switch req.ResponseFormat.Type {
-			case ResponseFormatJSONObject:
+			case "json_object":
 				geminiReq.GenerationConfig.ResponseMimeType = "application/json"
-			case ResponseFormatJSONSchema:
+			case "json_schema":
 				geminiReq.GenerationConfig.ResponseMimeType = "application/json"
 				if req.ResponseFormat.JSONSchema != nil && req.ResponseFormat.JSONSchema.Schema != nil {
-					if schema, ok := req.ResponseFormat.JSONSchema.Schema.(map[string]interface{}); ok {
+					if schema, ok := req.ResponseFormat.JSONSchema.Schema.(map[string]any); ok {
 						geminiReq.GenerationConfig.ResponseSchema = &geminiResponseSchema{
 							Type:        "object",
 							Description: req.ResponseFormat.JSONSchema.Description,
 						}
-						if props, ok := schema["properties"].(map[string]interface{}); ok {
+						if props, ok := schema["properties"].(map[string]any); ok {
 							geminiReq.GenerationConfig.ResponseSchema.Properties = props
 						}
-						if required, ok := schema["required"].([]interface{}); ok {
+						if required, ok := schema["required"].([]any); ok {
 							reqFields := make([]string, len(required))
 							for i, field := range required {
 								if fieldStr, ok := field.(string); ok {
@@ -174,7 +113,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *Request) (*Response,
 	var systemMessage string
 	for _, msg := range req.Messages {
 		if msg.Role == "system" {
-			// Gemini uses systemInstruction to handle system messages
+			// Gemini uses systemInstruction for system messages
 			systemMessage = msg.Content
 			continue
 		}
@@ -184,7 +123,6 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *Request) (*Response,
 			Parts: []geminiPart{},
 		}
 
-		// Add text content
 		if msg.Content != "" {
 			content.Parts = append(content.Parts, geminiPart{Text: msg.Content})
 		}
@@ -192,10 +130,9 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *Request) (*Response,
 		// Handle tool calls
 		if len(msg.ToolCalls) > 0 {
 			for _, toolCall := range msg.ToolCalls {
-				var args map[string]interface{}
+				var args map[string]any
 				if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-					// If parsing fails, try direct use
-					args = map[string]interface{}{"input": toolCall.Function.Arguments}
+					args = map[string]any{"input": toolCall.Function.Arguments}
 				}
 				content.Parts = append(content.Parts, geminiPart{
 					FunctionCall: &geminiFunctionCall{
@@ -208,13 +145,12 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *Request) (*Response,
 
 		// Handle tool responses
 		if msg.ToolCallID != "" {
-			var response map[string]interface{}
+			var response map[string]any
 			if err := json.Unmarshal([]byte(msg.Content), &response); err != nil {
-				// If parsing fails, use raw text
-				response = map[string]interface{}{"result": msg.Content}
+				response = map[string]any{"result": msg.Content}
 			}
 
-			// Get tool name from Extra field, or use default if not available
+			// Get tool name from context or generate one
 			toolName := "function_result"
 			if req.Extra != nil {
 				if name, ok := req.Extra["tool_name"].(string); ok {
@@ -235,7 +171,6 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *Request) (*Response,
 		}
 	}
 
-	// Set system instruction
 	if systemMessage != "" {
 		geminiReq.SystemInstruction = &geminiContent{
 			Parts: []geminiPart{{Text: systemMessage}},
@@ -248,8 +183,8 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *Request) (*Response,
 			FunctionDeclarations: make([]geminiFunctionDeclaration, len(req.Tools)),
 		}
 		for i, t := range req.Tools {
-			var params map[string]interface{}
-			if p, ok := t.Function.Parameters.(map[string]interface{}); ok {
+			var params map[string]any
+			if p, ok := t.Function.Parameters.(map[string]any); ok {
 				params = p
 			} else {
 				if jsonBytes, err := json.Marshal(t.Function.Parameters); err == nil {
@@ -273,7 +208,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *Request) (*Response,
 	}
 
 	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s",
-		p.config.BaseURL, modelName, p.config.APIKey)
+		p.Config().BaseURL, modelName, p.Config().APIKey)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
@@ -298,7 +233,6 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *Request) (*Response,
 		return nil, fmt.Errorf("gemini: decode response: %w", err)
 	}
 
-	// Build response
 	response := &Response{
 		Model:    modelName,
 		Provider: "gemini",
@@ -308,6 +242,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *Request) (*Response,
 		response.Usage = Usage{
 			PromptTokens:     geminiResp.UsageMetadata.PromptTokenCount,
 			CompletionTokens: geminiResp.UsageMetadata.CandidatesTokenCount,
+			ReasoningTokens:  geminiResp.UsageMetadata.ThoughtsTokenCount,
 			TotalTokens:      geminiResp.UsageMetadata.TotalTokenCount,
 		}
 	}
@@ -316,11 +251,18 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *Request) (*Response,
 		candidate := geminiResp.Candidates[0]
 		response.FinishReason = candidate.FinishReason
 
-		// Extract content and tool calls
+		// Extract content, thinking, and tool calls
+		var thinkingContent string
 		for _, part := range candidate.Content.Parts {
 			if part.Text != "" {
-				response.Content += part.Text
+				// Check if this part is thinking content
+				if part.Thought != nil && *part.Thought {
+					thinkingContent += part.Text
+				} else {
+					response.Content += part.Text
+				}
 			}
+
 			if part.FunctionCall != nil {
 				args, _ := json.Marshal(part.FunctionCall.Args)
 				response.ToolCalls = append(response.ToolCalls, ToolCall{
@@ -331,6 +273,15 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *Request) (*Response,
 						Arguments: string(args),
 					},
 				})
+			}
+		}
+
+		// Populate reasoning data if thinking content exists
+		if thinkingContent != "" {
+			response.Reasoning = &ReasoningData{
+				Content:    thinkingContent,
+				Summary:    "Gemini thinking process",
+				TokensUsed: geminiResp.UsageMetadata.ThoughtsTokenCount,
 			}
 		}
 	}
@@ -344,21 +295,26 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	}
 
 	modelName := req.Model
-
-	// Build request (similar to Complete method)
 	geminiReq := geminiRequest{
 		Contents: make([]geminiContent, 0),
 	}
 
-	// Set generation configuration
-	if req.Temperature != nil || req.MaxTokens != nil {
+	if req.Temperature != nil || req.MaxTokens != nil || strings.Contains(modelName, "2.5") {
 		geminiReq.GenerationConfig = &geminiGenerationConfig{
 			Temperature:     req.Temperature,
 			MaxOutputTokens: req.MaxTokens,
 		}
+
+		// Enable thinking for 2.5 models
+		if strings.Contains(modelName, "2.5") {
+			geminiReq.GenerationConfig.ThinkingConfig = &geminiThinkingConfig{
+				ThinkingBudget:  intPtr(-1), // Dynamic thinking budget for complete thoughts
+				IncludeThoughts: boolPtr(true),
+			}
+		}
 	}
 
-	// Handle messages (simplified version, mainly process text)
+	// Handle messages (simplified version for streaming)
 	var systemMessage string
 	for _, msg := range req.Messages {
 		if msg.Role == "system" {
@@ -375,21 +331,19 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		}
 	}
 
-	// Set system instruction
 	if systemMessage != "" {
 		geminiReq.SystemInstruction = &geminiContent{
 			Parts: []geminiPart{{Text: systemMessage}},
 		}
 	}
 
-	// Send streaming request
 	body, err := json.Marshal(geminiReq)
 	if err != nil {
 		return nil, fmt.Errorf("gemini: marshal request: %w", err)
 	}
 
 	url := fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?key=%s",
-		p.config.BaseURL, modelName, p.config.APIKey)
+		p.Config().BaseURL, modelName, p.Config().APIKey)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
@@ -435,16 +389,23 @@ func (p *GeminiProvider) generateToolCallID() string {
 	return fmt.Sprintf("call_%d", time.Now().UnixNano())
 }
 
-// geminiStreamReader implements StreamReader for Gemini
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+func intPtr(i int) *int {
+	return &i
+}
+
+// geminiStreamReader implements streaming for Gemini
 type geminiStreamReader struct {
 	resp     *http.Response
 	scanner  *bufio.Scanner
 	provider string
-	err      error
 	done     bool
 }
 
-func (r *geminiStreamReader) Read() (*StreamChunk, error) {
+func (r *geminiStreamReader) Next() (*StreamChunk, error) {
 	if r.done {
 		return &StreamChunk{Done: true, Provider: r.provider}, nil
 	}
@@ -453,7 +414,7 @@ func (r *geminiStreamReader) Read() (*StreamChunk, error) {
 		line := r.scanner.Text()
 		line = strings.TrimSpace(line)
 
-		// Gemini streaming response format might be different, handle JSON lines here
+		// Skip empty lines
 		if line == "" || line == "data: [DONE]" {
 			continue
 		}
@@ -461,7 +422,7 @@ func (r *geminiStreamReader) Read() (*StreamChunk, error) {
 		// Remove possible "data: " prefix
 		line = strings.TrimPrefix(line, "data: ")
 
-		// Skip empty lines and non-JSON lines
+		// Skip non-JSON lines
 		if line == "" || (!strings.HasPrefix(line, "{") && !strings.HasPrefix(line, "[")) {
 			continue
 		}
@@ -478,26 +439,33 @@ func (r *geminiStreamReader) Read() (*StreamChunk, error) {
 				Provider: r.provider,
 			}
 
-			// Extract text content
+			// Extract text content and thinking content
 			for _, part := range candidate.Content.Parts {
-				if part.Text != "" {
-					streamChunk.Type = ChunkTypeContent
+				// Check if this is thinking content
+				if part.Thought != nil && *part.Thought && part.Text != "" {
+					streamChunk.Type = "reasoning"
+					streamChunk.Reasoning = &ReasoningChunk{
+						Content: part.Text,
+						Summary: "Gemini thinking process",
+					}
+					return streamChunk, nil
+				} else if part.Text != "" {
+					// Regular content
+					streamChunk.Type = "content"
 					streamChunk.Content = part.Text
 					return streamChunk, nil
 				}
 
 				// Handle tool calls - Gemini typically returns complete tool calls
 				if part.FunctionCall != nil {
-					streamChunk.Type = ChunkTypeToolCall
+					streamChunk.Type = "tool_call_delta"
 					args, _ := json.Marshal(part.FunctionCall.Args)
-					streamChunk.ToolCalls = []ToolCall{{
-						ID:   fmt.Sprintf("call_%d", time.Now().UnixNano()),
-						Type: "function",
-						Function: FunctionCall{
-							Name:      part.FunctionCall.Name,
-							Arguments: string(args),
-						},
-					}}
+					streamChunk.ToolCallDelta = &ToolCallDelta{
+						ID:             fmt.Sprintf("call_%d", time.Now().UnixNano()),
+						Type:           "function",
+						FunctionName:   part.FunctionCall.Name,
+						ArgumentsDelta: string(args),
+					}
 					return streamChunk, nil
 				}
 			}
@@ -510,22 +478,16 @@ func (r *geminiStreamReader) Read() (*StreamChunk, error) {
 			}
 		}
 
-		// Handle usage statistics
+		// Handle usage statistics - Note: StreamChunk doesn't have Usage field
+		// This will be handled at the end of stream or in a different way
 		if streamResp.UsageMetadata != nil {
-			return &StreamChunk{
-				Type:     ChunkTypeUsage,
-				Provider: r.provider,
-				Usage: &Usage{
-					PromptTokens:     streamResp.UsageMetadata.PromptTokenCount,
-					CompletionTokens: streamResp.UsageMetadata.CandidatesTokenCount,
-					TotalTokens:      streamResp.UsageMetadata.TotalTokenCount,
-				},
-			}, nil
+			// For now, we can just continue or handle this differently
+			// Usage statistics will be available in the final response
+			continue
 		}
 	}
 
 	if err := r.scanner.Err(); err != nil {
-		r.err = err
 		return nil, err
 	}
 
@@ -537,10 +499,89 @@ func (r *geminiStreamReader) Close() error {
 	return r.resp.Body.Close()
 }
 
-func (r *geminiStreamReader) Err() error {
-	return r.err
+// Gemini API request/response structures
+type geminiRequest struct {
+	Contents          []geminiContent         `json:"contents"`
+	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
+	Tools             []geminiTool            `json:"tools,omitempty"`
+	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
 }
 
-func init() {
-	RegisterProvider("gemini", NewGeminiProvider)
+type geminiContent struct {
+	Role  string       `json:"role,omitempty"`
+	Parts []geminiPart `json:"parts"`
+}
+
+type geminiPart struct {
+	Text             string                  `json:"text,omitempty"`
+	Thought          *bool                   `json:"thought,omitempty"`
+	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
+	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
+}
+
+type geminiFunctionCall struct {
+	Name string         `json:"name"`
+	Args map[string]any `json:"args"`
+}
+
+type geminiFunctionResponse struct {
+	Name     string         `json:"name"`
+	Response map[string]any `json:"response"`
+}
+
+type geminiGenerationConfig struct {
+	Temperature      *float64              `json:"temperature,omitempty"`
+	MaxOutputTokens  *int                  `json:"maxOutputTokens,omitempty"`
+	TopP             *float64              `json:"topP,omitempty"`
+	TopK             *int                  `json:"topK,omitempty"`
+	StopSequences    []string              `json:"stopSequences,omitempty"`
+	ResponseMimeType string                `json:"responseMimeType,omitempty"`
+	ResponseSchema   *geminiResponseSchema `json:"responseSchema,omitempty"`
+	ThinkingConfig   *geminiThinkingConfig `json:"thinkingConfig,omitempty"`
+}
+
+type geminiResponseSchema struct {
+	Type        string         `json:"type"`
+	Description string         `json:"description,omitempty"`
+	Properties  map[string]any `json:"properties,omitempty"`
+	Required    []string       `json:"required,omitempty"`
+}
+
+type geminiThinkingConfig struct {
+	ThinkingBudget  *int  `json:"thinkingBudget,omitempty"`
+	IncludeThoughts *bool `json:"includeThoughts,omitempty"`
+}
+
+type geminiTool struct {
+	FunctionDeclarations []geminiFunctionDeclaration `json:"functionDeclarations"`
+}
+
+type geminiFunctionDeclaration struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+}
+
+type geminiResponse struct {
+	Candidates    []geminiCandidate    `json:"candidates"`
+	UsageMetadata *geminiUsageMetadata `json:"usageMetadata,omitempty"`
+}
+
+type geminiCandidate struct {
+	Content      geminiContent `json:"content"`
+	FinishReason string        `json:"finishReason,omitempty"`
+	Index        int           `json:"index,omitempty"`
+}
+
+type geminiUsageMetadata struct {
+	PromptTokenCount     int `json:"promptTokenCount"`
+	CandidatesTokenCount int `json:"candidatesTokenCount"`
+	ThoughtsTokenCount   int `json:"thoughtsTokenCount,omitempty"`
+	TotalTokenCount      int `json:"totalTokenCount"`
+}
+
+// Streaming structures
+type geminiStreamResponse struct {
+	Candidates    []geminiCandidate    `json:"candidates,omitempty"`
+	UsageMetadata *geminiUsageMetadata `json:"usageMetadata,omitempty"`
 }

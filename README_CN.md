@@ -6,6 +6,14 @@
 
 一个简洁优雅的 Go 语言库，用于统一访问多个 LLM 平台。
 
+## 核心设计理念
+
+- **单一入口** - 只有 `litellm.New()` - 消除多API选择困扰  
+- **智能解析** - 模型自动解析到正确提供者 (gpt-4o → OpenAI, claude → Anthropic)
+- **类型安全配置** - `WithOpenAI()`, `WithAnthropic()` 代替易出错的字符串配置
+- **零配置启动** - 环境变量即可立即使用
+- **提供者无关** - 相同代码适用于所有AI提供者
+
 ## 特性
 
 - **简洁易用** - 一行代码调用任意 LLM 平台
@@ -62,18 +70,20 @@ func main() {
     // 方式1: 环境变量自动发现
     client := litellm.New()
 
-    // 方式2: 手动配置 (生产环境推荐)
+    // 方式2: 类型安全手动配置 (生产环境推荐)
     client = litellm.New(
-		litellm.WithOpenAI("your-openai-key"),
-		litellm.WithAnthropic("your-anthropic-key"),
-		litellm.WithGemini("your-gemini-key"),
-		litellm.WithOpenRouter("your-openrouter-key"),
-		litellm.WithDefaults(2048, 0.8), // 自定义默认参数
+        litellm.WithOpenAI("your-openai-key"),
+        litellm.WithAnthropic("your-anthropic-key"),
+        litellm.WithGemini("your-gemini-key"),
+        litellm.WithQwen("your-dashscope-key"),
+        litellm.WithGLM("your-glm-key"),
+        litellm.WithOpenRouter("your-openrouter-key"),
+        litellm.WithDefaults(2048, 0.8), // 自定义默认参数
     )
 
     // 基础聊天
-    response, err := client.Complete(context.Background(), &litellm.Request{
-        Model: "gpt-4o-mini",
+    response, err := client.Chat(context.Background(), &litellm.Request{
+        Model: "gpt-4o-mini", // 自动解析到 OpenAI 提供者
         Messages: []litellm.Message{
             {Role: "user", Content: "解释什么是人工智能"},
         },
@@ -100,8 +110,8 @@ LiteLLM 支持结构化 JSON 输出和 JSON Schema 验证，确保跨所有平�
 ### 基础 JSON 对象输出
 
 ```go
-response, err := client.Complete(context.Background(), &litellm.Request{
-    Model: "gpt-4o-mini",
+response, err := client.Chat(context.Background(), &litellm.Request{
+    Model: "gpt-4o-mini", // 自动解析到 OpenAI 提供者
     Messages: []litellm.Message{
         {Role: "user", Content: "生成一个人的信息"},
     },
@@ -136,7 +146,7 @@ personSchema := map[string]interface{}{
     "required": []string{"name", "age", "email"},
 }
 
-response, err := client.Complete(context.Background(), &litellm.Request{
+response, err := client.Chat(context.Background(), &litellm.Request{
     Model: "gpt-4o-mini",
     Messages: []litellm.Message{
         {Role: "user", Content: "生成一个软件工程师的档案"},
@@ -174,7 +184,7 @@ json.Unmarshal([]byte(response.Content), &person)
 providers := []string{"gpt-4o-mini", "claude-4-sonnet", "gemini-2.5-flash"}
 
 for _, model := range providers {
-    response, _ := client.Complete(ctx, &litellm.Request{
+    response, _ := client.Chat(ctx, &litellm.Request{
         Model: model,
         Messages: []litellm.Message{
             {Role: "user", Content: "生成用户数据"},
@@ -190,7 +200,7 @@ for _, model := range providers {
 完整支持 OpenAI o 系列推理模型，包括 Chat API 和 Responses API：
 
 ```go
-response, err := client.Complete(context.Background(), &litellm.Request{
+response, err := client.Chat(context.Background(), &litellm.Request{
     Model: "o3-mini",
     Messages: []litellm.Message{
         {Role: "user", Content: "逐步计算 15 * 8"},
@@ -243,7 +253,7 @@ stream, err := client.Stream(context.Background(), &litellm.Request{
 
 defer stream.Close()
 for {
-    chunk, err := stream.Read()
+    chunk, err := stream.Next()
     if err != nil || chunk.Done {
         break
     }
@@ -263,7 +273,7 @@ Qwen3-Coder 模型支持通过 `enable_thinking` 参数启用逐步推理，为�
 
 ```go
 // 启用思考模式进行复杂问题求解
-response, err := client.Complete(ctx, &litellm.Request{
+response, err := client.Chat(ctx, &litellm.Request{
     Model: "qwen3-coder-plus",
     Messages: []litellm.Message{
         {Role: "user", Content: "编写一个 Python 函数实现二分查找算法。请逐步解释你的方法。"},
@@ -291,7 +301,7 @@ GLM-4.5 模型支持通过 `enable_thinking` 参数启用混合推理能力，�
 
 ```go
 // 启用 GLM-4.5 思考模式
-response, err := client.Complete(ctx, &litellm.Request{
+response, err := client.Chat(ctx, &litellm.Request{
     Model: "glm-4.5",
     Messages: []litellm.Message{
         {Role: "user", Content: "设计一个高效的算法来解决旅行商问题，并分析其时间复杂度。"},
@@ -339,7 +349,7 @@ tools := []litellm.Tool{
     },
 }
 
-response, err := client.Complete(context.Background(), &litellm.Request{
+response, err := client.Chat(context.Background(), &litellm.Request{
     Model: "gpt-4o-mini",
     Messages: []litellm.Message{
         {Role: "user", Content: "北京天气怎么样？"},
@@ -373,7 +383,7 @@ toolCalls := make(map[string]*ToolCallBuilder)
 
 defer stream.Close()
 for {
-    chunk, err := stream.Read()
+    chunk, err := stream.Next()
     if err != nil || chunk.Done {
         break
     }
@@ -435,7 +445,7 @@ type MyProvider struct {
     *litellm.BaseProvider
 }
 
-func (p *MyProvider) Complete(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
+func (p *MyProvider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
     // 实现 API 调用逻辑
     return &litellm.Response{
         Content:  "hi！",
@@ -452,7 +462,7 @@ func init() {
 
 // 使用
 client := litellm.New()
-response, _ := client.Complete(ctx, &litellm.Request{
+response, _ := client.Chat(ctx, &litellm.Request{
     Model: "my-model",
     Messages: []litellm.Message{{Role: "user", Content: "你好"}},
 })
@@ -571,7 +581,7 @@ type JSONSchema struct {
 ```go
 func Quick(model, message string) (*Response, error)
 func New(opts ...ClientOption) *Client
-func (c *Client) Complete(ctx context.Context, req *Request) (*Response, error)
+func (c *Client) Chat(ctx context.Context, req *Request) (*Response, error)
 func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error)
 ```
 

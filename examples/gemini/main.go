@@ -2,141 +2,322 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/voocel/litellm"
 )
 
 func main() {
-	fmt.Println("=== Google Gemini Complete Example ===")
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" {
+		log.Fatal("GEMINI_API_KEY environment variable is required")
+	}
 
-	client := litellm.New(litellm.WithGemini("your-gemini-key"))
+	client := litellm.New(litellm.WithGemini(apiKey))
 
-	// Basic conversation
-	fmt.Println("\n--- Basic Chat ---")
-	response, err := client.Complete(context.Background(), &litellm.Request{
-		Model: "gemini-2.5-flash",
+	fmt.Println("Google Gemini Examples - From Simple to Complex")
+	fmt.Println("==============================================")
+
+	// Example 1: Basic Chat
+	fmt.Println("\n1. Basic Chat Example")
+	fmt.Println("---------------------")
+	basicChat(client)
+
+	// Example 2: Streaming Chat
+	fmt.Println("\n2. Streaming Chat Example")
+	fmt.Println("-------------------------")
+	streamingChat(client)
+
+	// Example 3: Function/Tool Calling
+	fmt.Println("\n3. Function/Tool Calling Example")
+	fmt.Println("--------------------------------")
+	functionCalling(client)
+
+	// Example 4: JSON Schema Response Format
+	fmt.Println("\n4. JSON Schema Response Format Example")
+	fmt.Println("--------------------------------------")
+	jsonSchemaExample(client)
+
+	// Example 5: Advanced Features (2.5 Models with Thinking)
+	fmt.Println("\n5. Advanced Features (Gemini 2.5 Pro)")
+	fmt.Println("-------------------------------------")
+	advancedFeatures(client)
+
+	// Example 6: System Instructions
+	fmt.Println("\n6. System Instructions Example")
+	fmt.Println("------------------------------")
+	systemInstructions(client)
+}
+
+// Example 1: Basic Chat
+func basicChat(client *litellm.Client) {
+	request := &litellm.Request{
+		Model: "gemini-2.5-pro", // 恢复到2.5模型
 		Messages: []litellm.Message{
-			{Role: "user", Content: "Explain the difference between AI, ML, and Deep Learning"},
+			{
+				Role:    "user",
+				Content: "你是谁",
+			},
 		},
-		MaxTokens:   litellm.IntPtr(200),
-		Temperature: litellm.Float64Ptr(0.6),
-	})
+		MaxTokens:   litellm.IntPtr(10000),
+		Temperature: litellm.Float64Ptr(0.7),
+	}
+
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
 	if err != nil {
-		log.Fatalf("Basic chat failed: %v", err)
+		log.Printf("Basic chat failed: %v", err)
+		return
+	}
+
+	// Display reasoning content if available
+	if response.Reasoning != nil && response.Reasoning.Content != "" {
+		fmt.Printf("Reasoning Content: %s\n", response.Reasoning.Content)
+		fmt.Printf("Reasoning Summary: %s\n", response.Reasoning.Summary)
+		fmt.Printf("Reasoning Tokens: %d\n", response.Reasoning.TokensUsed)
+		fmt.Println("---")
 	}
 
 	fmt.Printf("Response: %s\n", response.Content)
-	fmt.Printf("Tokens: %d\n", response.Usage.TotalTokens)
+	fmt.Printf("Usage: %d prompt + %d completion + %d reasoning = %d total tokens\n",
+		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.ReasoningTokens, response.Usage.TotalTokens)
+}
 
-	// Streaming conversation
-	fmt.Println("\n--- Streaming Chat ---")
-	stream, err := client.Stream(context.Background(), &litellm.Request{
-		Model: "gemini-2.5-flash",
+// Example 2: Streaming Chat
+func streamingChat(client *litellm.Client) {
+	request := &litellm.Request{
+		Model: "gemini-2.0-flash-lite",
 		Messages: []litellm.Message{
-			{Role: "user", Content: "Write a detailed explanation of how neural networks work"},
+			{
+				Role:    "user",
+				Content: "Write a haiku about artificial intelligence",
+			},
 		},
-		MaxTokens:   litellm.IntPtr(400),
-		Temperature: litellm.Float64Ptr(0.7),
-	})
+		MaxTokens:   litellm.IntPtr(100),
+		Temperature: litellm.Float64Ptr(0.8),
+		Stream:      true,
+	}
+
+	ctx := context.Background()
+	stream, err := client.Stream(ctx, request)
 	if err != nil {
-		log.Fatalf("Streaming failed: %v", err)
+		log.Printf("Streaming failed: %v", err)
+		return
 	}
 	defer stream.Close()
 
-	fmt.Print("Streaming explanation: ")
+	fmt.Print("Streaming response: ")
 	for {
-		chunk, err := stream.Read()
+		chunk, err := stream.Next()
 		if err != nil {
-			log.Fatalf("Stream read failed: %v", err)
+			log.Printf("Stream error: %v", err)
+			break
 		}
 
 		if chunk.Done {
 			break
 		}
 
-		if chunk.Type == litellm.ChunkTypeContent {
+		if chunk.Type == "content" && chunk.Content != "" {
 			fmt.Print(chunk.Content)
 		}
 	}
 	fmt.Println()
+}
 
-	// Function calling
-	fmt.Println("\n--- Function Calling ---")
-	tools := []litellm.Tool{
-		{
-			Type: "function",
-			Function: litellm.FunctionSchema{
-				Name:        "search_knowledge",
-				Description: "Search for information in a knowledge base",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"query": map[string]interface{}{
-							"type":        "string",
-							"description": "Search query",
-						},
-						"category": map[string]interface{}{
-							"type": "string",
-							"enum": []string{"science", "technology", "history", "general"},
+// Example 3: Function/Tool Calling
+func functionCalling(client *litellm.Client) {
+	// Define a math calculation function
+	mathFunction := litellm.Tool{
+		Type: "function",
+		Function: litellm.FunctionDef{
+			Name:        "calculate_area",
+			Description: "Calculate the area of different shapes",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"shape": map[string]interface{}{
+						"type":        "string",
+						"description": "The shape to calculate area for",
+						"enum":        []string{"circle", "rectangle", "triangle"},
+					},
+					"dimensions": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"radius": map[string]interface{}{
+								"type":        "number",
+								"description": "Radius for circle",
+							},
+							"width": map[string]interface{}{
+								"type":        "number",
+								"description": "Width for rectangle",
+							},
+							"height": map[string]interface{}{
+								"type":        "number",
+								"description": "Height for rectangle or triangle",
+							},
+							"base": map[string]interface{}{
+								"type":        "number",
+								"description": "Base for triangle",
+							},
 						},
 					},
-					"required": []string{"query"},
 				},
+				"required": []string{"shape", "dimensions"},
 			},
 		},
 	}
 
-	toolResp, err := client.Complete(context.Background(), &litellm.Request{
+	request := &litellm.Request{
+		Model: "gemini-2.0-flash",
+		Messages: []litellm.Message{
+			{
+				Role:    "user",
+				Content: "Calculate the area of a circle with radius 5",
+			},
+		},
+		Tools:     []litellm.Tool{mathFunction},
+		MaxTokens: litellm.IntPtr(300),
+	}
+
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
+	if err != nil {
+		log.Printf("Function calling failed: %v", err)
+		return
+	}
+
+	fmt.Printf("Response: %s\n", response.Content)
+	if len(response.ToolCalls) > 0 {
+		for _, toolCall := range response.ToolCalls {
+			fmt.Printf("Tool Call: %s with arguments: %s\n",
+				toolCall.Function.Name, toolCall.Function.Arguments)
+		}
+	}
+}
+
+// Example 4: JSON Schema Response Format
+func jsonSchemaExample(client *litellm.Client) {
+	// Define JSON schema for movie recommendation
+	schema := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"movie": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"title": map[string]interface{}{
+						"type": "string",
+					},
+					"genre": map[string]interface{}{
+						"type": "string",
+					},
+					"year": map[string]interface{}{
+						"type": "integer",
+					},
+					"rating": map[string]interface{}{
+						"type": "number",
+					},
+					"description": map[string]interface{}{
+						"type": "string",
+					},
+				},
+				"required": []string{"title", "genre", "year", "description"},
+			},
+		},
+		"required": []string{"movie"},
+	}
+
+	request := &litellm.Request{
+		Model: "gemini-2.0-flash",
+		Messages: []litellm.Message{
+			{
+				Role:    "user",
+				Content: "Recommend a classic science fiction movie",
+			},
+		},
+		ResponseFormat: &litellm.ResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &litellm.JSONSchema{
+				Name:        "movie_recommendation",
+				Description: "A movie recommendation with details",
+				Schema:      schema,
+				Strict:      litellm.BoolPtr(true),
+			},
+		},
+		MaxTokens: litellm.IntPtr(300),
+	}
+
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
+	if err != nil {
+		log.Printf("JSON schema failed: %v", err)
+		return
+	}
+
+	fmt.Printf("Structured JSON Response: %s\n", response.Content)
+
+	// Parse and pretty print JSON
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(response.Content), &result); err == nil {
+		prettyJSON, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Printf("Formatted JSON:\n%s\n", string(prettyJSON))
+	}
+}
+
+// Example 5: Advanced Features (Gemini 2.5 Pro with thinking capabilities)
+func advancedFeatures(client *litellm.Client) {
+	request := &litellm.Request{
 		Model: "gemini-2.5-pro",
 		Messages: []litellm.Message{
-			{Role: "user", Content: "Search for information about quantum computing"},
+			{
+				Role:    "user",
+				Content: "Analyze the potential impact of quantum computing on cryptography. Consider both risks and opportunities.",
+			},
 		},
-		Tools:      tools,
-		ToolChoice: "auto",
-	})
+		MaxTokens:   litellm.IntPtr(1000),
+		Temperature: litellm.Float64Ptr(0.3), // Lower temperature for analytical thinking
+	}
+
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
 	if err != nil {
-		log.Fatalf("Function calling failed: %v", err)
+		log.Printf("Advanced features failed: %v", err)
+		return
 	}
 
-	if len(toolResp.ToolCalls) > 0 {
-		fmt.Printf("🔧 Tool called: %s\n", toolResp.ToolCalls[0].Function.Name)
-		fmt.Printf("📋 Arguments: %s\n", toolResp.ToolCalls[0].Function.Arguments)
-	} else {
-		fmt.Printf("Response: %s\n", toolResp.Content)
-	}
+	fmt.Printf("Response: %s\n", response.Content)
+	fmt.Printf("Model: %s\n", response.Model)
+	fmt.Printf("Total Usage: %d tokens\n", response.Usage.TotalTokens)
+}
 
-	// Large context processing
-	fmt.Println("\n--- Large Context Processing ---")
-	longText := `
-	Artificial Intelligence (AI) is a broad field of computer science focused on creating systems
-	capable of performing tasks that typically require human intelligence. Machine Learning (ML)
-	is a subset of AI that enables computers to learn and improve from experience without being
-	explicitly programmed. Deep Learning is a subset of ML that uses neural networks with multiple
-	layers to model and understand complex patterns in data.
-
-	The history of AI dates back to the 1950s when Alan Turing proposed the Turing Test. Since then,
-	AI has evolved through various phases including expert systems, machine learning, and now deep
-	learning. Modern AI applications include natural language processing, computer vision, robotics,
-	and autonomous systems.
-
-	Current challenges in AI include explainability, bias, privacy, and the need for large amounts
-	of training data. Future directions include artificial general intelligence (AGI), quantum
-	machine learning, and neuromorphic computing.
-	`
-
-	contextResp, err := client.Complete(context.Background(), &litellm.Request{
-		Model: "gemini-2.5-pro",
+// Example 6: System Instructions
+func systemInstructions(client *litellm.Client) {
+	request := &litellm.Request{
+		Model: "gemini-2.0-flash",
 		Messages: []litellm.Message{
-			{Role: "user", Content: fmt.Sprintf("Summarize this text in 3 key points:\n\n%s", longText)},
+			{
+				Role:    "system",
+				Content: "You are a helpful coding assistant. Always provide code examples with comments and explain the logic clearly.",
+			},
+			{
+				Role:    "user",
+				Content: "How do I reverse a string in Python?",
+			},
 		},
-		MaxTokens:   litellm.IntPtr(150),
-		Temperature: litellm.Float64Ptr(0.3),
-	})
-	if err != nil {
-		log.Fatalf("Large context processing failed: %v", err)
+		MaxTokens:   litellm.IntPtr(300),
+		Temperature: litellm.Float64Ptr(0.2),
 	}
 
-	fmt.Printf("Summary: %s\n", contextResp.Content)
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
+	if err != nil {
+		log.Printf("System instructions failed: %v", err)
+		return
+	}
+
+	fmt.Printf("Response with system instructions: %s\n", response.Content)
+	fmt.Printf("Usage: %d tokens\n", response.Usage.TotalTokens)
 }
