@@ -12,6 +12,7 @@ import (
 type Client struct {
 	providers map[string]Provider
 	defaults  DefaultConfig
+	router    Router
 }
 
 // DefaultConfig holds default configuration values
@@ -33,6 +34,7 @@ func New(opts ...ClientOption) *Client {
 			Temperature: 0.7,
 			Resilience:  DefaultResilienceConfig(),
 		},
+		router: DefaultRouter, // Use default smart router
 	}
 
 	// If no options provided, use auto-discovery
@@ -74,6 +76,13 @@ func WithRetries(maxRetries int, initialDelay time.Duration) ClientOption {
 	return func(c *Client) {
 		c.defaults.Resilience.MaxRetries = maxRetries
 		c.defaults.Resilience.InitialDelay = initialDelay
+	}
+}
+
+// WithRouter sets a custom router for provider selection
+func WithRouter(router Router) ClientOption {
+	return func(c *Client) {
+		c.router = router
 	}
 }
 
@@ -353,28 +362,20 @@ func (c *Client) autoDiscoverProviders() {
 	}
 }
 
-// resolveProvider resolves the provider for a model
+// resolveProvider resolves the provider for a model using the configured router
 func (c *Client) resolveProvider(model string) (Provider, error) {
-	// Strategy 1: If only one provider is configured, use it directly
-	// This allows users to use any model name - let the API validate it
-	if len(c.providers) == 1 {
-		for _, provider := range c.providers {
-			return provider, nil
-		}
+	if len(c.providers) == 0 {
+		return nil, NewError(ErrorTypeValidation, "no providers configured")
 	}
 
-	// Strategy 2: Multiple providers - must match predefined model lists
-	// This ensures correct routing when multiple providers are available
+	// Convert providers map to slice for router
+	availableProviders := make([]Provider, 0, len(c.providers))
 	for _, provider := range c.providers {
-		models := provider.Models()
-		for _, modelInfo := range models {
-			if modelInfo.ID == model {
-				return provider, nil
-			}
-		}
+		availableProviders = append(availableProviders, provider)
 	}
 
-	return nil, fmt.Errorf("no provider found for model '%s'. With multiple providers configured, the model must be in the predefined model list. Available models: %s", model, c.getAvailableModels())
+	// Use configured router for provider selection
+	return c.router.Route(model, availableProviders)
 }
 
 // getAvailableModels returns a string of available models for error messages
