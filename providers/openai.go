@@ -128,17 +128,7 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 
 	// Convert response format
 	if req.ResponseFormat != nil {
-		openaiReq.ResponseFormat = &openaiResponseFormat{
-			Type: req.ResponseFormat.Type,
-		}
-		if req.ResponseFormat.JSONSchema != nil {
-			openaiReq.ResponseFormat.JSONSchema = &openaiJSONSchema{
-				Name:        req.ResponseFormat.JSONSchema.Name,
-				Description: req.ResponseFormat.JSONSchema.Description,
-				Schema:      req.ResponseFormat.JSONSchema.Schema,
-				Strict:      req.ResponseFormat.JSONSchema.Strict,
-			}
-		}
+		openaiReq.ResponseFormat = p.convertResponseFormat(req.ResponseFormat)
 	}
 
 	// Set reasoning parameters if provided (OpenAI format only)
@@ -413,17 +403,7 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 
 	// Convert response format
 	if req.ResponseFormat != nil {
-		openaiReq.ResponseFormat = &openaiResponseFormat{
-			Type: req.ResponseFormat.Type,
-		}
-		if req.ResponseFormat.JSONSchema != nil {
-			openaiReq.ResponseFormat.JSONSchema = &openaiJSONSchema{
-				Name:        req.ResponseFormat.JSONSchema.Name,
-				Description: req.ResponseFormat.JSONSchema.Description,
-				Schema:      req.ResponseFormat.JSONSchema.Schema,
-				Strict:      req.ResponseFormat.JSONSchema.Strict,
-			}
-		}
+		openaiReq.ResponseFormat = p.convertResponseFormat(req.ResponseFormat)
 	}
 
 	// Set correct parameters based on model type
@@ -785,4 +765,42 @@ type responsesAPIUsage struct {
 
 type responsesAPIOutputTokensDetails struct {
 	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+}
+
+// convertResponseFormat converts response format and ensures OpenAI compatibility
+func (p *OpenAIProvider) convertResponseFormat(rf *ResponseFormat) *openaiResponseFormat {
+	result := &openaiResponseFormat{Type: rf.Type}
+
+	if rf.JSONSchema != nil {
+		result.JSONSchema = &openaiJSONSchema{
+			Name:        rf.JSONSchema.Name,
+			Description: rf.JSONSchema.Description,
+			Schema:      p.ensureStrictSchema(rf.JSONSchema.Schema),
+			Strict:      rf.JSONSchema.Strict,
+		}
+	}
+
+	return result
+}
+
+// ensureStrictSchema recursively adds additionalProperties: false to all objects for OpenAI strict mode
+func (p *OpenAIProvider) ensureStrictSchema(schema interface{}) interface{} {
+	switch s := schema.(type) {
+	case map[string]interface{}:
+		result := make(map[string]interface{}, len(s))
+		for k, v := range s {
+			result[k] = p.ensureStrictSchema(v)
+		}
+		if result["type"] == "object" {
+			result["additionalProperties"] = false
+		}
+		return result
+	case []interface{}:
+		for i, v := range s {
+			s[i] = p.ensureStrictSchema(v)
+		}
+		return s
+	default:
+		return schema
+	}
 }

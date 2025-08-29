@@ -22,35 +22,35 @@ func main() {
 	fmt.Println("=====================================")
 
 	// Example 1: Basic Chat
-	fmt.Println("\n1. Basic Chat Example")
-	fmt.Println("---------------------")
-	basicChat(client)
+	//fmt.Println("\n1. Basic Chat Example")
+	//fmt.Println("---------------------")
+	//basicChat(client)
 
-	// Example 2: Streaming Chat
-	fmt.Println("\n2. Streaming Chat Example")
-	fmt.Println("-------------------------")
-	streamingChat(client)
-
-	// Example 3: Function/Tool Calling
-	fmt.Println("\n3. Function/Tool Calling Example")
-	fmt.Println("--------------------------------")
-	functionCalling(client)
-
-	// Example 4: JSON Schema Response Format
+	//// Example 2: Streaming Chat
+	//fmt.Println("\n2. Streaming Chat Example")
+	//fmt.Println("-------------------------")
+	//streamingChat(client)
+	//
+	//// Example 3: Function/Tool Calling
+	//fmt.Println("\n3. Function/Tool Calling Example")
+	//fmt.Println("--------------------------------")
+	//functionCalling(client)
+	//
+	//// Example 4: JSON Schema Response Format
 	fmt.Println("\n4. JSON Schema Response Format Example")
 	fmt.Println("--------------------------------------")
 	jsonSchemaExample(client)
-
-	// Example 5: Reasoning Models (o1, o3, o4, gpt-5)
-	// Note: o1 models use built-in reasoning without explicit parameters
-	fmt.Println("\n5. Reasoning Models Example")
-	fmt.Println("---------------------------")
-	reasoningModels(client)
-
-	// Example 6: Responses API
-	fmt.Println("\n6. Responses API Example")
-	fmt.Println("------------------------")
-	responsesAPI(client)
+	//
+	//// Example 5: Reasoning Models (o1, o3, o4, gpt-5)
+	//// Note: o1 models use built-in reasoning without explicit parameters
+	//fmt.Println("\n5. Reasoning Models Example")
+	//fmt.Println("---------------------------")
+	//reasoningModels(client)
+	//
+	//// Example 6: Responses API
+	//fmt.Println("\n6. Responses API Example")
+	//fmt.Println("------------------------")
+	//responsesAPI(client)
 }
 
 // Example 1: Basic Chat
@@ -177,6 +177,7 @@ func functionCalling(client *litellm.Client) {
 // Example 4: JSON Schema Response Format
 func jsonSchemaExample(client *litellm.Client) {
 	// Define JSON schema for structured response
+	// Note: additionalProperties: false will be automatically added by LiteLLM for OpenAI
 	schema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{

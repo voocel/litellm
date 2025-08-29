@@ -93,10 +93,18 @@ func (p *OpenRouterProvider) Chat(ctx context.Context, req *Request) (*Response,
 	if req.ResponseFormat != nil {
 		responseFormat := map[string]any{"type": req.ResponseFormat.Type}
 		if req.ResponseFormat.JSONSchema != nil {
+			schema := req.ResponseFormat.JSONSchema.Schema
+
+			// For strict mode or when using OpenAI models through OpenRouter,
+			// ensure all objects have additionalProperties: false
+			if req.ResponseFormat.JSONSchema.Strict != nil && *req.ResponseFormat.JSONSchema.Strict {
+				schema = p.ensureStrictSchema(schema)
+			}
+
 			responseFormat["json_schema"] = map[string]any{
 				"name":        req.ResponseFormat.JSONSchema.Name,
 				"description": req.ResponseFormat.JSONSchema.Description,
-				"schema":      req.ResponseFormat.JSONSchema.Schema,
+				"schema":      schema,
 			}
 			if req.ResponseFormat.JSONSchema.Strict != nil {
 				responseFormat["json_schema"].(map[string]any)["strict"] = *req.ResponseFormat.JSONSchema.Strict
@@ -457,6 +465,29 @@ func (r *openRouterStreamReader) Next() (*StreamChunk, error) {
 
 func (r *openRouterStreamReader) Close() error {
 	return r.resp.Body.Close()
+}
+
+// ensureStrictSchema recursively adds additionalProperties: false to all objects for OpenAI strict mode
+// This is needed because OpenRouter uses OpenAI models through Azure, which requires strict JSON schemas
+func (p *OpenRouterProvider) ensureStrictSchema(schema interface{}) interface{} {
+	switch s := schema.(type) {
+	case map[string]interface{}:
+		result := make(map[string]interface{}, len(s))
+		for k, v := range s {
+			result[k] = p.ensureStrictSchema(v)
+		}
+		if result["type"] == "object" {
+			result["additionalProperties"] = false
+		}
+		return result
+	case []interface{}:
+		for i, v := range s {
+			s[i] = p.ensureStrictSchema(v)
+		}
+		return s
+	default:
+		return schema
+	}
 }
 
 // Streaming response structures

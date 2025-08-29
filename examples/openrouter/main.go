@@ -21,10 +21,10 @@ func main() {
 	fmt.Println("OpenRouter Examples - Access Multiple AI Models")
 	fmt.Println("==============================================")
 
-	// Example 1: GPT-4o via OpenRouter
-	fmt.Println("\n1. GPT-4o via OpenRouter")
+	// Example 1: OpenAI via OpenRouter
+	fmt.Println("\n1. OpenAI via OpenRouter")
 	fmt.Println("-----------------------")
-	testGPT4o(client)
+	testOpenAI(client)
 
 	// Example 2: Claude 3.5 Sonnet via OpenRouter
 	fmt.Println("\n2. Claude 3.5 Sonnet via OpenRouter")
@@ -57,18 +57,19 @@ func main() {
 	jsonSchemaResponse(client)
 }
 
-// Example 1: GPT-4o via OpenRouter
-func testGPT4o(client *litellm.Client) {
+// Example 1: OpenAI via OpenRouter
+func testOpenAI(client *litellm.Client) {
 	request := &litellm.Request{
-		Model: "openai/gpt-4o",
+		Model: "openai/gpt-5-nano",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
-				Content: "Explain the concept of artificial general intelligence in simple terms.",
+				Content: "What model are you?",
 			},
 		},
-		MaxTokens:   litellm.IntPtr(500),
-		Temperature: litellm.Float64Ptr(0.7),
+		MaxTokens:       litellm.IntPtr(2000),
+		Temperature:     litellm.Float64Ptr(0.7),
+		UseResponsesAPI: false,
 	}
 
 	ctx := context.Background()
@@ -78,20 +79,25 @@ func testGPT4o(client *litellm.Client) {
 		return
 	}
 
+	if response.Reasoning != nil && response.Reasoning.Content != "" {
+		fmt.Printf("Thinking Process:\n%s\n", response.Reasoning.Content)
+		fmt.Println("---")
+	}
+
 	fmt.Printf("Response: %s\n", response.Content)
 	fmt.Printf("Model Used: %s\n", response.Model)
 	fmt.Printf("Usage: %d prompt + %d completion = %d total tokens\n",
 		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.TotalTokens)
 }
 
-// Example 2: Claude 3.5 Sonnet via OpenRouter
+// Example 2: Claude 3.5 haiku via OpenRouter
 func testClaude(client *litellm.Client) {
 	request := &litellm.Request{
-		Model: "anthropic/claude-3.5-sonnet",
+		Model: "anthropic/claude-3.5-haiku",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
-				Content: "Write a haiku about machine learning and data science.",
+				Content: "What model are you?",
 			},
 		},
 		MaxTokens:   litellm.IntPtr(300),
@@ -168,7 +174,6 @@ func testDeepSeek(client *litellm.Client) {
 
 // Example 5: Function Calling with Different Models
 func functionCalling(client *litellm.Client) {
-	// Define a weather function
 	weatherFunction := litellm.Tool{
 		Type: "function",
 		Function: litellm.FunctionDef{
@@ -224,7 +229,7 @@ func functionCalling(client *litellm.Client) {
 // Example 6: Streaming Chat
 func streamingChat(client *litellm.Client) {
 	request := &litellm.Request{
-		Model: "google/gemini-2.0-flash-exp", // Use Gemini via OpenRouter for streaming
+		Model: "google/gemini-2.5-flash", // Use Gemini via OpenRouter for streaming
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
