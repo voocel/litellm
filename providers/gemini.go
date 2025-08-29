@@ -60,6 +60,20 @@ func (p *GeminiProvider) Models() []ModelInfo {
 	}
 }
 
+// supportsThinking checks if the model supports thinking capability
+func (p *GeminiProvider) supportsThinking(model string) bool {
+	for _, m := range p.Models() {
+		if m.ID == model {
+			for _, cap := range m.Capabilities {
+				if cap == "thinking" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
@@ -71,11 +85,19 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 		Contents: make([]geminiContent, 0),
 	}
 
-	// Set generation configuration - always set for 2.5 models to enable thinking
-	if req.Temperature != nil || req.MaxTokens != nil || req.ResponseFormat != nil || strings.Contains(modelName, "2.5") {
+	// Set generation configuration
+	if req.Temperature != nil || req.MaxTokens != nil || req.ResponseFormat != nil || p.supportsThinking(modelName) {
 		geminiReq.GenerationConfig = &geminiGenerationConfig{
 			Temperature:     req.Temperature,
 			MaxOutputTokens: req.MaxTokens,
+		}
+
+		// Enable thinking for models that support it
+		if p.supportsThinking(modelName) {
+			geminiReq.GenerationConfig.ThinkingConfig = &geminiThinkingConfig{
+				ThinkingBudget:  intPtr(-1), // Dynamic thinking budget
+				IncludeThoughts: boolPtr(true),
+			}
 		}
 
 		// Handle response format
@@ -299,14 +321,14 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		Contents: make([]geminiContent, 0),
 	}
 
-	if req.Temperature != nil || req.MaxTokens != nil || strings.Contains(modelName, "2.5") {
+	if req.Temperature != nil || req.MaxTokens != nil || p.supportsThinking(modelName) {
 		geminiReq.GenerationConfig = &geminiGenerationConfig{
 			Temperature:     req.Temperature,
 			MaxOutputTokens: req.MaxTokens,
 		}
 
-		// Enable thinking for 2.5 models
-		if strings.Contains(modelName, "2.5") {
+		// Enable thinking for models that support it
+		if p.supportsThinking(modelName) {
 			geminiReq.GenerationConfig.ThinkingConfig = &geminiThinkingConfig{
 				ThinkingBudget:  intPtr(-1), // Dynamic thinking budget for complete thoughts
 				IncludeThoughts: boolPtr(true),
@@ -399,10 +421,13 @@ func intPtr(i int) *int {
 
 // geminiStreamReader implements streaming for Gemini
 type geminiStreamReader struct {
-	resp     *http.Response
-	scanner  *bufio.Scanner
-	provider string
-	done     bool
+	resp      *http.Response
+	scanner   *bufio.Scanner
+	provider  string
+	done      bool
+	buffer    strings.Builder
+	responses []geminiStreamResponse
+	index     int
 }
 
 func (r *geminiStreamReader) Next() (*StreamChunk, error) {
@@ -410,89 +435,96 @@ func (r *geminiStreamReader) Next() (*StreamChunk, error) {
 		return &StreamChunk{Done: true, Provider: r.provider}, nil
 	}
 
-	for r.scanner.Scan() {
-		line := r.scanner.Text()
-		line = strings.TrimSpace(line)
+	if r.index < len(r.responses) {
+		return r.processResponse(r.responses[r.index])
+	}
 
-		// Skip empty lines
-		if line == "" || line == "data: [DONE]" {
-			continue
-		}
-
-		// Remove possible "data: " prefix
-		line = strings.TrimPrefix(line, "data: ")
-
-		// Skip non-JSON lines
-		if line == "" || (!strings.HasPrefix(line, "{") && !strings.HasPrefix(line, "[")) {
-			continue
-		}
-
-		var streamResp geminiStreamResponse
-		if err := json.Unmarshal([]byte(line), &streamResp); err != nil {
-			// If parsing fails, continue to next line
-			continue
-		}
-
-		if len(streamResp.Candidates) > 0 {
-			candidate := streamResp.Candidates[0]
-			streamChunk := &StreamChunk{
-				Provider: r.provider,
-			}
-
-			// Extract text content and thinking content
-			for _, part := range candidate.Content.Parts {
-				// Check if this is thinking content
-				if part.Thought != nil && *part.Thought && part.Text != "" {
-					streamChunk.Type = "reasoning"
-					streamChunk.Reasoning = &ReasoningChunk{
-						Content: part.Text,
-						Summary: "Gemini thinking process",
-					}
-					return streamChunk, nil
-				} else if part.Text != "" {
-					// Regular content
-					streamChunk.Type = "content"
-					streamChunk.Content = part.Text
-					return streamChunk, nil
-				}
-
-				// Handle tool calls - Gemini typically returns complete tool calls
-				if part.FunctionCall != nil {
-					streamChunk.Type = "tool_call_delta"
-					args, _ := json.Marshal(part.FunctionCall.Args)
-					streamChunk.ToolCallDelta = &ToolCallDelta{
-						ID:             fmt.Sprintf("call_%d", time.Now().UnixNano()),
-						Type:           "function",
-						FunctionName:   part.FunctionCall.Name,
-						ArgumentsDelta: string(args),
-					}
-					return streamChunk, nil
-				}
-			}
-
-			if candidate.FinishReason != "" {
-				streamChunk.FinishReason = candidate.FinishReason
-				streamChunk.Done = true
-				r.done = true
-				return streamChunk, nil
-			}
-		}
-
-		// Handle usage statistics - Note: StreamChunk doesn't have Usage field
-		// This will be handled at the end of stream or in a different way
-		if streamResp.UsageMetadata != nil {
-			// For now, we can just continue or handle this differently
-			// Usage statistics will be available in the final response
-			continue
+	if len(r.responses) == 0 {
+		if err := r.readCompleteJSON(); err != nil {
+			return nil, err
 		}
 	}
 
-	if err := r.scanner.Err(); err != nil {
-		return nil, err
+	if r.index < len(r.responses) {
+		return r.processResponse(r.responses[r.index])
 	}
 
 	r.done = true
 	return &StreamChunk{Done: true, Provider: r.provider}, nil
+}
+
+func (r *geminiStreamReader) readCompleteJSON() error {
+	for r.scanner.Scan() {
+		line := r.scanner.Text()
+		r.buffer.WriteString(line)
+	}
+
+	if err := r.scanner.Err(); err != nil {
+		return err
+	}
+
+	jsonStr := r.buffer.String()
+
+	var responses []geminiStreamResponse
+	if err := json.Unmarshal([]byte(jsonStr), &responses); err != nil {
+		return fmt.Errorf("gemini: failed to parse stream response: %w", err)
+	}
+
+	r.responses = responses
+	return nil
+}
+
+func (r *geminiStreamReader) processResponse(streamResp geminiStreamResponse) (*StreamChunk, error) {
+	defer func() { r.index++ }()
+
+	if len(streamResp.Candidates) > 0 {
+		candidate := streamResp.Candidates[0]
+		streamChunk := &StreamChunk{
+			Provider: r.provider,
+		}
+
+		// Extract text content and thinking content
+		for _, part := range candidate.Content.Parts {
+			// Check if this is thinking content
+			if part.Thought != nil && *part.Thought && part.Text != "" {
+				streamChunk.Type = "reasoning"
+				streamChunk.Reasoning = &ReasoningChunk{
+					Content: part.Text,
+					Summary: "Gemini thinking process",
+				}
+				return streamChunk, nil
+			} else if part.Text != "" {
+				// Regular content
+				streamChunk.Type = "content"
+				streamChunk.Content = part.Text
+				return streamChunk, nil
+			}
+
+			// Handle tool calls
+			if part.FunctionCall != nil {
+				streamChunk.Type = "tool_call_delta"
+				args, _ := json.Marshal(part.FunctionCall.Args)
+				streamChunk.ToolCallDelta = &ToolCallDelta{
+					ID:             fmt.Sprintf("call_%d", time.Now().UnixNano()),
+					Type:           "function",
+					FunctionName:   part.FunctionCall.Name,
+					ArgumentsDelta: string(args),
+				}
+				return streamChunk, nil
+			}
+		}
+
+		if candidate.FinishReason != "" {
+			streamChunk.FinishReason = candidate.FinishReason
+			streamChunk.Done = true
+			r.done = true
+			return streamChunk, nil
+		}
+
+		return r.Next()
+	}
+
+	return r.Next()
 }
 
 func (r *geminiStreamReader) Close() error {

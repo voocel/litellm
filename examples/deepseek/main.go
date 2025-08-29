@@ -31,23 +31,18 @@ func main() {
 	fmt.Println("--------------------------------------------")
 	reasoningChat(client)
 
-	// Example 3: Code Generation
-	fmt.Println("\n3. Code Generation Example (DeepSeek Coder)")
-	fmt.Println("------------------------------------------")
-	codeGeneration(client)
-
-	// Example 4: Function Calling
-	fmt.Println("\n4. Function Calling Example")
+	// Example 3: Function Calling
+	fmt.Println("\n3. Function Calling Example")
 	fmt.Println("---------------------------")
 	functionCalling(client)
 
-	// Example 5: Streaming Chat
-	fmt.Println("\n5. Streaming Chat Example")
+	// Example 4: Streaming Chat
+	fmt.Println("\n4. Streaming Chat Example")
 	fmt.Println("-------------------------")
 	streamingChat(client)
 
-	// Example 6: JSON Response Format
-	fmt.Println("\n6. JSON Response Format Example")
+	// Example 5: JSON Response Format
+	fmt.Println("\n5. JSON Response Format Example")
 	fmt.Println("-------------------------------")
 	jsonResponseFormat(client)
 }
@@ -120,32 +115,7 @@ func reasoningChat(client *litellm.Client) {
 		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.ReasoningTokens, response.Usage.TotalTokens)
 }
 
-// Example 3: Code Generation with DeepSeek Coder
-func codeGeneration(client *litellm.Client) {
-	request := &litellm.Request{
-		Model: "deepseek-coder",
-		Messages: []litellm.Message{
-			{
-				Role:    "user",
-				Content: "Write a Python function to find the longest common subsequence of two strings. Include comments and examples.",
-			},
-		},
-		MaxTokens:   litellm.IntPtr(800),
-		Temperature: litellm.Float64Ptr(0.2),
-	}
-
-	ctx := context.Background()
-	response, err := client.Chat(ctx, request)
-	if err != nil {
-		log.Printf("Code generation failed: %v", err)
-		return
-	}
-
-	fmt.Printf("Generated Code:\n%s\n", response.Content)
-	fmt.Printf("Usage: %d tokens\n", response.Usage.TotalTokens)
-}
-
-// Example 4: Function Calling
+// Example 3: Function Calling
 func functionCalling(client *litellm.Client) {
 	// Define a weather function
 	weatherFunction := litellm.Tool{
@@ -176,7 +146,7 @@ func functionCalling(client *litellm.Client) {
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
-				Content: "What's the weather like in Beijing?",
+				Content: "What's the weather like in Tokyo?",
 			},
 		},
 		Tools:     []litellm.Tool{weatherFunction},
@@ -199,10 +169,10 @@ func functionCalling(client *litellm.Client) {
 	}
 }
 
-// Example 5: Streaming Chat
+// Example 4: Streaming Chat
 func streamingChat(client *litellm.Client) {
 	request := &litellm.Request{
-		Model: "deepseek-chat",
+		Model: "deepseek-reasoner",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
@@ -234,14 +204,21 @@ func streamingChat(client *litellm.Client) {
 			break
 		}
 
-		if chunk.Type == "content" && chunk.Content != "" {
-			fmt.Print(chunk.Content)
+		switch chunk.Type {
+		case "content":
+			if chunk.Content != "" {
+				fmt.Print(chunk.Content)
+			}
+		case "reasoning":
+			if chunk.Reasoning != nil && chunk.Reasoning.Content != "" {
+				fmt.Printf("\n[Thinking: %s]\n", chunk.Reasoning.Content)
+			}
 		}
 	}
 	fmt.Println()
 }
 
-// Example 6: JSON Response Format
+// Example 5: JSON Response Format
 func jsonResponseFormat(client *litellm.Client) {
 	request := &litellm.Request{
 		Model: "deepseek-chat",

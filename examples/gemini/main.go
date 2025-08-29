@@ -40,26 +40,16 @@ func main() {
 	fmt.Println("\n4. JSON Schema Response Format Example")
 	fmt.Println("--------------------------------------")
 	jsonSchemaExample(client)
-
-	// Example 5: Advanced Features (2.5 Models with Thinking)
-	fmt.Println("\n5. Advanced Features (Gemini 2.5 Pro)")
-	fmt.Println("-------------------------------------")
-	advancedFeatures(client)
-
-	// Example 6: System Instructions
-	fmt.Println("\n6. System Instructions Example")
-	fmt.Println("------------------------------")
-	systemInstructions(client)
 }
 
 // Example 1: Basic Chat
 func basicChat(client *litellm.Client) {
 	request := &litellm.Request{
-		Model: "gemini-2.5-pro", // 恢复到2.5模型
+		Model: "gemini-2.5-flash",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
-				Content: "你是谁",
+				Content: "who are you",
 			},
 		},
 		MaxTokens:   litellm.IntPtr(10000),
@@ -89,14 +79,14 @@ func basicChat(client *litellm.Client) {
 // Example 2: Streaming Chat
 func streamingChat(client *litellm.Client) {
 	request := &litellm.Request{
-		Model: "gemini-2.0-flash-lite",
+		Model: "gemini-2.5-flash",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
 				Content: "Write a haiku about artificial intelligence",
 			},
 		},
-		MaxTokens:   litellm.IntPtr(100),
+		MaxTokens:   litellm.IntPtr(2000),
 		Temperature: litellm.Float64Ptr(0.8),
 		Stream:      true,
 	}
@@ -121,8 +111,15 @@ func streamingChat(client *litellm.Client) {
 			break
 		}
 
-		if chunk.Type == "content" && chunk.Content != "" {
-			fmt.Print(chunk.Content)
+		switch chunk.Type {
+		case "content":
+			if chunk.Content != "" {
+				fmt.Print(chunk.Content)
+			}
+		case "reasoning":
+			if chunk.Reasoning != nil && chunk.Reasoning.Content != "" {
+				fmt.Printf("\n[Thinking: %s]\n", chunk.Reasoning.Content)
+			}
 		}
 	}
 	fmt.Println()
@@ -130,7 +127,6 @@ func streamingChat(client *litellm.Client) {
 
 // Example 3: Function/Tool Calling
 func functionCalling(client *litellm.Client) {
-	// Define a math calculation function
 	mathFunction := litellm.Tool{
 		Type: "function",
 		Function: litellm.FunctionDef{
@@ -172,7 +168,7 @@ func functionCalling(client *litellm.Client) {
 	}
 
 	request := &litellm.Request{
-		Model: "gemini-2.0-flash",
+		Model: "gemini-2.5-flash",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
@@ -180,7 +176,7 @@ func functionCalling(client *litellm.Client) {
 			},
 		},
 		Tools:     []litellm.Tool{mathFunction},
-		MaxTokens: litellm.IntPtr(300),
+		MaxTokens: litellm.IntPtr(2000),
 	}
 
 	ctx := context.Background()
@@ -201,7 +197,6 @@ func functionCalling(client *litellm.Client) {
 
 // Example 4: JSON Schema Response Format
 func jsonSchemaExample(client *litellm.Client) {
-	// Define JSON schema for movie recommendation
 	schema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -231,7 +226,7 @@ func jsonSchemaExample(client *litellm.Client) {
 	}
 
 	request := &litellm.Request{
-		Model: "gemini-2.0-flash",
+		Model: "gemini-2.5-flash",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
@@ -247,7 +242,7 @@ func jsonSchemaExample(client *litellm.Client) {
 				Strict:      litellm.BoolPtr(true),
 			},
 		},
-		MaxTokens: litellm.IntPtr(300),
+		MaxTokens: litellm.IntPtr(2000),
 	}
 
 	ctx := context.Background()
@@ -265,59 +260,4 @@ func jsonSchemaExample(client *litellm.Client) {
 		prettyJSON, _ := json.MarshalIndent(result, "", "  ")
 		fmt.Printf("Formatted JSON:\n%s\n", string(prettyJSON))
 	}
-}
-
-// Example 5: Advanced Features (Gemini 2.5 Pro with thinking capabilities)
-func advancedFeatures(client *litellm.Client) {
-	request := &litellm.Request{
-		Model: "gemini-2.5-pro",
-		Messages: []litellm.Message{
-			{
-				Role:    "user",
-				Content: "Analyze the potential impact of quantum computing on cryptography. Consider both risks and opportunities.",
-			},
-		},
-		MaxTokens:   litellm.IntPtr(1000),
-		Temperature: litellm.Float64Ptr(0.3), // Lower temperature for analytical thinking
-	}
-
-	ctx := context.Background()
-	response, err := client.Chat(ctx, request)
-	if err != nil {
-		log.Printf("Advanced features failed: %v", err)
-		return
-	}
-
-	fmt.Printf("Response: %s\n", response.Content)
-	fmt.Printf("Model: %s\n", response.Model)
-	fmt.Printf("Total Usage: %d tokens\n", response.Usage.TotalTokens)
-}
-
-// Example 6: System Instructions
-func systemInstructions(client *litellm.Client) {
-	request := &litellm.Request{
-		Model: "gemini-2.0-flash",
-		Messages: []litellm.Message{
-			{
-				Role:    "system",
-				Content: "You are a helpful coding assistant. Always provide code examples with comments and explain the logic clearly.",
-			},
-			{
-				Role:    "user",
-				Content: "How do I reverse a string in Python?",
-			},
-		},
-		MaxTokens:   litellm.IntPtr(300),
-		Temperature: litellm.Float64Ptr(0.2),
-	}
-
-	ctx := context.Background()
-	response, err := client.Chat(ctx, request)
-	if err != nil {
-		log.Printf("System instructions failed: %v", err)
-		return
-	}
-
-	fmt.Printf("Response with system instructions: %s\n", response.Content)
-	fmt.Printf("Usage: %d tokens\n", response.Usage.TotalTokens)
 }

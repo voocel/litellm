@@ -17,18 +17,18 @@ func main() {
 
 	client := litellm.New(litellm.WithQwen(apiKey))
 
-	fmt.Println("Qwen Examples - Alibaba Cloud AI")
-	fmt.Println("==========================================")
-
-	// Example 1: Basic Chat
-	fmt.Println("\n1. Basic Chat Example (Qwen-Turbo)")
-	fmt.Println("----------------------------------")
-	basicChat(client)
-
-	// Example 2: Function Calling
-	fmt.Println("\n2. Function Calling Example")
-	fmt.Println("---------------------------")
-	functionCalling(client)
+	//fmt.Println("Qwen Examples - Alibaba Cloud AI")
+	//fmt.Println("==========================================")
+	//
+	//// Example 1: Basic Chat
+	//fmt.Println("\n1. Basic Chat Example (Qwen-Turbo)")
+	//fmt.Println("----------------------------------")
+	//basicChat(client)
+	//
+	//// Example 2: Function Calling
+	//fmt.Println("\n2. Function Calling Example")
+	//fmt.Println("---------------------------")
+	//functionCalling(client)
 
 	// Example 3: Streaming Chat
 	fmt.Println("\n3. Streaming Chat Example")
@@ -94,7 +94,7 @@ func functionCalling(client *litellm.Client) {
 	}
 
 	request := &litellm.Request{
-		Model: "qwen-plus",
+		Model: "qwen3-coder-plus",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",

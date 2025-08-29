@@ -296,6 +296,7 @@ func (p *QwenProvider) isReasoningModel(model string) bool {
 		"qwen-plus", "qwen-max", "qwen-max-longcontext",
 		"qwen2.5-72b-instruct", "qwen2.5-32b-instruct",
 		"qwen2.5-coder-32b-instruct", "qwen2.5-math-72b-instruct",
+		"qwen3-coder-plus", "qwen3-coder-flash",
 	}
 	for _, m := range reasoningModels {
 		if m == model {
@@ -379,10 +380,11 @@ type qwenUsage struct {
 
 // qwenStreamReader implements streaming for Qwen
 type qwenStreamReader struct {
-	resp     *http.Response
-	scanner  *bufio.Scanner
-	provider string
-	done     bool
+	resp        *http.Response
+	scanner     *bufio.Scanner
+	provider    string
+	done        bool
+	lastContent string
 }
 
 func (r *qwenStreamReader) Next() (*StreamChunk, error) {
@@ -401,8 +403,6 @@ func (r *qwenStreamReader) Next() (*StreamChunk, error) {
 		// Handle data lines
 		if strings.HasPrefix(line, "data:") {
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-
-			// Check for end of stream
 			if data == "[DONE]" {
 				r.done = true
 				return &StreamChunk{Done: true, Provider: r.provider}, nil
@@ -420,23 +420,34 @@ func (r *qwenStreamReader) Next() (*StreamChunk, error) {
 					Provider: r.provider,
 				}
 
-				if choice.Delta.Content != "" {
-					chunk.Type = "content"
-					chunk.Content = choice.Delta.Content
+				currentContent := choice.Message.Content
+				if currentContent != r.lastContent {
+					deltaContent := ""
+					if len(currentContent) > len(r.lastContent) && strings.HasPrefix(currentContent, r.lastContent) {
+						deltaContent = currentContent[len(r.lastContent):]
+					} else {
+						deltaContent = currentContent
+					}
+
+					if deltaContent != "" {
+						chunk.Type = "content"
+						chunk.Content = deltaContent
+						r.lastContent = currentContent
+					}
 				}
 
 				// Handle reasoning content
-				if choice.Delta.ReasoningContent != "" {
+				if choice.Message.ReasoningContent != "" {
 					chunk.Type = "reasoning"
 					chunk.Reasoning = &ReasoningChunk{
-						Content: choice.Delta.ReasoningContent,
+						Content: choice.Message.ReasoningContent,
 						Summary: "Qwen reasoning process",
 					}
 				}
 
-				if len(choice.Delta.ToolCalls) > 0 {
+				if len(choice.Message.ToolCalls) > 0 {
 					chunk.Type = "tool_call_delta"
-					toolCall := choice.Delta.ToolCalls[0]
+					toolCall := choice.Message.ToolCalls[0]
 					chunk.ToolCallDelta = &ToolCallDelta{
 						Index:          0,
 						ID:             toolCall.ID,
@@ -446,13 +457,15 @@ func (r *qwenStreamReader) Next() (*StreamChunk, error) {
 					}
 				}
 
-				if choice.FinishReason != "" {
+				if choice.FinishReason != "" && choice.FinishReason != "null" {
 					chunk.FinishReason = choice.FinishReason
 					chunk.Done = true
 					r.done = true
 				}
 
-				return chunk, nil
+				if chunk.Content != "" || chunk.Reasoning != nil || len(choice.Message.ToolCalls) > 0 || chunk.Done {
+					return chunk, nil
+				}
 			}
 		}
 	}
@@ -481,7 +494,8 @@ type qwenStreamOutput struct {
 }
 
 type qwenStreamChoice struct {
-	Delta        qwenStreamDelta `json:"delta"`
+	Message      qwenMessage     `json:"message"` // Qwen uses message, not delta
+	Delta        qwenStreamDelta `json:"delta"`   // Keep for backward compatibility
 	FinishReason string          `json:"finish_reason"`
 }
 
