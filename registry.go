@@ -3,12 +3,29 @@ package litellm
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sync"
 
 	"github.com/voocel/litellm/providers"
 )
 
+// Global registry for custom providers
+var (
+	customProviders = make(map[string]ProviderFactory)
+	providerMutex   sync.RWMutex
+)
+
 // createProvider creates a provider instance by name
 func createProvider(name string, config ProviderConfig) (Provider, error) {
+	// Check custom providers first
+	providerMutex.RLock()
+	if factory, exists := customProviders[name]; exists {
+		providerMutex.RUnlock()
+		return factory(config), nil
+	}
+	providerMutex.RUnlock()
+
+	// Fall back to built-in providers
 	providerConfig := providers.ProviderConfig{
 		APIKey:  config.APIKey,
 		BaseURL: config.BaseURL,
@@ -291,30 +308,65 @@ func convertReasoningData(reasoning *providers.ReasoningData) *ReasoningData {
 	}
 }
 
-// RegisterProvider registers a provider factory
-func RegisterProvider(name string, factory func(ProviderConfig) Provider) {
-	// todo
+// RegisterProvider registers a custom provider factory
+func RegisterProvider(name string, factory ProviderFactory) {
+	if name == "" {
+		panic("provider name cannot be empty")
+	}
+	if factory == nil {
+		panic("provider factory cannot be nil")
+	}
+
+	providerMutex.Lock()
+	defer providerMutex.Unlock()
+	customProviders[name] = factory
 }
 
 // ListRegisteredProviders returns all registered provider names
 func ListRegisteredProviders() []string {
-	return []string{"openai", "anthropic", "gemini", "deepseek", "glm", "openrouter", "qwen"}
+	providerMutex.RLock()
+	defer providerMutex.RUnlock()
+
+	// Built-in providers
+	builtIn := []string{"openai", "anthropic", "gemini", "deepseek", "glm", "openrouter", "qwen"}
+
+	// Add custom providers
+	for name := range customProviders {
+		builtIn = append(builtIn, name)
+	}
+
+	return builtIn
+}
+
+// IsProviderRegistered checks if a provider is registered (built-in or custom)
+func IsProviderRegistered(name string) bool {
+	// Check built-in providers
+	builtIn := []string{"openai", "anthropic", "gemini", "deepseek", "glm", "openrouter", "qwen"}
+	if slices.Contains(builtIn, name) {
+		return true
+	}
+
+	// Check custom providers
+	providerMutex.RLock()
+	defer providerMutex.RUnlock()
+	_, exists := customProviders[name]
+	return exists
 }
 
 // HasChatCapability checks if provider supports chat
-func HasChatCapability(p interface{}) bool {
+func HasChatCapability(p any) bool {
 	_, ok := p.(ChatProvider)
 	return ok
 }
 
 // HasStreamCapability checks if provider supports streaming
-func HasStreamCapability(p interface{}) bool {
+func HasStreamCapability(p any) bool {
 	_, ok := p.(StreamProvider)
 	return ok
 }
 
 // HasModelCapability checks if provider supports model information
-func HasModelCapability(p interface{}) bool {
+func HasModelCapability(p any) bool {
 	_, ok := p.(ModelProvider)
 	return ok
 }
@@ -328,11 +380,7 @@ func SupportsCapability(p Provider, model string, capability ModelCapability) bo
 	models := p.Models()
 	for _, m := range models {
 		if m.ID == model {
-			for _, cap := range m.Capabilities {
-				if cap == capability {
-					return true
-				}
-			}
+			return slices.Contains(m.Capabilities, capability)
 		}
 	}
 	return false
