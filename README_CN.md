@@ -437,35 +437,72 @@ type ToolCallBuilder struct {
 
 ## 扩展新平台
 
-添加新的 LLM 平台非常简单：
+通过自定义提供商注册系统，添加新的 LLM 平台非常简单：
 
 ```go
-// 实现 Provider 接口
+// 1. 实现 Provider 接口
 type MyProvider struct {
-    *litellm.BaseProvider
+    name   string
+    config litellm.ProviderConfig
+}
+
+func (p *MyProvider) Name() string { return p.name }
+func (p *MyProvider) Validate() error { return nil }
+func (p *MyProvider) SupportsModel(model string) bool { return true }
+func (p *MyProvider) Models() []litellm.ModelInfo {
+    return []litellm.ModelInfo{
+        {ID: "my-model", Provider: "myprovider", Name: "我的模型", MaxTokens: 4096},
+    }
 }
 
 func (p *MyProvider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
-    // 实现 API 调用逻辑
+    // 在这里实现你的 API 调用逻辑
     return &litellm.Response{
-        Content:  "hi！",
+        Content:  "你好，来自我的提供商！",
         Model:    req.Model,
-        Provider: "myprovider",
+        Provider: p.name,
         Usage:    litellm.Usage{TotalTokens: 10},
     }, nil
 }
 
-// 注册 provider
+func (p *MyProvider) Stream(ctx context.Context, req *litellm.Request) (litellm.StreamReader, error) {
+    // 实现流式响应
+    return nil, fmt.Errorf("未实现流式响应")
+}
+
+// 2. 创建工厂函数
+func NewMyProvider(config litellm.ProviderConfig) litellm.Provider {
+    return &MyProvider{name: "myprovider", config: config}
+}
+
+// 3. 注册提供商
 func init() {
     litellm.RegisterProvider("myprovider", NewMyProvider)
 }
 
-// 使用
-client := litellm.New()
+// 4. 使用
+client := litellm.New(
+    litellm.WithProviderConfig("myprovider", litellm.ProviderConfig{
+        APIKey: "your-api-key",
+    }),
+)
 response, _ := client.Chat(ctx, &litellm.Request{
     Model: "my-model",
     Messages: []litellm.Message{{Role: "user", Content: "你好"}},
 })
+```
+
+### 提供商发现
+
+```go
+// 列出所有可用的提供商
+providers := litellm.ListRegisteredProviders()
+fmt.Printf("可用提供商: %v\n", providers)
+
+// 检查提供商是否已注册
+if litellm.IsProviderRegistered("myprovider") {
+    fmt.Println("自定义提供商可用！")
+}
 ```
 
 ## 支持的平台

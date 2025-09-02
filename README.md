@@ -438,35 +438,72 @@ if response.Reasoning != nil {
 
 ## Extending New Platforms
 
-Adding new LLM platforms is simple:
+Adding new LLM platforms is simple with the custom provider registration system:
 
 ```go
-// Implement Provider interface
+// 1. Implement the Provider interface
 type MyProvider struct {
-    *litellm.BaseProvider
+    name   string
+    config litellm.ProviderConfig
+}
+
+func (p *MyProvider) Name() string { return p.name }
+func (p *MyProvider) Validate() error { return nil }
+func (p *MyProvider) SupportsModel(model string) bool { return true }
+func (p *MyProvider) Models() []litellm.ModelInfo {
+    return []litellm.ModelInfo{
+        {ID: "my-model", Provider: "myprovider", Name: "My Model", MaxTokens: 4096},
+    }
 }
 
 func (p *MyProvider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
-    // Implement API call logic
+    // Implement your API call logic here
     return &litellm.Response{
         Content:  "Hello from my provider!",
         Model:    req.Model,
-        Provider: "myprovider",
+        Provider: p.name,
         Usage:    litellm.Usage{TotalTokens: 10},
     }, nil
 }
 
-// Register provider
+func (p *MyProvider) Stream(ctx context.Context, req *litellm.Request) (litellm.StreamReader, error) {
+    // Implement streaming if needed
+    return nil, fmt.Errorf("streaming not implemented")
+}
+
+// 2. Create a factory function
+func NewMyProvider(config litellm.ProviderConfig) litellm.Provider {
+    return &MyProvider{name: "myprovider", config: config}
+}
+
+// 3. Register the provider
 func init() {
     litellm.RegisterProvider("myprovider", NewMyProvider)
 }
 
-// Use it
-client := litellm.New()
+// 4. Use it
+client := litellm.New(
+    litellm.WithProviderConfig("myprovider", litellm.ProviderConfig{
+        APIKey: "your-api-key",
+    }),
+)
 response, _ := client.Chat(ctx, &litellm.Request{
     Model: "my-model",
     Messages: []litellm.Message{{Role: "user", Content: "Hello"}},
 })
+```
+
+### Provider Discovery
+
+```go
+// List all available providers
+providers := litellm.ListRegisteredProviders()
+fmt.Printf("Available providers: %v\n", providers)
+
+// Check if a provider is registered
+if litellm.IsProviderRegistered("myprovider") {
+    fmt.Println("Custom provider is available!")
+}
 ```
 
 ## Supported Platforms
