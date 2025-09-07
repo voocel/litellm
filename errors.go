@@ -1,6 +1,7 @@
 package litellm
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 )
@@ -53,7 +54,8 @@ func (e *LiteLLMError) Unwrap() error {
 
 // Is checks if the error matches a specific type
 func (e *LiteLLMError) Is(target error) bool {
-	if t, ok := target.(*LiteLLMError); ok {
+	var t *LiteLLMError
+	if errors.As(target, &t) {
 		return e.Type == t.Type
 	}
 	return false
@@ -198,7 +200,8 @@ func isRetryableByType(errorType ErrorType) bool {
 
 // IsAuthError checks if error is authentication related
 func IsAuthError(err error) bool {
-	if e, ok := err.(*LiteLLMError); ok {
+	var e *LiteLLMError
+	if errors.As(err, &e) {
 		return e.Type == ErrorTypeAuth
 	}
 	return false
@@ -206,7 +209,8 @@ func IsAuthError(err error) bool {
 
 // IsRateLimitError checks if error is rate limit related
 func IsRateLimitError(err error) bool {
-	if e, ok := err.(*LiteLLMError); ok {
+	var e *LiteLLMError
+	if errors.As(err, &e) {
 		return e.Type == ErrorTypeRateLimit
 	}
 	return false
@@ -214,7 +218,8 @@ func IsRateLimitError(err error) bool {
 
 // IsNetworkError checks if error is network related
 func IsNetworkError(err error) bool {
-	if e, ok := err.(*LiteLLMError); ok {
+	var e *LiteLLMError
+	if errors.As(err, &e) {
 		return e.Type == ErrorTypeNetwork
 	}
 	return false
@@ -222,7 +227,8 @@ func IsNetworkError(err error) bool {
 
 // IsValidationError checks if error is validation related
 func IsValidationError(err error) bool {
-	if e, ok := err.(*LiteLLMError); ok {
+	var e *LiteLLMError
+	if errors.As(err, &e) {
 		return e.Type == ErrorTypeValidation
 	}
 	return false
@@ -230,7 +236,8 @@ func IsValidationError(err error) bool {
 
 // IsModelError checks if error is model related
 func IsModelError(err error) bool {
-	if e, ok := err.(*LiteLLMError); ok {
+	var e *LiteLLMError
+	if errors.As(err, &e) {
 		return e.Type == ErrorTypeModel
 	}
 	return false
@@ -238,7 +245,8 @@ func IsModelError(err error) bool {
 
 // IsRetryableError checks if an error is retryable
 func IsRetryableError(err error) bool {
-	if e, ok := err.(*LiteLLMError); ok {
+	var e *LiteLLMError
+	if errors.As(err, &e) {
 		return e.IsRetryable()
 	}
 	// Unknown errors are not retryable by default
@@ -247,7 +255,8 @@ func IsRetryableError(err error) bool {
 
 // GetRetryAfter extracts retry-after duration from rate limit errors
 func GetRetryAfter(err error) int {
-	if e, ok := err.(*LiteLLMError); ok && e.Type == ErrorTypeRateLimit {
+	var e *LiteLLMError
+	if errors.As(err, &e) && e.Type == ErrorTypeRateLimit {
 		return e.RetryAfter
 	}
 	return 0
@@ -260,7 +269,8 @@ func WrapError(err error, provider string) error {
 	}
 
 	// Already a LiteLLMError
-	if e, ok := err.(*LiteLLMError); ok {
+	var e *LiteLLMError
+	if errors.As(err, &e) {
 		if e.Provider == "" {
 			e.Provider = provider
 		}
