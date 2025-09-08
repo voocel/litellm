@@ -186,7 +186,20 @@ func (p *OpenRouterProvider) Chat(ctx context.Context, req *Request) (*Response,
 
 	if len(openRouterResp.Choices) > 0 {
 		choice := openRouterResp.Choices[0]
-		response.Content = choice.Message.Content
+
+		// Handle content (can be string or array)
+		if content, ok := choice.Message.Content.(string); ok {
+			response.Content = content
+		} else if contentArray, ok := choice.Message.Content.([]interface{}); ok {
+			for _, item := range contentArray {
+				if contentItem, ok := item.(map[string]interface{}); ok {
+					if text, ok := contentItem["text"].(string); ok {
+						response.Content += text
+					}
+				}
+			}
+		}
+
 		response.FinishReason = choice.FinishReason
 
 		// Handle tool calls
@@ -277,15 +290,31 @@ func (p *OpenRouterProvider) Stream(ctx context.Context, req *Request) (StreamRe
 func (p *OpenRouterProvider) convertMessages(messages []Message) []openRouterMessage {
 	openRouterMessages := make([]openRouterMessage, len(messages))
 	for i, msg := range messages {
-		openRouterMessages[i] = openRouterMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
+		openRouterMsg := openRouterMessage{
+			Role: msg.Role,
+		}
+
+		// Handle content with cache control (Anthropic format for OpenRouter)
+		if msg.CacheControl != nil {
+			// Use Anthropic's content array format for caching
+			openRouterMsg.Content = []openRouterContent{
+				{
+					Type: "text",
+					Text: msg.Content,
+					CacheControl: &openRouterCacheControl{
+						Type: msg.CacheControl.Type,
+					},
+				},
+			}
+		} else {
+			// Simple string content
+			openRouterMsg.Content = msg.Content
 		}
 
 		// Handle tool calls
 		if len(msg.ToolCalls) > 0 {
 			for _, toolCall := range msg.ToolCalls {
-				openRouterMessages[i].ToolCalls = append(openRouterMessages[i].ToolCalls, openRouterToolCall{
+				openRouterMsg.ToolCalls = append(openRouterMsg.ToolCalls, openRouterToolCall{
 					ID:   toolCall.ID,
 					Type: toolCall.Type,
 					Function: openRouterToolCallFunction{
@@ -298,8 +327,10 @@ func (p *OpenRouterProvider) convertMessages(messages []Message) []openRouterMes
 
 		// Handle tool call responses
 		if msg.ToolCallID != "" {
-			openRouterMessages[i].ToolCallID = msg.ToolCallID
+			openRouterMsg.ToolCallID = msg.ToolCallID
 		}
+
+		openRouterMessages[i] = openRouterMsg
 	}
 	return openRouterMessages
 }
@@ -323,10 +354,22 @@ func (p *OpenRouterProvider) convertTools(tools []Tool) []openRouterTool {
 // OpenRouter API structures
 type openRouterMessage struct {
 	Role       string               `json:"role"`
-	Content    string               `json:"content,omitempty"`
+	Content    interface{}          `json:"content,omitempty"` // Can be string or []openRouterContent for caching
 	Reasoning  string               `json:"reasoning,omitempty"`
 	ToolCalls  []openRouterToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string               `json:"tool_call_id,omitempty"`
+}
+
+// openRouterContent represents content with cache control (Anthropic format)
+type openRouterContent struct {
+	Type         string                  `json:"type"`
+	Text         string                  `json:"text"`
+	CacheControl *openRouterCacheControl `json:"cache_control,omitempty"`
+}
+
+// openRouterCacheControl represents cache control for OpenRouter (Anthropic format)
+type openRouterCacheControl struct {
+	Type string `json:"type"`
 }
 
 type openRouterToolCall struct {

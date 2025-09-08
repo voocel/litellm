@@ -13,10 +13,17 @@ type ModelInfo struct {
 }
 
 type Message struct {
-	Role       string
-	Content    string
-	ToolCalls  []ToolCall
-	ToolCallID string
+	Role         string
+	Content      string
+	ToolCalls    []ToolCall
+	ToolCallID   string
+	CacheControl *CacheControl
+}
+
+// CacheControl defines prompt caching behavior for providers
+type CacheControl struct {
+	Type string // "ephemeral" or "persistent"
+	TTL  *int   // Time to live in seconds (optional)
 }
 
 type ToolCall struct {
@@ -75,6 +82,10 @@ type Usage struct {
 	CompletionTokens int
 	TotalTokens      int
 	ReasoningTokens  int
+
+	// Cache-related token statistics
+	CacheCreationInputTokens int // Tokens written to cache
+	CacheReadInputTokens     int // Tokens read from cache
 }
 
 type ReasoningData struct {

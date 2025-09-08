@@ -145,6 +145,13 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 			Parts: []geminiPart{},
 		}
 
+		// Add cache control if specified for this message
+		if msg.CacheControl != nil {
+			content.CacheControl = &geminiCacheControl{
+				Type: msg.CacheControl.Type,
+			}
+		}
+
 		if msg.Content != "" {
 			content.Parts = append(content.Parts, geminiPart{Text: msg.Content})
 		}
@@ -262,10 +269,11 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 
 	if geminiResp.UsageMetadata != nil {
 		response.Usage = Usage{
-			PromptTokens:     geminiResp.UsageMetadata.PromptTokenCount,
-			CompletionTokens: geminiResp.UsageMetadata.CandidatesTokenCount,
-			ReasoningTokens:  geminiResp.UsageMetadata.ThoughtsTokenCount,
-			TotalTokens:      geminiResp.UsageMetadata.TotalTokenCount,
+			PromptTokens:         geminiResp.UsageMetadata.PromptTokenCount,
+			CompletionTokens:     geminiResp.UsageMetadata.CandidatesTokenCount,
+			ReasoningTokens:      geminiResp.UsageMetadata.ThoughtsTokenCount,
+			TotalTokens:          geminiResp.UsageMetadata.TotalTokenCount,
+			CacheReadInputTokens: geminiResp.UsageMetadata.CachedContentTokenCount,
 		}
 	}
 
@@ -349,6 +357,14 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 				Role:  p.convertRole(msg.Role),
 				Parts: []geminiPart{{Text: msg.Content}},
 			}
+
+			// Add cache control if specified for this message
+			if msg.CacheControl != nil {
+				content.CacheControl = &geminiCacheControl{
+					Type: msg.CacheControl.Type,
+				}
+			}
+
 			geminiReq.Contents = append(geminiReq.Contents, content)
 		}
 	}
@@ -540,8 +556,14 @@ type geminiRequest struct {
 }
 
 type geminiContent struct {
-	Role  string       `json:"role,omitempty"`
-	Parts []geminiPart `json:"parts"`
+	Role         string              `json:"role,omitempty"`
+	Parts        []geminiPart        `json:"parts"`
+	CacheControl *geminiCacheControl `json:"cache_control,omitempty"`
+}
+
+// geminiCacheControl represents Gemini's cache control structure
+type geminiCacheControl struct {
+	Type string `json:"type"`
 }
 
 type geminiPart struct {
@@ -606,10 +628,11 @@ type geminiCandidate struct {
 }
 
 type geminiUsageMetadata struct {
-	PromptTokenCount     int `json:"promptTokenCount"`
-	CandidatesTokenCount int `json:"candidatesTokenCount"`
-	ThoughtsTokenCount   int `json:"thoughtsTokenCount,omitempty"`
-	TotalTokenCount      int `json:"totalTokenCount"`
+	PromptTokenCount        int `json:"promptTokenCount"`
+	CandidatesTokenCount    int `json:"candidatesTokenCount"`
+	ThoughtsTokenCount      int `json:"thoughtsTokenCount,omitempty"`
+	TotalTokenCount         int `json:"totalTokenCount"`
+	CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
 }
 
 // Streaming structures
