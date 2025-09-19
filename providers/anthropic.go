@@ -188,7 +188,22 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 	for _, content := range anthropicResp.Content {
 		switch content.Type {
 		case "text":
-			response.Content += content.Text
+			if content.Text != "" {
+				if response.Content != "" {
+					response.Content += "\n\n"
+				}
+				response.Content += content.Text
+			}
+		case "thinking":
+			if content.Thinking != "" {
+				if response.Reasoning == nil {
+					response.Reasoning = &ReasoningData{}
+				}
+				if response.Reasoning.Content != "" {
+					response.Reasoning.Content += "\n\n"
+				}
+				response.Reasoning.Content += content.Thinking
+			}
 		case "tool_use":
 			args, _ := json.Marshal(content.Input)
 			response.ToolCalls = append(response.ToolCalls, ToolCall{
@@ -396,6 +411,17 @@ func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
 			}, nil
 		}
 
+		// Handle thinking content deltas (extended thinking)
+		if chunk.Type == "content_block_delta" && chunk.Delta.Type == "thinking_delta" {
+			return &StreamChunk{
+				Type:      "reasoning",
+				Content:   "", // Keep content empty for reasoning chunks
+				Reasoning: &ReasoningChunk{Content: chunk.Delta.Text},
+				Done:      false,
+				Provider:  r.provider,
+			}, nil
+		}
+
 		// Handle tool use deltas
 		if chunk.Type == "content_block_delta" && chunk.Delta.Type == "input_json_delta" {
 			return &StreamChunk{
@@ -461,6 +487,8 @@ type anthropicMessage struct {
 type anthropicContent struct {
 	Type         string                 `json:"type"`
 	Text         string                 `json:"text,omitempty"`
+	Thinking     string                 `json:"thinking,omitempty"`  // For extended thinking
+	Signature    string                 `json:"signature,omitempty"` // For extended thinking
 	ToolUseID    string                 `json:"tool_use_id,omitempty"`
 	Name         string                 `json:"name,omitempty"`
 	Input        map[string]any         `json:"input,omitempty"`
