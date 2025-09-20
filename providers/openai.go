@@ -75,18 +75,78 @@ func (p *OpenAIProvider) Models() []ModelInfo {
 	}
 }
 
+// needsMaxCompletionTokens checks if the model requires max_completion_tokens instead of max_tokens
+func (p *OpenAIProvider) needsMaxCompletionTokens(model string) bool {
+	modelLower := strings.ToLower(model)
+
+	// o-series reasoning models (o1, o3, o4)
+	if strings.HasPrefix(modelLower, "o1") ||
+		strings.HasPrefix(modelLower, "o3") ||
+		strings.HasPrefix(modelLower, "o4") {
+		return true
+	}
+
+	// GPT-5 series
+	if strings.HasPrefix(modelLower, "gpt-5") {
+		return true
+	}
+
+	return false
+}
+
 // isReasoningModel checks if the model supports advanced reasoning (o-series and GPT-5)
 func (p *OpenAIProvider) isReasoningModel(model string) bool {
-	modelLower := strings.ToLower(model)
-	return strings.HasPrefix(modelLower, "o1") ||
-		strings.HasPrefix(modelLower, "o3") ||
-		strings.HasPrefix(modelLower, "o4") ||
-		strings.HasPrefix(modelLower, "gpt-5")
+	return p.needsMaxCompletionTokens(model)
+}
+
+// validateRequest validates the request parameters for OpenAI API compatibility
+func (p *OpenAIProvider) validateRequest(req *Request) error {
+	if req.Model == "" {
+		return fmt.Errorf("model is required")
+	}
+
+	if len(req.Messages) == 0 {
+		return fmt.Errorf("at least one message is required")
+	}
+
+	// Validate temperature range for non-reasoning models
+	if req.Temperature != nil && !p.isReasoningModel(req.Model) {
+		if *req.Temperature < 0 || *req.Temperature > 2 {
+			return fmt.Errorf("temperature must be between 0 and 2, got %f", *req.Temperature)
+		}
+	}
+
+	// Validate max tokens
+	if req.MaxTokens != nil && *req.MaxTokens <= 0 {
+		return fmt.Errorf("max_tokens must be positive, got %d", *req.MaxTokens)
+	}
+
+	return nil
+}
+
+// resolveTokenParams resolves token parameter conflicts based on model type
+func (p *OpenAIProvider) resolveTokenParams(req *Request) (maxTokens *int, maxCompletionTokens *int) {
+	if req.MaxTokens == nil {
+		return nil, nil
+	}
+
+	if p.needsMaxCompletionTokens(req.Model) {
+		// Reasoning models use max_completion_tokens
+		return nil, req.MaxTokens
+	}
+
+	// Traditional models use max_tokens
+	return req.MaxTokens, nil
 }
 
 func (p *OpenAIProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
+	}
+
+	// Validate request parameters
+	if err := p.validateRequest(req); err != nil {
+		return nil, fmt.Errorf("openai: invalid request: %w", err)
 	}
 
 	modelName := req.Model
@@ -147,18 +207,13 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 		openaiReq.Reasoning = reasoning
 	}
 
-	// Set correct parameters based on model type
-	if p.isReasoningModel(modelName) {
-		// Reasoning models always use max_completion_tokens
-		openaiReq.MaxCompletionTokens = req.MaxTokens
-		// Only set reasoning parameters if provided
-		if req.ReasoningEffort != "" || req.ReasoningSummary != "" {
-			// Reasoning parameters provided - these will be used
-		}
-		// Reasoning models typically ignore temperature
-	} else {
-		// Traditional models use max_tokens and temperature
-		openaiReq.MaxTokens = req.MaxTokens
+	// Resolve token parameters based on model type
+	maxTokens, maxCompletionTokens := p.resolveTokenParams(req)
+	openaiReq.MaxTokens = maxTokens
+	openaiReq.MaxCompletionTokens = maxCompletionTokens
+
+	// Set temperature only for non-reasoning models
+	if !p.isReasoningModel(modelName) {
 		openaiReq.Temperature = req.Temperature
 	}
 
@@ -466,37 +521,6 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	}, nil
 }
 
-func (p *OpenAIProvider) convertMessages(messages []Message) []openaiMessage {
-	openaiMessages := make([]openaiMessage, len(messages))
-	for i, msg := range messages {
-		openaiMessages[i] = openaiMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		}
-	}
-	return openaiMessages
-}
-
-func (p *OpenAIProvider) convertResponse(resp *openaiResponse) *Response {
-	response := &Response{
-		Usage: Usage{
-			PromptTokens:     resp.Usage.PromptTokens,
-			CompletionTokens: resp.Usage.CompletionTokens,
-			TotalTokens:      resp.Usage.TotalTokens,
-		},
-		Model:    resp.Model,
-		Provider: "openai",
-	}
-
-	if len(resp.Choices) > 0 {
-		choice := resp.Choices[0]
-		response.Content = choice.Message.Content
-		response.FinishReason = choice.FinishReason
-	}
-
-	return response
-}
-
 func (p *OpenAIProvider) buildURL(endpoint string) string {
 	baseURL := strings.TrimSuffix(p.Config().BaseURL, "/")
 	if baseURL == "" {
@@ -769,13 +793,27 @@ type responsesAPIOutputTokensDetails struct {
 
 // convertResponseFormat converts response format and ensures OpenAI compatibility
 func (p *OpenAIProvider) convertResponseFormat(rf *ResponseFormat) *openaiResponseFormat {
+	if rf == nil {
+		return nil
+	}
+
 	result := &openaiResponseFormat{Type: rf.Type}
 
 	if rf.JSONSchema != nil {
+		schema := rf.JSONSchema.Schema
+
+		// Clean schema for OpenAI compatibility
+		schema = p.cleanSchemaForOpenAI(schema)
+
+		// Apply strict mode if requested
+		if rf.JSONSchema.Strict != nil && *rf.JSONSchema.Strict {
+			schema = p.ensureStrictSchema(schema)
+		}
+
 		result.JSONSchema = &openaiJSONSchema{
 			Name:        rf.JSONSchema.Name,
 			Description: rf.JSONSchema.Description,
-			Schema:      p.ensureStrictSchema(rf.JSONSchema.Schema),
+			Schema:      schema,
 			Strict:      rf.JSONSchema.Strict,
 		}
 	}
@@ -783,24 +821,39 @@ func (p *OpenAIProvider) convertResponseFormat(rf *ResponseFormat) *openaiRespon
 	return result
 }
 
-// ensureStrictSchema recursively adds additionalProperties: false to all objects for OpenAI strict mode
-func (p *OpenAIProvider) ensureStrictSchema(schema interface{}) interface{} {
+// cleanSchemaForOpenAI removes unsupported validation rules and ensures OpenAI compatibility
+func (p *OpenAIProvider) cleanSchemaForOpenAI(schema interface{}) interface{} {
 	switch s := schema.(type) {
 	case map[string]interface{}:
 		result := make(map[string]interface{}, len(s))
 		for k, v := range s {
-			result[k] = p.ensureStrictSchema(v)
+			// Skip unsupported OpenAI schema properties
+			if k == "examples" || k == "default" || k == "const" {
+				continue
+			}
+			result[k] = p.cleanSchemaForOpenAI(v)
 		}
+
+		// Add additionalProperties: false for objects in strict mode
 		if result["type"] == "object" {
-			result["additionalProperties"] = false
+			if _, hasAdditionalProps := result["additionalProperties"]; !hasAdditionalProps {
+				result["additionalProperties"] = false
+			}
 		}
+
 		return result
 	case []interface{}:
+		cleaned := make([]interface{}, len(s))
 		for i, v := range s {
-			s[i] = p.ensureStrictSchema(v)
+			cleaned[i] = p.cleanSchemaForOpenAI(v)
 		}
-		return s
+		return cleaned
 	default:
 		return schema
 	}
+}
+
+// ensureStrictSchema recursively adds additionalProperties: false to all objects for OpenAI strict mode
+func (p *OpenAIProvider) ensureStrictSchema(schema interface{}) interface{} {
+	return p.cleanSchemaForOpenAI(schema)
 }
