@@ -540,7 +540,7 @@ if litellm.IsProviderRegistered("myprovider") {
 - Function Calling, Code Generation, Reasoning (step-by-step thinking via `enable_thinking`), Large context window (up to 1M tokens)
 - OpenAI-compatible API through DashScope
 
-### GLM (智谱AI)
+### GLM (ZhiPu AI)
 - GLM-4.5 (355B-A32B flagship model with hybrid reasoning capabilities)
 - GLM-4.5-Air (106B-A12B lightweight version), GLM-4.5-Flash (fast version)
 - GLM-4, GLM-4-Flash, GLM-4-Air, GLM-4-AirX (previous generation models)
