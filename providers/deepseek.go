@@ -122,10 +122,12 @@ func (p *DeepSeekProvider) Chat(ctx context.Context, req *Request) (*Response, e
 		}
 
 		response.Usage = Usage{
-			PromptTokens:     deepseekResp.Usage.PromptTokens,
-			CompletionTokens: deepseekResp.Usage.CompletionTokens,
-			TotalTokens:      deepseekResp.Usage.TotalTokens,
-			ReasoningTokens:  reasoningTokens,
+			PromptTokens:             deepseekResp.Usage.PromptTokens,
+			CompletionTokens:         deepseekResp.Usage.CompletionTokens,
+			TotalTokens:              deepseekResp.Usage.TotalTokens,
+			ReasoningTokens:          reasoningTokens,
+			CacheReadInputTokens:     deepseekResp.Usage.PromptCacheHitTokens,
+			CacheCreationInputTokens: deepseekResp.Usage.PromptCacheMissTokens,
 		}
 	}
 

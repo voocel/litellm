@@ -40,6 +40,11 @@ func main() {
 	fmt.Println("\n4. JSON Schema Response Format Example")
 	fmt.Println("--------------------------------------")
 	jsonSchemaExample(client)
+
+	// Example 5: Prompt Caching
+	fmt.Println("\n5. Prompt Caching Example")
+	fmt.Println("-------------------------")
+	promptCachingExample(client)
 }
 
 // Example 1: Basic Chat
@@ -66,6 +71,87 @@ func basicChat(client *litellm.Client) {
 	fmt.Printf("Response: %s\n", response.Content)
 	fmt.Printf("Usage: %d prompt + %d completion = %d total tokens\n",
 		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.TotalTokens)
+}
+
+// Example 5: Prompt Caching
+func promptCachingExample(client *litellm.Client) {
+	ctx := context.Background()
+
+	// Large system prompt that we want to cache
+	systemPrompt := `You are an expert code reviewer with deep knowledge of Go, Python, JavaScript, and software architecture.
+Your task is to analyze code for:
+1. Code quality and best practices
+2. Performance optimizations
+3. Security vulnerabilities
+4. Maintainability issues
+5. Documentation completeness
+
+Please provide detailed, actionable feedback with specific examples and suggestions for improvement.
+Always explain the reasoning behind your recommendations and consider the broader context of the codebase.`
+
+	// First request - creates cache
+	fmt.Println("First request (creates cache):")
+	request1 := &litellm.Request{
+		Model: "claude-4-sonnet",
+		Messages: []litellm.Message{
+			{
+				Role:         "system",
+				Content:      systemPrompt,
+				CacheControl: litellm.NewEphemeralCache(), // Cache this large system prompt
+			},
+			{
+				Role:    "user",
+				Content: "Review this Go function: func add(a, b int) int { return a + b }",
+			},
+		},
+		MaxTokens:   litellm.IntPtr(500),
+		Temperature: litellm.Float64Ptr(0.3),
+	}
+
+	response1, err := client.Chat(ctx, request1)
+	if err != nil {
+		log.Printf("First request failed: %v", err)
+		return
+	}
+
+	fmt.Printf("Response: %s\n", response1.Content)
+	fmt.Printf("Usage: %d prompt + %d completion = %d total tokens\n",
+		response1.Usage.PromptTokens, response1.Usage.CompletionTokens, response1.Usage.TotalTokens)
+	if response1.Usage.CacheCreationInputTokens > 0 {
+		fmt.Printf("Cache: %d tokens written to cache\n", response1.Usage.CacheCreationInputTokens)
+	}
+
+	// Second request - uses cache
+	fmt.Println("\nSecond request (uses cache):")
+	request2 := &litellm.Request{
+		Model: "claude-4-sonnet",
+		Messages: []litellm.Message{
+			{
+				Role:         "system",
+				Content:      systemPrompt, // Same content
+				CacheControl: litellm.NewEphemeralCache(),
+			},
+			{
+				Role:    "user",
+				Content: "Review this Python function: def multiply(x, y): return x * y",
+			},
+		},
+		MaxTokens:   litellm.IntPtr(500),
+		Temperature: litellm.Float64Ptr(0.3),
+	}
+
+	response2, err := client.Chat(ctx, request2)
+	if err != nil {
+		log.Printf("Second request failed: %v", err)
+		return
+	}
+
+	fmt.Printf("Response: %s\n", response2.Content)
+	fmt.Printf("Usage: %d prompt + %d completion = %d total tokens\n",
+		response2.Usage.PromptTokens, response2.Usage.CompletionTokens, response2.Usage.TotalTokens)
+	if response2.Usage.CacheReadInputTokens > 0 {
+		fmt.Printf("Cache: %d tokens read from cache (cost savings!)\n", response2.Usage.CacheReadInputTokens)
+	}
 }
 
 // Example 2: Streaming Chat

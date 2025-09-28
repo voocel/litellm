@@ -7,10 +7,11 @@ import (
 
 // Message represents a conversation message
 type Message struct {
-	Role       string     `json:"role"` // user, assistant, system, tool
-	Content    string     `json:"content"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	Role         string        `json:"role"` // user, assistant, system, tool
+	Content      string        `json:"content"`
+	ToolCallID   string        `json:"tool_call_id,omitempty"`
+	ToolCalls    []ToolCall    `json:"tool_calls,omitempty"`
+	CacheControl *CacheControl `json:"cache_control,omitempty"`
 }
 
 // Request represents a completion request
@@ -30,6 +31,9 @@ type Request struct {
 	ReasoningEffort  string `json:"reasoning_effort,omitempty"`
 	ReasoningSummary string `json:"reasoning_summary,omitempty"`
 	UseResponsesAPI  bool   `json:"use_responses_api,omitempty"`
+
+	// Prompt caching control
+	CacheControl *CacheControl `json:"cache_control,omitempty"`
 
 	// Provider-specific extensions
 	Extra map[string]any `json:"extra,omitempty"`
@@ -52,6 +56,10 @@ type Usage struct {
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
 	ReasoningTokens  int `json:"reasoning_tokens,omitempty"`
+
+	// Cache-related token statistics
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"` // Tokens written to cache
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`     // Tokens read from cache
 }
 
 // Tool represents a function tool definition
@@ -99,6 +107,40 @@ type ReasoningData struct {
 	Content    string `json:"content,omitempty"` // Full reasoning content
 	Summary    string `json:"summary,omitempty"` // Reasoning summary
 	TokensUsed int    `json:"tokens_used,omitempty"`
+}
+
+// CacheControl defines prompt caching behavior
+type CacheControl struct {
+	Type string `json:"type"`          // "ephemeral" or "persistent"
+	TTL  *int   `json:"ttl,omitempty"` // Time to live in seconds (optional)
+}
+
+// Cache control types
+const (
+	CacheTypeEphemeral  = "ephemeral"
+	CacheTypePersistent = "persistent"
+)
+
+// NewEphemeralCache creates an ephemeral cache control (default 5 minutes)
+func NewEphemeralCache() *CacheControl {
+	return &CacheControl{Type: CacheTypeEphemeral}
+}
+
+// NewPersistentCache creates a persistent cache control with custom TTL
+func NewPersistentCache(ttlSeconds int) *CacheControl {
+	return &CacheControl{
+		Type: CacheTypePersistent,
+		TTL:  &ttlSeconds,
+	}
+}
+
+// NewCacheControl creates a cache control with specified type and optional TTL
+func NewCacheControl(cacheType string, ttlSeconds ...int) *CacheControl {
+	cache := &CacheControl{Type: cacheType}
+	if len(ttlSeconds) > 0 {
+		cache.TTL = &ttlSeconds[0]
+	}
+	return cache
 }
 
 // StreamChunk represents a single chunk in streaming response

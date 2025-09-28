@@ -3,10 +3,11 @@ package litellm
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"syscall"
@@ -155,22 +156,25 @@ func isRetryableError(err error) bool {
 	}
 
 	// Network errors are generally retryable
-	if netErr, ok := err.(net.Error); ok {
-		return netErr.Timeout() || netErr.Temporary()
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout()
 	}
 
 	// System call errors
-	if opErr, ok := err.(*net.OpError); ok {
-		if syscallErr, ok := opErr.Err.(*syscall.Errno); ok {
-			switch *syscallErr {
-			case syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.ETIMEDOUT:
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		var syscallErr *syscall.Errno
+		if errors.As(opErr.Err, &syscallErr) {
+			switch {
+			case errors.Is(*syscallErr, syscall.ECONNREFUSED), errors.Is(*syscallErr, syscall.ECONNRESET), errors.Is(*syscallErr, syscall.ETIMEDOUT):
 				return true
 			}
 		}
 	}
 
 	// Context errors are not retryable (user cancelled or deadline exceeded)
-	if err == context.Canceled || err == context.DeadlineExceeded {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 
