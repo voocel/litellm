@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
+type HTTPDoer interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
 // ProviderConfig holds configuration for a provider
 type ProviderConfig struct {
 	APIKey     string           `json:"api_key"`
@@ -14,6 +18,7 @@ type ProviderConfig struct {
 	Timeout    time.Duration    `json:"timeout,omitempty"`
 	Extra      map[string]any   `json:"extra,omitempty"`
 	Resilience ResilienceConfig `json:"resilience,omitempty"`
+	HTTPClient HTTPDoer         `json:"-"`
 }
 
 // ResilienceConfig holds network resilience configuration for providers
@@ -44,7 +49,7 @@ func DefaultResilienceConfig() ResilienceConfig {
 type BaseProvider struct {
 	name             string
 	config           ProviderConfig
-	httpClient       *http.Client
+	httpClient       HTTPDoer
 	resilienceConfig ResilienceConfig
 }
 
@@ -59,16 +64,22 @@ func NewBaseProvider(name string, config ProviderConfig) *BaseProvider {
 		resilienceConfig = DefaultResilienceConfig()
 	}
 
-	httpClient := &http.Client{
-		Timeout: resilienceConfig.RequestTimeout,
-		Transport: &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout: resilienceConfig.ConnectTimeout,
-			}).DialContext,
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 10,
-			IdleConnTimeout:     90 * time.Second,
-		},
+	var httpClient HTTPDoer
+	if config.HTTPClient != nil {
+		httpClient = config.HTTPClient
+	} else {
+		httpClient = &http.Client{
+			Timeout: resilienceConfig.RequestTimeout,
+			Transport: &http.Transport{
+				DialContext: (&net.Dialer{
+					Timeout: resilienceConfig.ConnectTimeout,
+				}).DialContext,
+				MaxIdleConns:        100,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		}
+		config.HTTPClient = httpClient
 	}
 
 	return &BaseProvider{
@@ -87,7 +98,7 @@ func (p *BaseProvider) Config() ProviderConfig {
 	return p.config
 }
 
-func (p *BaseProvider) HTTPClient() *http.Client {
+func (p *BaseProvider) HTTPClient() HTTPDoer {
 	return p.httpClient
 }
 

@@ -25,19 +25,27 @@ func createProvider(name string, config ProviderConfig) (Provider, error) {
 	}
 	providerMutex.RUnlock()
 
+	resilienceConfig := config.Resilience
+	if resilienceConfig == (ResilienceConfig{}) {
+		resilienceConfig = DefaultResilienceConfig()
+	}
+
+	resilientClient := NewResilientHTTPClient(resilienceConfig)
+
 	// Fall back to built-in providers
 	providerConfig := providers.ProviderConfig{
 		APIKey:  config.APIKey,
 		BaseURL: config.BaseURL,
 		Resilience: providers.ResilienceConfig{
-			MaxRetries:     config.Resilience.MaxRetries,
-			InitialDelay:   config.Resilience.InitialDelay,
-			MaxDelay:       config.Resilience.MaxDelay,
-			Multiplier:     config.Resilience.Multiplier,
-			Jitter:         config.Resilience.Jitter,
-			RequestTimeout: config.Resilience.RequestTimeout,
-			ConnectTimeout: config.Resilience.ConnectTimeout,
+			MaxRetries:     resilienceConfig.MaxRetries,
+			InitialDelay:   resilienceConfig.InitialDelay,
+			MaxDelay:       resilienceConfig.MaxDelay,
+			Multiplier:     resilienceConfig.Multiplier,
+			Jitter:         resilienceConfig.Jitter,
+			RequestTimeout: resilienceConfig.RequestTimeout,
+			ConnectTimeout: resilienceConfig.ConnectTimeout,
 		},
+		HTTPClient: resilientClient,
 	}
 
 	// Create provider directly based on name
