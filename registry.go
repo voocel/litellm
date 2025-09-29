@@ -215,13 +215,27 @@ func convertMessages(messages []Message) []providers.Message {
 	providerMessages := make([]providers.Message, len(messages))
 	for i, msg := range messages {
 		providerMessages[i] = providers.Message{
-			Role:       msg.Role,
-			Content:    msg.Content,
-			ToolCalls:  convertMessageToolCalls(msg.ToolCalls),
-			ToolCallID: msg.ToolCallID,
+			Role:         msg.Role,
+			Content:      msg.Content,
+			ToolCalls:    convertMessageToolCalls(msg.ToolCalls),
+			ToolCallID:   msg.ToolCallID,
+			CacheControl: convertCacheControl(msg.CacheControl),
 		}
 	}
 	return providerMessages
+}
+
+func convertCacheControl(cache *CacheControl) *providers.CacheControl {
+	if cache == nil {
+		return nil
+	}
+	converted := &providers.CacheControl{Type: cache.Type}
+	if cache.TTL != nil {
+		ttl := *cache.TTL
+		converted.TTL = &ttl
+	}
+
+	return converted
 }
 
 func convertMessageToolCalls(toolCalls []ToolCall) []providers.ToolCall {
@@ -298,10 +312,12 @@ func convertResponseFormat(rf *ResponseFormat) *providers.ResponseFormat {
 
 func convertUsage(usage providers.Usage) Usage {
 	return Usage{
-		PromptTokens:     usage.PromptTokens,
-		CompletionTokens: usage.CompletionTokens,
-		TotalTokens:      usage.TotalTokens,
-		ReasoningTokens:  usage.ReasoningTokens,
+		PromptTokens:             usage.PromptTokens,
+		CompletionTokens:         usage.CompletionTokens,
+		TotalTokens:              usage.TotalTokens,
+		ReasoningTokens:          usage.ReasoningTokens,
+		CacheCreationInputTokens: usage.CacheCreationInputTokens,
+		CacheReadInputTokens:     usage.CacheReadInputTokens,
 	}
 }
 
