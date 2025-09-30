@@ -93,16 +93,43 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 		}
 	}
 
-	// Convert messages to Anthropic format
-	anthropicReq.Messages = make([]anthropicMessage, len(req.Messages))
-	for i, msg := range req.Messages {
+	// Extract system messages and convert to Anthropic format
+	var systemContents []anthropicContent
+	var nonSystemMessages []Message
+
+	for _, msg := range req.Messages {
+		if msg.Role == "system" {
+			systemContent := anthropicContent{
+				Type: "text",
+				Text: msg.Content,
+			}
+			// Add cache control if specified for this system message
+			if msg.CacheControl != nil {
+				systemContent.CacheControl = &anthropicCacheControl{
+					Type: msg.CacheControl.Type,
+				}
+			}
+			systemContents = append(systemContents, systemContent)
+		} else {
+			nonSystemMessages = append(nonSystemMessages, msg)
+		}
+	}
+
+	// Set system prompt if any system messages were found
+	if len(systemContents) > 0 {
+		anthropicReq.System = systemContents
+	}
+
+	// Convert non-system messages to Anthropic format
+	anthropicReq.Messages = make([]anthropicMessage, len(nonSystemMessages))
+	for i, msg := range nonSystemMessages {
 		anthropicMsg := anthropicMessage{
 			Role: msg.Role,
 		}
 
 		content := msg.Content
 		// Handle structured output by adding instructions to the last user message
-		if req.ResponseFormat != nil && i == len(req.Messages)-1 && msg.Role == "user" {
+		if req.ResponseFormat != nil && i == len(nonSystemMessages)-1 && msg.Role == "user" {
 			content = p.addStructuredOutputInstructions(content, req.ResponseFormat)
 		}
 
@@ -230,7 +257,6 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 	anthropicReq := anthropicRequest{
 		Model:       modelName,
 		MaxTokens:   4096,
-		Messages:    make([]anthropicMessage, len(req.Messages)),
 		Stream:      true,
 		Temperature: req.Temperature,
 	}
@@ -260,14 +286,42 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 		}
 	}
 
-	// Convert messages (same as Chat method)
-	for i, msg := range req.Messages {
+	// Extract system messages and convert to Anthropic format (same as Chat method)
+	var systemContents []anthropicContent
+	var nonSystemMessages []Message
+
+	for _, msg := range req.Messages {
+		if msg.Role == "system" {
+			systemContent := anthropicContent{
+				Type: "text",
+				Text: msg.Content,
+			}
+			// Add cache control if specified for this system message
+			if msg.CacheControl != nil {
+				systemContent.CacheControl = &anthropicCacheControl{
+					Type: msg.CacheControl.Type,
+				}
+			}
+			systemContents = append(systemContents, systemContent)
+		} else {
+			nonSystemMessages = append(nonSystemMessages, msg)
+		}
+	}
+
+	// Set system prompt if any system messages were found
+	if len(systemContents) > 0 {
+		anthropicReq.System = systemContents
+	}
+
+	// Convert non-system messages to Anthropic format
+	anthropicReq.Messages = make([]anthropicMessage, len(nonSystemMessages))
+	for i, msg := range nonSystemMessages {
 		anthropicMsg := anthropicMessage{
 			Role: msg.Role,
 		}
 
 		content := msg.Content
-		if req.ResponseFormat != nil && i == len(req.Messages)-1 && msg.Role == "user" {
+		if req.ResponseFormat != nil && i == len(nonSystemMessages)-1 && msg.Role == "user" {
 			content = p.addStructuredOutputInstructions(content, req.ResponseFormat)
 		}
 
@@ -472,6 +526,7 @@ func (r *anthropicStreamReader) Close() error {
 // Anthropic API request/response structures
 type anthropicRequest struct {
 	Model       string             `json:"model"`
+	System      []anthropicContent `json:"system,omitempty"` // System prompt (can be string or array of content blocks)
 	MaxTokens   int                `json:"max_tokens"`
 	Messages    []anthropicMessage `json:"messages"`
 	Stream      bool               `json:"stream,omitempty"`
