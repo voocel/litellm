@@ -62,10 +62,12 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 	modelName := req.Model
 
 	anthropicReq := anthropicRequest{
-		Model:       modelName,
-		MaxTokens:   4096,
-		Stream:      false,
-		Temperature: req.Temperature,
+		Model:         modelName,
+		MaxTokens:     4096,
+		Stream:        false,
+		Temperature:   req.Temperature,
+		StopSequences: req.Stop, // Convert Stop to stop_sequences for Anthropic
+		ToolChoice:    req.ToolChoice,
 	}
 
 	if req.MaxTokens != nil {
@@ -117,7 +119,13 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 
 	// Set system prompt if any system messages were found
 	if len(systemContents) > 0 {
-		anthropicReq.System = systemContents
+		// If there's only one system message without cache control, use string format
+		if len(systemContents) == 1 && systemContents[0].CacheControl == nil {
+			anthropicReq.System = systemContents[0].Text
+		} else {
+			// Use array format for multiple messages or when cache control is needed
+			anthropicReq.System = systemContents
+		}
 	}
 
 	// Convert non-system messages to Anthropic format
@@ -255,10 +263,12 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 	modelName := req.Model
 
 	anthropicReq := anthropicRequest{
-		Model:       modelName,
-		MaxTokens:   4096,
-		Stream:      true,
-		Temperature: req.Temperature,
+		Model:         modelName,
+		MaxTokens:     4096,
+		Stream:        true,
+		Temperature:   req.Temperature,
+		StopSequences: req.Stop, // Convert Stop to stop_sequences for Anthropic
+		ToolChoice:    req.ToolChoice,
 	}
 
 	if req.MaxTokens != nil {
@@ -310,7 +320,13 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 
 	// Set system prompt if any system messages were found
 	if len(systemContents) > 0 {
-		anthropicReq.System = systemContents
+		// If there's only one system message without cache control, use string format
+		if len(systemContents) == 1 && systemContents[0].CacheControl == nil {
+			anthropicReq.System = systemContents[0].Text
+		} else {
+			// Use array format for multiple messages or when cache control is needed
+			anthropicReq.System = systemContents
+		}
 	}
 
 	// Convert non-system messages to Anthropic format
@@ -525,13 +541,15 @@ func (r *anthropicStreamReader) Close() error {
 
 // Anthropic API request/response structures
 type anthropicRequest struct {
-	Model       string             `json:"model"`
-	System      []anthropicContent `json:"system,omitempty"` // System prompt (can be string or array of content blocks)
-	MaxTokens   int                `json:"max_tokens"`
-	Messages    []anthropicMessage `json:"messages"`
-	Stream      bool               `json:"stream,omitempty"`
-	Temperature *float64           `json:"temperature,omitempty"`
-	Tools       []anthropicTool    `json:"tools,omitempty"`
+	Model         string             `json:"model"`
+	System        any                `json:"system,omitempty"` // System prompt (can be string or array of content blocks)
+	MaxTokens     int                `json:"max_tokens"`
+	Messages      []anthropicMessage `json:"messages"`
+	Stream        bool               `json:"stream,omitempty"`
+	Temperature   *float64           `json:"temperature,omitempty"`
+	Tools         []anthropicTool    `json:"tools,omitempty"`
+	ToolChoice    any                `json:"tool_choice,omitempty"`    // How the model should use the provided tools
+	StopSequences []string           `json:"stop_sequences,omitempty"` // Custom text sequences that will cause the model to stop generating
 }
 
 type anthropicMessage struct {

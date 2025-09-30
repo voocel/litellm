@@ -27,6 +27,11 @@ type Request struct {
 	// Response format for structured output
 	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
 
+	// Stop sequences - custom text sequences that will cause the model to stop generating
+	// OpenAI: uses "stop" parameter (string or array, up to 4 sequences)
+	// Anthropic: uses "stop_sequences" parameter (array of strings)
+	Stop []string `json:"stop,omitempty"`
+
 	// Reasoning parameters for advanced models
 	ReasoningEffort  string `json:"reasoning_effort,omitempty"`
 	ReasoningSummary string `json:"reasoning_summary,omitempty"`

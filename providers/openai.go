@@ -217,6 +217,11 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 		openaiReq.Temperature = req.Temperature
 	}
 
+	// Set stop sequences (up to 4 sequences)
+	if len(req.Stop) > 0 {
+		openaiReq.Stop = req.Stop
+	}
+
 	// Convert tool definitions
 	if len(req.Tools) > 0 {
 		openaiReq.Tools = make([]openaiTool, len(req.Tools))
@@ -484,6 +489,11 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		openaiReq.Temperature = req.Temperature
 	}
 
+	// Set stop sequences (up to 4 sequences)
+	if len(req.Stop) > 0 {
+		openaiReq.Stop = req.Stop
+	}
+
 	for i, msg := range req.Messages {
 		openaiReq.Messages[i] = openaiMessage{
 			Role:    msg.Role,
@@ -639,6 +649,7 @@ type openaiRequest struct {
 	MaxCompletionTokens *int                  `json:"max_completion_tokens,omitempty"`
 	Temperature         *float64              `json:"temperature,omitempty"`
 	Stream              bool                  `json:"stream,omitempty"`
+	Stop                []string              `json:"stop,omitempty"` // Up to 4 sequences where the API will stop generating
 	Tools               []openaiTool          `json:"tools,omitempty"`
 	ToolChoice          any                   `json:"tool_choice,omitempty"`
 	ResponseFormat      *openaiResponseFormat `json:"response_format,omitempty"`

@@ -69,6 +69,7 @@ type Request struct {
 	Tools            []Tool
 	ToolChoice       any
 	ResponseFormat   *ResponseFormat
+	Stop             []string
 	ReasoningEffort  string
 	ReasoningSummary string
 	UseResponsesAPI  bool
