@@ -86,10 +86,11 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 	}
 
 	// Set generation configuration
-	if req.Temperature != nil || req.MaxTokens != nil || req.ResponseFormat != nil || p.supportsThinking(modelName) {
+	if req.Temperature != nil || req.MaxTokens != nil || req.ResponseFormat != nil || len(req.Stop) > 0 || p.supportsThinking(modelName) {
 		geminiReq.GenerationConfig = &geminiGenerationConfig{
 			Temperature:     req.Temperature,
 			MaxOutputTokens: req.MaxTokens,
+			StopSequences:   req.Stop, // Map Stop to stopSequences for Gemini
 		}
 
 		// Enable thinking for models that support it
@@ -228,6 +229,11 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 			}
 		}
 		geminiReq.Tools = []geminiTool{tool}
+
+		// Configure tool calling mode based on ToolChoice
+		if req.ToolChoice != nil {
+			geminiReq.ToolConfig = p.convertToolChoice(req.ToolChoice)
+		}
 	}
 
 	// Send request
@@ -329,10 +335,11 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		Contents: make([]geminiContent, 0),
 	}
 
-	if req.Temperature != nil || req.MaxTokens != nil || p.supportsThinking(modelName) {
+	if req.Temperature != nil || req.MaxTokens != nil || len(req.Stop) > 0 || p.supportsThinking(modelName) {
 		geminiReq.GenerationConfig = &geminiGenerationConfig{
 			Temperature:     req.Temperature,
 			MaxOutputTokens: req.MaxTokens,
+			StopSequences:   req.Stop, // Map Stop to stopSequences for Gemini
 		}
 
 		// Enable thinking for models that support it
@@ -425,6 +432,77 @@ func (p *GeminiProvider) convertRole(role string) string {
 // generateToolCallID generates a unique tool call ID
 func (p *GeminiProvider) generateToolCallID() string {
 	return fmt.Sprintf("call_%d", time.Now().UnixNano())
+}
+
+// convertToolChoice converts the unified ToolChoice to Gemini's toolConfig format
+// According to Gemini API docs: https://ai.google.dev/gemini-api/docs/function-calling
+// Supported modes: AUTO (default), ANY (force function call), NONE (disable function calling)
+func (p *GeminiProvider) convertToolChoice(toolChoice any) *geminiToolConfig {
+	if toolChoice == nil {
+		return nil
+	}
+
+	// Handle string format: "auto", "any", "none"
+	if mode, ok := toolChoice.(string); ok {
+		modeUpper := strings.ToUpper(mode)
+		if modeUpper == "AUTO" || modeUpper == "ANY" || modeUpper == "NONE" {
+			return &geminiToolConfig{
+				FunctionCallingConfig: &geminiFunctionCallingConfig{
+					Mode: modeUpper,
+				},
+			}
+		}
+		// If it's "required", map to "ANY" (force function call)
+		if mode == "required" {
+			return &geminiToolConfig{
+				FunctionCallingConfig: &geminiFunctionCallingConfig{
+					Mode: "ANY",
+				},
+			}
+		}
+		return nil
+	}
+
+	// Handle map format: {"type": "...", "name": "..."}
+	if choiceMap, ok := toolChoice.(map[string]any); ok {
+		typeVal, hasType := choiceMap["type"].(string)
+		if !hasType {
+			return nil
+		}
+
+		switch typeVal {
+		case "auto":
+			return &geminiToolConfig{
+				FunctionCallingConfig: &geminiFunctionCallingConfig{
+					Mode: "AUTO",
+				},
+			}
+		case "any", "required":
+			return &geminiToolConfig{
+				FunctionCallingConfig: &geminiFunctionCallingConfig{
+					Mode: "ANY",
+				},
+			}
+		case "none":
+			return &geminiToolConfig{
+				FunctionCallingConfig: &geminiFunctionCallingConfig{
+					Mode: "NONE",
+				},
+			}
+		case "function", "tool":
+			// Specific function: {"type": "function", "name": "function_name"}
+			if funcName, ok := choiceMap["name"].(string); ok {
+				return &geminiToolConfig{
+					FunctionCallingConfig: &geminiFunctionCallingConfig{
+						Mode:                 "ANY",
+						AllowedFunctionNames: []string{funcName},
+					},
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 func boolPtr(b bool) *bool {
@@ -552,6 +630,7 @@ type geminiRequest struct {
 	Contents          []geminiContent         `json:"contents"`
 	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
 	Tools             []geminiTool            `json:"tools,omitempty"`
+	ToolConfig        *geminiToolConfig       `json:"toolConfig,omitempty"` // Tool configuration for function calling
 	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
 }
 
@@ -614,6 +693,17 @@ type geminiFunctionDeclaration struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	Parameters  map[string]any `json:"parameters"`
+}
+
+// geminiToolConfig configures how the model uses the provided tools
+type geminiToolConfig struct {
+	FunctionCallingConfig *geminiFunctionCallingConfig `json:"functionCallingConfig,omitempty"`
+}
+
+// geminiFunctionCallingConfig controls function calling behavior
+type geminiFunctionCallingConfig struct {
+	Mode                 string   `json:"mode,omitempty"`                 // AUTO, ANY, NONE
+	AllowedFunctionNames []string `json:"allowedFunctionNames,omitempty"` // Optional: restrict to specific functions
 }
 
 type geminiResponse struct {
