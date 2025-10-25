@@ -29,7 +29,7 @@ func main() {
 	//// Example 2: Streaming Chat
 	//fmt.Println("\n2. Streaming Chat Example")
 	//fmt.Println("-------------------------")
-	//streamingChat(client)
+	streamingChat(client)
 	//
 	//// Example 3: Function/Tool Calling
 	//fmt.Println("\n3. Function/Tool Calling Example")
@@ -37,18 +37,12 @@ func main() {
 	//functionCalling(client)
 	//
 	//// Example 4: JSON Schema Response Format
-	fmt.Println("\n4. JSON Schema Response Format Example")
-	fmt.Println("--------------------------------------")
-	jsonSchemaExample(client)
+	//fmt.Println("\n4. JSON Schema Response Format Example")
+	//fmt.Println("--------------------------------------")
+	//jsonSchemaExample(client)
 	//
-	//// Example 5: Reasoning Models (o1, o3, o4, gpt-5)
-	//// Note: o1 models use built-in reasoning without explicit parameters
-	//fmt.Println("\n5. Reasoning Models Example")
-	//fmt.Println("---------------------------")
-	//reasoningModels(client)
-	//
-	//// Example 6: Responses API
-	//fmt.Println("\n6. Responses API Example")
+	//// Example 5: Responses API
+	//fmt.Println("\n5. Responses API Example")
 	//fmt.Println("------------------------")
 	//responsesAPI(client)
 }
@@ -56,7 +50,7 @@ func main() {
 // Example 1: Basic Chat
 func basicChat(client *litellm.Client) {
 	request := &litellm.Request{
-		Model: "gpt-4.1-mini",
+		Model: "gpt-5",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
@@ -79,46 +73,67 @@ func basicChat(client *litellm.Client) {
 		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.TotalTokens)
 }
 
-// Example 2: Streaming Chat
+// Example 2: Streaming Chat with Reasoning Models (gpt-5, o1, o3, o4)
 func streamingChat(client *litellm.Client) {
 	request := &litellm.Request{
-		Model: "gpt-4o-mini",
+		Model: "gpt-5",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
-				Content: "Tell me a short story about a robot",
+				Content: "你是谁?",
 			},
 		},
-		MaxTokens:   litellm.IntPtr(100),
-		Temperature: litellm.Float64Ptr(0.8),
-		Stream:      true,
+		MaxTokens:       litellm.IntPtr(10000),
+		ReasoningEffort: "medium",
+		Stream:          true,
 	}
 
-	ctx := context.Background()
-	stream, err := client.Stream(ctx, request)
+	stream, err := client.Stream(context.Background(), request)
 	if err != nil {
 		log.Printf("Streaming failed: %v", err)
 		return
 	}
 	defer stream.Close()
 
-	fmt.Print("Streaming response: ")
+	fmt.Print("\nStreaming response: ")
+	var usage *litellm.Usage
 	for {
 		chunk, err := stream.Next()
 		if err != nil {
-			log.Printf("Stream error: %v", err)
+			log.Printf("\nStream error: %v", err)
 			break
 		}
 
 		if chunk.Done {
+			// Capture usage from the final chunk
+			if chunk.Usage != nil {
+				usage = chunk.Usage
+			}
 			break
 		}
 
 		if chunk.Type == "content" && chunk.Content != "" {
 			fmt.Print(chunk.Content)
 		}
+
+		// Note: reasoning chunks are not available in Chat Completions API streaming
+		// They are only available in Responses API
+		if chunk.Type == "reasoning" && chunk.Reasoning != nil {
+			fmt.Printf("\n[Reasoning: %s]\n", chunk.Reasoning.Summary)
+		}
 	}
 	fmt.Println()
+
+	// Print token usage statistics
+	if usage != nil {
+		fmt.Println("\nToken Usage:")
+		fmt.Printf("  Prompt Tokens:     %d\n", usage.PromptTokens)
+		fmt.Printf("  Completion Tokens: %d\n", usage.CompletionTokens)
+		if usage.ReasoningTokens > 0 {
+			fmt.Printf("  Reasoning Tokens:  %d (hidden internal reasoning)\n", usage.ReasoningTokens)
+		}
+		fmt.Printf("  Total Tokens:      %d\n", usage.TotalTokens)
+	}
 }
 
 // Example 3: Function/Tool Calling
@@ -201,7 +216,7 @@ func jsonSchemaExample(client *litellm.Client) {
 	}
 
 	request := &litellm.Request{
-		Model: "gpt-4o",
+		Model: "gpt-5",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
@@ -237,42 +252,7 @@ func jsonSchemaExample(client *litellm.Client) {
 	}
 }
 
-// Example 5: Reasoning Models (o1, o3, o4, gpt-5)
-// Note: o3 models work best with Responses API to show thinking process
-func reasoningModels(client *litellm.Client) {
-	request := &litellm.Request{
-		Model: "o3-mini",
-		Messages: []litellm.Message{
-			{
-				Role:    "user",
-				Content: "Solve this step by step: If a train travels 120 km in 2 hours, and then 180 km in 3 hours, what is the average speed for the entire journey?",
-			},
-		},
-		// Use Responses API to get thinking content
-		UseResponsesAPI:  true,
-		ReasoningEffort:  "medium",
-		ReasoningSummary: "detailed",
-		MaxTokens:        litellm.IntPtr(500),
-	}
-
-	ctx := context.Background()
-	response, err := client.Chat(ctx, request)
-	if err != nil {
-		log.Printf("Reasoning model failed: %v", err)
-		return
-	}
-
-	fmt.Printf("Response: %s\n", response.Content)
-	if response.Reasoning != nil {
-		fmt.Printf("Reasoning Summary: %s\n", response.Reasoning.Summary)
-		if response.Reasoning.Content != "" {
-			fmt.Printf("Reasoning Process: %s\n", response.Reasoning.Content)
-		}
-		fmt.Printf("Reasoning Tokens Used: %d\n", response.Usage.ReasoningTokens)
-	}
-}
-
-// Example 6: Responses API
+// Example 5: Responses API (for detailed reasoning process)
 func responsesAPI(client *litellm.Client) {
 	request := &litellm.Request{
 		Model: "gpt-5",

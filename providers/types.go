@@ -114,6 +114,7 @@ type StreamChunk struct {
 	Provider      string
 	Done          bool
 	Reasoning     *ReasoningChunk
+	Usage         *Usage
 }
 
 type ToolCallDelta struct {

@@ -41,6 +41,14 @@ func (p *OpenAIProvider) Models() []ModelInfo {
 			Capabilities: []string{"chat", "function_call", "vision", "code"},
 		},
 		{
+			ID: "gpt-5-mini", Provider: "openai", Name: "GPT-5-Mini", MaxTokens: 128000,
+			Capabilities: []string{"chat", "function_call", "vision", "code"},
+		},
+		{
+			ID: "gpt-5-nano", Provider: "openai", Name: "GPT-5-Nano", MaxTokens: 128000,
+			Capabilities: []string{"chat", "function_call", "vision", "code"},
+		},
+		{
 			ID: "gpt-4o", Provider: "openai", Name: "GPT-4o", MaxTokens: 128000,
 			Capabilities: []string{"chat", "function_call", "vision"},
 		},
@@ -459,6 +467,10 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		Model:    modelName,
 		Messages: make([]openaiMessage, len(req.Messages)),
 		Stream:   true,
+		// Enable usage statistics in streaming responses
+		StreamOptions: &openaiStreamOptions{
+			IncludeUsage: true,
+		},
 	}
 
 	// Convert response format
@@ -470,18 +482,12 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	if p.isReasoningModel(modelName) {
 		// Reasoning models always use max_completion_tokens
 		openaiReq.MaxCompletionTokens = req.MaxTokens
-		// Only set reasoning parameters if provided
-		if req.ReasoningEffort != "" || req.ReasoningSummary != "" {
-			reasoning := &openaiReasoning{}
-			if req.ReasoningEffort != "" {
-				reasoning.Effort = req.ReasoningEffort
-			}
-			if req.ReasoningSummary != "" {
-				reasoning.Summary = req.ReasoningSummary
-			} else {
-				reasoning.Summary = "auto"
-			}
-			openaiReq.Reasoning = reasoning
+
+		// Set reasoning_effort for Chat Completions API (top-level parameter)
+		// Note: reasoning_effort is supported in streaming mode for Chat Completions API
+		// but reasoning summary is only available in Responses API
+		if req.ReasoningEffort != "" {
+			openaiReq.ReasoningEffort = req.ReasoningEffort
 		}
 	} else {
 		// Traditional models use max_tokens and temperature
@@ -577,6 +583,25 @@ func (r *openaiStreamReader) Next() (*StreamChunk, error) {
 			continue
 		}
 
+		// Handle usage chunk (comes with empty choices array)
+		if chunk.Usage != nil && len(chunk.Choices) == 0 {
+			streamChunk := &StreamChunk{
+				Provider: r.provider,
+				Model:    chunk.Model,
+				Done:     true,
+				Usage: &Usage{
+					PromptTokens:     chunk.Usage.PromptTokens,
+					CompletionTokens: chunk.Usage.CompletionTokens,
+					TotalTokens:      chunk.Usage.TotalTokens,
+				},
+			}
+			if chunk.Usage.CompletionTokensDetails != nil {
+				streamChunk.Usage.ReasoningTokens = chunk.Usage.CompletionTokensDetails.ReasoningTokens
+			}
+			r.done = true
+			return streamChunk, nil
+		}
+
 		if len(chunk.Choices) > 0 {
 			choice := chunk.Choices[0]
 			streamChunk := &StreamChunk{
@@ -617,12 +642,15 @@ func (r *openaiStreamReader) Next() (*StreamChunk, error) {
 				}
 			}
 
+			// Check if stream is finished (usage chunk will come separately after this)
 			if choice.FinishReason != "" {
 				streamChunk.FinishReason = choice.FinishReason
+				// Don't mark as done yet, wait for usage chunk
+				return streamChunk, nil
 			}
 
-			// Only return if we have content, reasoning, or finish reason
-			if streamChunk.Type != "" || streamChunk.FinishReason != "" {
+			// Only return if we have content or reasoning
+			if streamChunk.Type != "" {
 				return streamChunk, nil
 			}
 		}
@@ -649,11 +677,21 @@ type openaiRequest struct {
 	MaxCompletionTokens *int                  `json:"max_completion_tokens,omitempty"`
 	Temperature         *float64              `json:"temperature,omitempty"`
 	Stream              bool                  `json:"stream,omitempty"`
+	StreamOptions       *openaiStreamOptions  `json:"stream_options,omitempty"`
 	Stop                []string              `json:"stop,omitempty"` // Up to 4 sequences where the API will stop generating
 	Tools               []openaiTool          `json:"tools,omitempty"`
 	ToolChoice          any                   `json:"tool_choice,omitempty"`
 	ResponseFormat      *openaiResponseFormat `json:"response_format,omitempty"`
-	Reasoning           *openaiReasoning      `json:"reasoning,omitempty"`
+
+	// Chat Completions API: top-level reasoning_effort parameter
+	ReasoningEffort string `json:"reasoning_effort,omitempty"` // minimal, low, medium, high
+
+	// Responses API: nested reasoning object (used in responsesAPIRequest instead)
+	Reasoning *openaiReasoning `json:"reasoning,omitempty"`
+}
+
+type openaiStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type openaiReasoning struct {
@@ -757,6 +795,7 @@ type openaiStreamChunk struct {
 	Object  string         `json:"object"`
 	Model   string         `json:"model"`
 	Choices []openaiChoice `json:"choices"`
+	Usage   *openaiUsage   `json:"usage,omitempty"`
 }
 
 // Responses API structures

@@ -158,6 +158,7 @@ type StreamChunk struct {
 	Done          bool            `json:"done"`
 	Provider      string          `json:"provider"`
 	Model         string          `json:"model,omitempty"`
+	Usage         *Usage          `json:"usage,omitempty"`
 }
 
 // ToolCallDelta represents incremental tool call data

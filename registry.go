@@ -206,6 +206,16 @@ func (s *streamAdapter) Next() (*StreamChunk, error) {
 		}
 	}
 
+	// Convert usage information
+	if chunk.Usage != nil {
+		streamChunk.Usage = &Usage{
+			PromptTokens:     chunk.Usage.PromptTokens,
+			CompletionTokens: chunk.Usage.CompletionTokens,
+			TotalTokens:      chunk.Usage.TotalTokens,
+			ReasoningTokens:  chunk.Usage.ReasoningTokens,
+		}
+	}
+
 	return streamChunk, nil
 }
 
