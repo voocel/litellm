@@ -37,6 +37,10 @@ func (p *GLMProvider) SupportsModel(model string) bool {
 func (p *GLMProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		{
+			ID: "glm-4.6", Provider: "glm", Name: "GLM-4.6", MaxTokens: 128000,
+			Capabilities: []string{"chat", "function_call", "code", "reasoning"},
+		},
+		{
 			ID: "glm-4.5", Provider: "glm", Name: "GLM-4.5", MaxTokens: 128000,
 			Capabilities: []string{"chat", "function_call", "code", "reasoning"},
 		},

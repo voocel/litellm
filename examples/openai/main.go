@@ -16,7 +16,7 @@ func main() {
 		log.Fatal("OPENAI_API_KEY environment variable is required")
 	}
 
-	client := litellm.New(litellm.WithOpenAI(apiKey, os.Getenv("OPENAI_BASE_URL")))
+	client := litellm.New(litellm.WithOpenAI(apiKey, os.Getenv("aOPENAI_BASE_URL")))
 
 	fmt.Println("OpenAI Examples - From Simple to Complex")
 	fmt.Println("=====================================")
@@ -80,7 +80,7 @@ func streamingChat(client *litellm.Client) {
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
-				Content: "你是谁?",
+				Content: "who are you?",
 			},
 		},
 		MaxTokens:       litellm.IntPtr(10000),

@@ -36,6 +36,14 @@ func (p *AnthropicProvider) SupportsModel(model string) bool {
 func (p *AnthropicProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		{
+			ID: "claude-sonnet-4.5", Provider: "anthropic", Name: "Claude Sonnet 4.5", MaxTokens: 200000,
+			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
+		},
+		{
+			ID: "claude-haiku-4.5", Provider: "anthropic", Name: "Claude Haiku 4.5", MaxTokens: 128000,
+			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
+		},
+		{
 			ID: "claude-opus-4.1", Provider: "anthropic", Name: "Claude Opus 4.1", MaxTokens: 200000,
 			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
 		},
@@ -46,10 +54,6 @@ func (p *AnthropicProvider) Models() []ModelInfo {
 		{
 			ID: "claude-haiku-3.5", Provider: "anthropic", Name: "Claude Haiku 3.5", MaxTokens: 200000,
 			Capabilities: []string{"chat", "function_call", "vision"},
-		},
-		{
-			ID: "claude-sonnet-4-20250514", Provider: "anthropic", Name: "Claude Sonnet 4 (2025-05-14)", MaxTokens: 200000,
-			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
 		},
 	}
 }

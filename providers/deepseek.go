@@ -35,11 +35,11 @@ func (p *DeepSeekProvider) SupportsModel(model string) bool {
 func (p *DeepSeekProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		{
-			ID: "deepseek-chat", Provider: "deepseek", Name: "DeepSeek Chat V3.1", MaxTokens: 64000,
+			ID: "deepseek-chat", Provider: "deepseek", Name: "DeepSeek Chat V3.2", MaxTokens: 128000,
 			Capabilities: []string{"chat", "function_call", "tool_use"},
 		},
 		{
-			ID: "deepseek-reasoner", Provider: "deepseek", Name: "DeepSeek Reasoner V3.1", MaxTokens: 64000,
+			ID: "deepseek-reasoner", Provider: "deepseek", Name: "DeepSeek Reasoner V3.2", MaxTokens: 128000,
 			Capabilities: []string{"chat", "reasoning", "function_call", "tool_use"},
 		},
 		{
