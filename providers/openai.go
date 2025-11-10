@@ -500,11 +500,50 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		openaiReq.Stop = req.Stop
 	}
 
-	for i, msg := range req.Messages {
-		openaiReq.Messages[i] = openaiMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
+	// Convert tool definitions
+	if len(req.Tools) > 0 {
+		openaiReq.Tools = make([]openaiTool, len(req.Tools))
+		for i, tool := range req.Tools {
+			openaiReq.Tools[i] = openaiTool{
+				Type: tool.Type,
+				Function: openaiToolFunction{
+					Name:        tool.Function.Name,
+					Description: tool.Function.Description,
+					Parameters:  tool.Function.Parameters,
+				},
+			}
 		}
+	}
+
+	// Set tool choice
+	if req.ToolChoice != nil {
+		openaiReq.ToolChoice = req.ToolChoice
+	}
+
+	// Convert messages with tool calls support
+	for i, msg := range req.Messages {
+		openaiMsg := openaiMessage{
+			Role:       msg.Role,
+			Content:    msg.Content,
+			ToolCallID: msg.ToolCallID,
+		}
+
+		// Convert tool calls
+		if len(msg.ToolCalls) > 0 {
+			openaiMsg.ToolCalls = make([]openaiToolCall, len(msg.ToolCalls))
+			for j, toolCall := range msg.ToolCalls {
+				openaiMsg.ToolCalls[j] = openaiToolCall{
+					ID:   toolCall.ID,
+					Type: toolCall.Type,
+					Function: openaiToolCallFunc{
+						Name:      toolCall.Function.Name,
+						Arguments: toolCall.Function.Arguments,
+					},
+				}
+			}
+		}
+
+		openaiReq.Messages[i] = openaiMsg
 	}
 
 	body, err := json.Marshal(openaiReq)
