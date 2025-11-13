@@ -177,6 +177,10 @@ type ReasoningChunk struct {
 }
 
 // StreamReader provides a unified interface for reading streaming responses
+//
+// Thread Safety: StreamReader is NOT thread-safe. Do not call Next() or Close()
+// concurrently from multiple goroutines. Each StreamReader instance should be
+// used by a single goroutine at a time.
 type StreamReader interface {
 	// Next returns the next chunk or io.EOF when done
 	Next() (*StreamChunk, error)

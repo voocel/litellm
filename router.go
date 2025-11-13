@@ -3,6 +3,7 @@ package litellm
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 )
 
 // Router interface defines how to select a provider for a given model
@@ -24,7 +25,7 @@ const (
 type SmartRouter struct {
 	strategy         RouteStrategy
 	fallbackStrategy FallbackStrategy
-	roundRobinIndex  int // For round-robin strategy
+	roundRobinIndex  atomic.Int64 // For round-robin strategy (thread-safe)
 }
 
 // FallbackStrategy defines what to do when primary routing fails
@@ -116,9 +117,9 @@ func (r *SmartRouter) routeRoundRobin(model string, providers []Provider) (Provi
 		return r.applyFallback(model, providers, fmt.Errorf("no provider supports model '%s'", model))
 	}
 
-	// Select using round-robin
-	selectedProvider := supportingProviders[r.roundRobinIndex%len(supportingProviders)]
-	r.roundRobinIndex++
+	// Select using round-robin with atomic counter for thread-safety
+	index := r.roundRobinIndex.Add(1) - 1
+	selectedProvider := supportingProviders[index%int64(len(supportingProviders))]
 
 	return selectedProvider, nil
 }

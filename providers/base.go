@@ -64,11 +64,8 @@ func NewBaseProvider(name string, config ProviderConfig) *BaseProvider {
 		resilienceConfig = DefaultResilienceConfig()
 	}
 
-	var httpClient HTTPDoer
-	if config.HTTPClient != nil {
-		httpClient = config.HTTPClient
-	} else {
-		httpClient = &http.Client{
+	if config.HTTPClient == nil {
+		config.HTTPClient = &http.Client{
 			Timeout: resilienceConfig.RequestTimeout,
 			Transport: &http.Transport{
 				DialContext: (&net.Dialer{
@@ -79,13 +76,12 @@ func NewBaseProvider(name string, config ProviderConfig) *BaseProvider {
 				IdleConnTimeout:     90 * time.Second,
 			},
 		}
-		config.HTTPClient = httpClient
 	}
 
 	return &BaseProvider{
 		name:             name,
 		config:           config,
-		httpClient:       httpClient,
+		httpClient:       config.HTTPClient,
 		resilienceConfig: resilienceConfig,
 	}
 }

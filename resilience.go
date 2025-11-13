@@ -117,10 +117,12 @@ func (c *ResilientHTTPClient) Do(req *http.Request) (*http.Response, error) {
 		delay := c.calculateDelay(attempt)
 
 		// Wait with context cancellation support
+		timer := time.NewTimer(delay)
 		select {
-		case <-time.After(delay):
+		case <-timer.C:
 			// Continue to next attempt
 		case <-req.Context().Done():
+			timer.Stop()
 			return nil, req.Context().Err()
 		}
 	}
@@ -155,6 +157,12 @@ func isRetryableError(err error) bool {
 		return false
 	}
 
+	// Context errors are not retryable (user cancelled or deadline exceeded)
+	// Check this FIRST before net.Error, as context.DeadlineExceeded implements net.Error
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+
 	// Network errors are generally retryable
 	var netErr net.Error
 	if errors.As(err, &netErr) {
@@ -171,11 +179,6 @@ func isRetryableError(err error) bool {
 				return true
 			}
 		}
-	}
-
-	// Context errors are not retryable (user cancelled or deadline exceeded)
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
 	}
 
 	return false

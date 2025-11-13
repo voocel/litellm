@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -13,6 +14,7 @@ type Client struct {
 	providers map[string]Provider
 	defaults  DefaultConfig
 	router    Router
+	mu        sync.RWMutex
 }
 
 // DefaultConfig holds default configuration values
@@ -244,6 +246,9 @@ func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error)
 
 // Models returns all available models
 func (c *Client) Models() []ModelInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	var allModels []ModelInfo
 	for _, provider := range c.providers {
 		models := provider.Models()
@@ -259,6 +264,9 @@ func (c *Client) Models() []ModelInfo {
 
 // Providers returns the names of all configured providers
 func (c *Client) Providers() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	var names []string
 	for name := range c.providers {
 		names = append(names, name)
@@ -271,6 +279,8 @@ func (c *Client) AddProvider(name string, provider Provider) error {
 	if err := provider.Validate(); err != nil {
 		return fmt.Errorf("provider validation failed: %w", err)
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.providers[name] = provider
 	return nil
 }
@@ -364,15 +374,21 @@ func (c *Client) autoDiscoverProviders() {
 
 // resolveProvider resolves the provider for a model using the configured router
 func (c *Client) resolveProvider(model string) (Provider, error) {
-	if len(c.providers) == 0 {
+	c.mu.RLock()
+	providersLen := len(c.providers)
+	c.mu.RUnlock()
+
+	if providersLen == 0 {
 		return nil, NewError(ErrorTypeValidation, "no providers configured")
 	}
 
 	// Convert providers map to slice for router
+	c.mu.RLock()
 	availableProviders := make([]Provider, 0, len(c.providers))
 	for _, provider := range c.providers {
 		availableProviders = append(availableProviders, provider)
 	}
+	c.mu.RUnlock()
 
 	// Use configured router for provider selection
 	return c.router.Route(model, availableProviders)
