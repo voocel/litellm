@@ -290,7 +290,10 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("openai: failed to read error response: %w", err)
+		}
 		return nil, fmt.Errorf("openai: API error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -406,7 +409,10 @@ func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Requ
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("openai: failed to read responses API error: %w", err)
+		}
 		return nil, fmt.Errorf("openai: responses API error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -564,8 +570,11 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("openai: failed to read stream error response: %w", err)
+		}
 		return nil, fmt.Errorf("openai: API error %d: %s", resp.StatusCode, string(body))
 	}
 

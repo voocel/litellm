@@ -87,7 +87,10 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 				inputSchema = params
 			} else {
 				if jsonBytes, err := json.Marshal(tool.Function.Parameters); err == nil {
-					json.Unmarshal(jsonBytes, &inputSchema)
+					if err := json.Unmarshal(jsonBytes, &inputSchema); err != nil {
+						// Skip tools with invalid parameters
+						continue
+					}
 				}
 			}
 
@@ -162,7 +165,10 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 		if len(msg.ToolCalls) > 0 {
 			for _, toolCall := range msg.ToolCalls {
 				var input map[string]any
-				json.Unmarshal([]byte(toolCall.Function.Arguments), &input)
+				if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &input); err != nil {
+					// Use empty map if arguments are invalid
+					input = map[string]any{}
+				}
 				anthropicMsg.Content = append(anthropicMsg.Content, anthropicContent{
 					Type:      "tool_use",
 					ToolUseID: toolCall.ID,
@@ -201,7 +207,10 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("anthropic: failed to read error response: %w", err)
+		}
 		return nil, fmt.Errorf("anthropic: API error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -288,7 +297,10 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 				inputSchema = params
 			} else {
 				if jsonBytes, err := json.Marshal(tool.Function.Parameters); err == nil {
-					json.Unmarshal(jsonBytes, &inputSchema)
+					if err := json.Unmarshal(jsonBytes, &inputSchema); err != nil {
+						// Skip tools with invalid parameters
+						continue
+					}
 				}
 			}
 
@@ -362,7 +374,10 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 		if len(msg.ToolCalls) > 0 {
 			for _, toolCall := range msg.ToolCalls {
 				var input map[string]any
-				json.Unmarshal([]byte(toolCall.Function.Arguments), &input)
+				if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &input); err != nil {
+					// Use empty map if arguments are invalid
+					input = map[string]any{}
+				}
 				anthropicMsg.Content = append(anthropicMsg.Content, anthropicContent{
 					Type:      "tool_use",
 					ToolUseID: toolCall.ID,
@@ -400,8 +415,11 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("anthropic: failed to read stream error response: %w", err)
+		}
 		return nil, fmt.Errorf("anthropic: API error %d: %s", resp.StatusCode, string(body))
 	}
 

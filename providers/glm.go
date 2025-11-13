@@ -125,7 +125,10 @@ func (p *GLMProvider) Chat(ctx context.Context, req *Request) (*Response, error)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("glm: failed to read error response: %w", err)
+		}
 		return nil, fmt.Errorf("glm: API error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -222,8 +225,11 @@ func (p *GLMProvider) Stream(ctx context.Context, req *Request) (StreamReader, e
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("glm: failed to read stream error response: %w", err)
+		}
 		return nil, fmt.Errorf("glm: API error %d: %s", resp.StatusCode, string(body))
 	}
 

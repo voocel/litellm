@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,6 +17,9 @@ import (
 type GeminiProvider struct {
 	*BaseProvider
 }
+
+// Package-level counter for generating unique tool call IDs
+var geminiToolCallCounter atomic.Uint64
 
 // NewGemini creates a new Gemini provider
 func NewGemini(config ProviderConfig) *GeminiProvider {
@@ -218,7 +222,10 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 				params = p
 			} else {
 				if jsonBytes, err := json.Marshal(t.Function.Parameters); err == nil {
-					json.Unmarshal(jsonBytes, &params)
+					if err := json.Unmarshal(jsonBytes, &params); err != nil {
+						// Skip tools with invalid parameters
+						continue
+					}
 				}
 			}
 
@@ -259,7 +266,10 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("gemini: failed to read error response: %w", err)
+		}
 		return nil, fmt.Errorf("gemini: API error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -403,8 +413,11 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("gemini: failed to read stream error response: %w", err)
+		}
 		return nil, fmt.Errorf("gemini: API error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -431,7 +444,9 @@ func (p *GeminiProvider) convertRole(role string) string {
 
 // generateToolCallID generates a unique tool call ID
 func (p *GeminiProvider) generateToolCallID() string {
-	return fmt.Sprintf("call_%d", time.Now().UnixNano())
+	timestamp := time.Now().Unix()
+	counter := geminiToolCallCounter.Add(1)
+	return fmt.Sprintf("call_%d_%d", timestamp, counter)
 }
 
 // convertToolChoice converts the unified ToolChoice to Gemini's toolConfig format

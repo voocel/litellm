@@ -155,7 +155,10 @@ func (p *OpenRouterProvider) Chat(ctx context.Context, req *Request) (*Response,
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("openrouter: failed to read error response: %w", err)
+		}
 		return nil, fmt.Errorf("openrouter: API error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -274,8 +277,11 @@ func (p *OpenRouterProvider) Stream(ctx context.Context, req *Request) (StreamRe
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("openrouter: failed to read stream error response: %w", err)
+		}
 		return nil, fmt.Errorf("openrouter: API error %d: %s", resp.StatusCode, string(body))
 	}
 

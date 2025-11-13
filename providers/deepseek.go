@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -101,7 +102,10 @@ func (p *DeepSeekProvider) Chat(ctx context.Context, req *Request) (*Response, e
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("deepseek: failed to read error response: %w", err)
+		}
 		return nil, fmt.Errorf("deepseek: API error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -211,13 +215,17 @@ func (p *DeepSeekProvider) Stream(ctx context.Context, req *Request) (StreamRead
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("deepseek: failed to read stream error response: %w", err)
+		}
 		return nil, fmt.Errorf("deepseek: API error %d: %s", resp.StatusCode, string(body))
 	}
 
 	return &deepseekStreamReader{
 		resp:     resp,
+		scanner:  bufio.NewScanner(resp.Body),
 		provider: "deepseek",
 	}, nil
 }
@@ -335,6 +343,7 @@ type deepseekCompletionTokensDetails struct {
 // deepseekStreamReader implements streaming for DeepSeek
 type deepseekStreamReader struct {
 	resp     *http.Response
+	scanner  *bufio.Scanner
 	provider string
 	done     bool
 }
@@ -345,76 +354,74 @@ func (r *deepseekStreamReader) Next() (*StreamChunk, error) {
 	}
 
 	// DeepSeek uses OpenAI-compatible SSE format
-	buffer := make([]byte, 4096)
-	n, err := r.resp.Body.Read(buffer)
-	if err != nil {
-		if err == io.EOF {
+	for r.scanner.Scan() {
+		line := r.scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
 			r.done = true
 			return &StreamChunk{Done: true, Provider: r.provider}, nil
 		}
-		return nil, err
-	}
 
-	data := strings.TrimSpace(string(buffer[:n]))
-	lines := strings.Split(data, "\n")
+		var streamResp deepseekStreamResponse
+		if err := json.Unmarshal([]byte(data), &streamResp); err != nil {
+			continue // Skip invalid JSON
+		}
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "data: ") {
-			jsonData := strings.TrimPrefix(line, "data: ")
-			if jsonData == "[DONE]" {
+		if len(streamResp.Choices) > 0 {
+			choice := streamResp.Choices[0]
+			chunk := &StreamChunk{
+				Provider: r.provider,
+			}
+
+			if choice.Delta.Content != "" {
+				chunk.Type = "content"
+				chunk.Content = choice.Delta.Content
+			}
+
+			if choice.Delta.ReasoningContent != "" {
+				chunk.Type = "reasoning"
+				chunk.Reasoning = &ReasoningChunk{
+					Content: choice.Delta.ReasoningContent,
+					Summary: "DeepSeek reasoning process",
+				}
+			}
+
+			if len(choice.Delta.ToolCalls) > 0 {
+				chunk.Type = "tool_call_delta"
+				toolCall := choice.Delta.ToolCalls[0]
+				chunk.ToolCallDelta = &ToolCallDelta{
+					Index:          choice.Index,
+					ID:             toolCall.ID,
+					Type:           toolCall.Type,
+					FunctionName:   toolCall.Function.Name,
+					ArgumentsDelta: toolCall.Function.Arguments,
+				}
+			}
+
+			if choice.FinishReason != "" {
+				chunk.FinishReason = choice.FinishReason
+				chunk.Done = true
 				r.done = true
-				return &StreamChunk{Done: true, Provider: r.provider}, nil
 			}
 
-			var streamResp deepseekStreamResponse
-			if err := json.Unmarshal([]byte(jsonData), &streamResp); err != nil {
-				continue // Skip invalid JSON
-			}
-
-			if len(streamResp.Choices) > 0 {
-				choice := streamResp.Choices[0]
-				chunk := &StreamChunk{
-					Provider: r.provider,
-				}
-
-				if choice.Delta.Content != "" {
-					chunk.Type = "content"
-					chunk.Content = choice.Delta.Content
-				}
-
-				if choice.Delta.ReasoningContent != "" {
-					chunk.Type = "reasoning"
-					chunk.Reasoning = &ReasoningChunk{
-						Content: choice.Delta.ReasoningContent,
-						Summary: "DeepSeek reasoning process",
-					}
-				}
-
-				if len(choice.Delta.ToolCalls) > 0 {
-					chunk.Type = "tool_call_delta"
-					toolCall := choice.Delta.ToolCalls[0]
-					chunk.ToolCallDelta = &ToolCallDelta{
-						Index:          choice.Index,
-						ID:             toolCall.ID,
-						Type:           toolCall.Type,
-						FunctionName:   toolCall.Function.Name,
-						ArgumentsDelta: toolCall.Function.Arguments,
-					}
-				}
-
-				if choice.FinishReason != "" {
-					chunk.FinishReason = choice.FinishReason
-					chunk.Done = true
-					r.done = true
-				}
-
+			// Only return chunk if it has content
+			if chunk.Type != "" {
 				return chunk, nil
 			}
 		}
 	}
 
-	return &StreamChunk{Provider: r.provider}, nil
+	// Check for scanner errors
+	if err := r.scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	r.done = true
+	return &StreamChunk{Done: true, Provider: r.provider}, nil
 }
 
 func (r *deepseekStreamReader) Close() error {
