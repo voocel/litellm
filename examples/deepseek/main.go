@@ -16,7 +16,10 @@ func main() {
 		log.Fatal("DEEPSEEK_API_KEY environment variable is required")
 	}
 
-	client := litellm.New(litellm.WithDeepSeek(apiKey))
+	client, err := litellm.New(litellm.WithDeepSeek(apiKey))
+	if err != nil {
+		log.Fatalf("Failed to create client: %v", err)
+	}
 
 	fmt.Println("DeepSeek Examples - From Basic to Advanced")
 	fmt.Println("=========================================")

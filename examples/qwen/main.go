@@ -15,7 +15,10 @@ func main() {
 		log.Fatal("QWEN_API_KEY environment variable is required")
 	}
 
-	client := litellm.New(litellm.WithQwen(apiKey))
+	client, err := litellm.New(litellm.WithQwen(apiKey))
+	if err != nil {
+		log.Fatalf("Failed to create client: %v", err)
+	}
 
 	//fmt.Println("Qwen Examples - Alibaba Cloud AI")
 	//fmt.Println("==========================================")

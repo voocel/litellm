@@ -16,7 +16,10 @@ func main() {
 		log.Fatal("OPENROUTER_API_KEY environment variable is required")
 	}
 
-	client := litellm.New(litellm.WithOpenRouter(apiKey))
+	client, err := litellm.New(litellm.WithOpenRouter(apiKey))
+	if err != nil {
+		log.Fatalf("Failed to create client: %v", err)
+	}
 
 	fmt.Println("OpenRouter Examples - Access Multiple AI Models")
 	fmt.Println("==============================================")

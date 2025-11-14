@@ -16,7 +16,10 @@ func main() {
 		log.Fatal("GEMINI_API_KEY environment variable is required")
 	}
 
-	client := litellm.New(litellm.WithGemini(apiKey))
+	client, err := litellm.New(litellm.WithGemini(apiKey))
+	if err != nil {
+		log.Fatalf("Failed to create client: %v", err)
+	}
 
 	fmt.Println("Google Gemini Examples - From Simple to Complex")
 	fmt.Println("==============================================")

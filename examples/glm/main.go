@@ -16,7 +16,10 @@ func main() {
 		log.Fatal("GLM_API_KEY environment variable is required")
 	}
 
-	client := litellm.New(litellm.WithGLM(apiKey))
+	client, err := litellm.New(litellm.WithGLM(apiKey))
+	if err != nil {
+		log.Fatalf("Failed to create client: %v", err)
+	}
 
 	fmt.Println("GLM (ZhiPu) Examples - From Basic to Advanced")
 	fmt.Println("=============================================")

@@ -68,10 +68,13 @@ import (
 
 func main() {
     // Method 1: Auto-discovery from environment variables
-    client := litellm.New()
+    client, err := litellm.New()
+    if err != nil {
+        panic(err)
+    }
 
     // Method 2: Type-safe manual configuration (recommended for production)
-    client = litellm.New(
+    client, err = litellm.New(
         litellm.WithOpenAI("your-openai-key"),
         litellm.WithAnthropic("your-anthropic-key"),
         litellm.WithGemini("your-gemini-key"),
@@ -80,6 +83,9 @@ func main() {
         litellm.WithOpenRouter("your-openrouter-key"),
         litellm.WithDefaults(2048, 0.8), // Custom defaults
     )
+    if err != nil {
+        panic(err)
+    }
 
     // Basic chat
     response, err := client.Chat(context.Background(), &litellm.Request{
@@ -132,19 +138,28 @@ Built-in automatic retry with exponential backoff for network failures and API e
 
 ```go
 // Default: 3 retries with smart backoff
-client := litellm.New(litellm.WithOpenAI("your-api-key"))
+client, err := litellm.New(litellm.WithOpenAI("your-api-key"))
+if err != nil {
+    log.Fatal(err)
+}
 
 // Custom timeout
-client := litellm.New(
+client, err = litellm.New(
     litellm.WithOpenAI("your-api-key"),
     litellm.WithTimeout(60*time.Second),
 )
+if err != nil {
+    log.Fatal(err)
+}
 
 // Custom retries
-client := litellm.New(
+client, err = litellm.New(
     litellm.WithOpenAI("your-api-key"),
     litellm.WithRetries(5, 2*time.Second), // 5 retries, 2s initial delay
 )
+if err != nil {
+    log.Fatal(err)
+}
 ```
 
 ## Streaming
@@ -482,15 +497,21 @@ func init() {
 }
 
 // 4. Use it
-client := litellm.New(
+client, err := litellm.New(
     litellm.WithProviderConfig("myprovider", litellm.ProviderConfig{
         APIKey: "your-api-key",
     }),
 )
-response, _ := client.Chat(ctx, &litellm.Request{
+if err != nil {
+    log.Fatal(err)
+}
+response, err := client.Chat(ctx, &litellm.Request{
     Model: "my-model",
     Messages: []litellm.Message{{Role: "user", Content: "Hello"}},
 })
+if err != nil {
+    log.Fatal(err)
+}
 ```
 
 ### Provider Discovery
@@ -568,7 +589,7 @@ export OPENROUTER_API_KEY="sk-or-v1-..."
 
 ### Code Configuration (Recommended)
 ```go
-client := litellm.New(
+client, err := litellm.New(
     litellm.WithOpenAI("your-openai-key"),
     litellm.WithAnthropic("your-anthropic-key"),
     litellm.WithGemini("your-gemini-key"),
@@ -578,6 +599,9 @@ client := litellm.New(
     litellm.WithOpenRouter("your-openrouter-key"),
     litellm.WithDefaults(2048, 0.8),
 )
+if err != nil {
+    log.Fatal(err)
+}
 ```
 
 ## API Reference

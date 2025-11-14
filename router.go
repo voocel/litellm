@@ -298,8 +298,8 @@ func NewAutoRouter() *SmartRouter {
 	return NewSmartRouter(StrategyAuto)
 }
 
-// Default router instance
-var DefaultRouter = NewAutoRouter().WithFallback(FallbackFirst)
+// Default router instance (By default, do not downgrade to avoid misrouting)
+var DefaultRouter = NewAutoRouter().WithFallback(FallbackNone)
 
 // Convenience functions for common routing needs
 

@@ -44,11 +44,14 @@ func main() {
 
 // Example 1: Default Auto Router with intelligent model routing
 func defaultRouterExample(openaiKey, anthropicKey string) {
-	client := litellm.New(
+	client, err := litellm.New(
 		litellm.WithOpenAI(openaiKey),
 		litellm.WithAnthropic(anthropicKey),
 		// Using default auto router (no WithRouter needed)
 	)
+	if err != nil {
+		log.Fatalf("Failed to create client: %v", err)
+	}
 
 	ctx := context.Background()
 	
@@ -85,11 +88,14 @@ func defaultRouterExample(openaiKey, anthropicKey string) {
 
 // Example 2: Exact Router requires precise model names
 func exactRouterExample(openaiKey, anthropicKey string) {
-	client := litellm.New(
+	client, err := litellm.New(
 		litellm.WithOpenAI(openaiKey),
 		litellm.WithAnthropic(anthropicKey),
 		litellm.WithRouter(litellm.NewExactRouter()), // Requires exact matches
 	)
+	if err != nil {
+		log.Fatalf("Failed to create client: %v", err)
+	}
 
 	ctx := context.Background()
 	
@@ -124,11 +130,14 @@ func exactRouterExample(openaiKey, anthropicKey string) {
 
 // Example 3: Round Robin Router for load balancing
 func roundRobinExample(openaiKey, anthropicKey string) {
-	client := litellm.New(
+	client, err := litellm.New(
 		litellm.WithOpenAI(openaiKey),
 		litellm.WithAnthropic(anthropicKey),
 		litellm.WithRouter(litellm.NewRoundRobinRouter()),
 	)
+	if err != nil {
+		log.Fatalf("Failed to create client: %v", err)
+	}
 
 	ctx := context.Background()
 	
@@ -179,11 +188,14 @@ func customRouterExample(openaiKey, anthropicKey string) {
 		return nil, litellm.NewError(litellm.ErrorTypeValidation, "no providers available")
 	})
 
-	client := litellm.New(
+	client, err := litellm.New(
 		litellm.WithOpenAI(openaiKey),
 		litellm.WithAnthropic(anthropicKey),
 		litellm.WithRouter(customRouter),
 	)
+	if err != nil {
+		log.Fatalf("Failed to create client: %v", err)
+	}
 
 	ctx := context.Background()
 

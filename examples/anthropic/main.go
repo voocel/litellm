@@ -16,7 +16,10 @@ func main() {
 		log.Fatal("ANTHROPIC_API_KEY environment variable is required")
 	}
 
-	client := litellm.New(litellm.WithAnthropic(apiKey))
+	client, err := litellm.New(litellm.WithAnthropic(apiKey))
+	if err != nil {
+		log.Fatalf("Failed to create client: %v", err)
+	}
 
 	fmt.Println("Anthropic Claude Examples - From Simple to Complex")
 	fmt.Println("================================================")

@@ -68,10 +68,13 @@ import (
 
 func main() {
     // 方式1: 环境变量自动发现
-    client := litellm.New()
+    client, err := litellm.New()
+    if err != nil {
+        panic(err)
+    }
 
     // 方式2: 类型安全手动配置 (生产环境推荐)
-    client = litellm.New(
+    client, err = litellm.New(
         litellm.WithOpenAI("your-openai-key"),
         litellm.WithAnthropic("your-anthropic-key"),
         litellm.WithGemini("your-gemini-key"),
@@ -80,6 +83,9 @@ func main() {
         litellm.WithOpenRouter("your-openrouter-key"),
         litellm.WithDefaults(2048, 0.8), // 自定义默认参数
     )
+    if err != nil {
+        panic(err)
+    }
 
     // 基础聊天
     response, err := client.Chat(context.Background(), &litellm.Request{
@@ -224,19 +230,28 @@ if response.Reasoning != nil {
 
 ```go
 // 默认：3 次重试，智能退避
-client := litellm.New(litellm.WithOpenAI("your-api-key"))
+client, err := litellm.New(litellm.WithOpenAI("your-api-key"))
+if err != nil {
+    log.Fatal(err)
+}
 
 // 自定义超时
-client := litellm.New(
+client, err = litellm.New(
     litellm.WithOpenAI("your-api-key"),
     litellm.WithTimeout(60*time.Second),
 )
+if err != nil {
+    log.Fatal(err)
+}
 
 // 自定义重试
-client := litellm.New(
+client, err = litellm.New(
     litellm.WithOpenAI("your-api-key"),
     litellm.WithRetries(5, 2*time.Second), // 重试 5 次，初始延迟 2 秒
 )
+if err != nil {
+    log.Fatal(err)
+}
 ```
 
 ## 流式处理
@@ -481,15 +496,21 @@ func init() {
 }
 
 // 4. 使用
-client := litellm.New(
+client, err := litellm.New(
     litellm.WithProviderConfig("myprovider", litellm.ProviderConfig{
         APIKey: "your-api-key",
     }),
 )
-response, _ := client.Chat(ctx, &litellm.Request{
+if err != nil {
+    log.Fatal(err)
+}
+response, err := client.Chat(ctx, &litellm.Request{
     Model: "my-model",
     Messages: []litellm.Message{{Role: "user", Content: "你好"}},
 })
+if err != nil {
+    log.Fatal(err)
+}
 ```
 
 ### 提供商发现
@@ -567,7 +588,7 @@ export OPENROUTER_API_KEY="sk-or-v1-..."
 
 ### 代码配置 (推荐)
 ```go
-client := litellm.New(
+client, err := litellm.New(
     litellm.WithOpenAI("your-openai-key"),
     litellm.WithAnthropic("your-anthropic-key"),
     litellm.WithGemini("your-gemini-key"),
@@ -577,6 +598,9 @@ client := litellm.New(
     litellm.WithOpenRouter("your-openrouter-key"),
     litellm.WithDefaults(2048, 0.8),
 )
+if err != nil {
+    log.Fatal(err)
+}
 ```
 
 ## API 参考

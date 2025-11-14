@@ -36,6 +36,7 @@ func createProvider(name string, config ProviderConfig) (Provider, error) {
 	providerConfig := providers.ProviderConfig{
 		APIKey:  config.APIKey,
 		BaseURL: config.BaseURL,
+		Extra:   config.Extra,
 		Resilience: providers.ResilienceConfig{
 			MaxRetries:     resilienceConfig.MaxRetries,
 			InitialDelay:   resilienceConfig.InitialDelay,
@@ -126,6 +127,7 @@ func (a *providerAdapter) Chat(ctx context.Context, req *Request) (*Response, er
 		ReasoningEffort:  req.ReasoningEffort,
 		ReasoningSummary: req.ReasoningSummary,
 		UseResponsesAPI:  req.UseResponsesAPI,
+		Extra:            req.Extra,
 	}
 
 	resp, err := a.provider.Chat(ctx, providerReq)
@@ -158,6 +160,7 @@ func (a *providerAdapter) Stream(ctx context.Context, req *Request) (StreamReade
 		ReasoningEffort:  req.ReasoningEffort,
 		ReasoningSummary: req.ReasoningSummary,
 		UseResponsesAPI:  req.UseResponsesAPI,
+		Extra:            req.Extra,
 	}
 
 	stream, err := a.provider.Stream(ctx, providerReq)

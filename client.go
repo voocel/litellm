@@ -2,6 +2,7 @@ package litellm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -25,10 +26,10 @@ type DefaultConfig struct {
 }
 
 // ClientOption defines options for configuring the client
-type ClientOption func(*Client)
+type ClientOption func(*Client) error
 
 // New creates a new LiteLLM client with optional configuration
-func New(opts ...ClientOption) *Client {
+func New(opts ...ClientOption) (*Client, error) {
 	client := &Client{
 		providers: make(map[string]Provider),
 		defaults: DefaultConfig{
@@ -41,56 +42,82 @@ func New(opts ...ClientOption) *Client {
 
 	// If no options provided, use auto-discovery
 	if len(opts) == 0 {
-		client.autoDiscoverProviders()
+		if err := client.autoDiscoverProviders(); err != nil {
+			return nil, err
+		}
 	} else {
 		for _, opt := range opts {
-			opt(client)
+			if err := opt(client); err != nil {
+				return nil, fmt.Errorf("failed to apply option: %w", err)
+			}
 		}
 	}
 
-	return client
+	// Validate that at least one provider is configured
+	if len(client.providers) == 0 {
+		return nil, fmt.Errorf("no providers configured")
+	}
+
+	return client, nil
+}
+
+func (c *Client) addProviderFromConfig(name string, config ProviderConfig) error {
+	provider, err := createProvider(name, config)
+	if err != nil {
+		return fmt.Errorf("%s provider: %w", name, err)
+	}
+	if err := provider.Validate(); err != nil {
+		return fmt.Errorf("%s provider validation: %w", name, err)
+	}
+	c.providers[name] = provider
+	return nil
 }
 
 // WithDefaults sets default configuration values
 func WithDefaults(maxTokens int, temperature float64) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		c.defaults.MaxTokens = maxTokens
 		c.defaults.Temperature = temperature
+		return nil
 	}
 }
 
 // WithResilience sets default resilience configuration
 func WithResilience(config ResilienceConfig) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		c.defaults.Resilience = config
+		return nil
 	}
 }
 
 // WithTimeout sets request timeout for all providers
 func WithTimeout(timeout time.Duration) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		c.defaults.Resilience.RequestTimeout = timeout
+		return nil
 	}
 }
 
 // WithRetries sets retry configuration for all providers
 func WithRetries(maxRetries int, initialDelay time.Duration) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		c.defaults.Resilience.MaxRetries = maxRetries
 		c.defaults.Resilience.InitialDelay = initialDelay
+		return nil
 	}
 }
 
 // WithRouter sets a custom router for provider selection
 func WithRouter(router Router) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		c.router = router
+		return nil
 	}
 }
 
 // WithOpenAI adds OpenAI provider with custom configuration
 func WithOpenAI(apiKey string, baseURL ...string) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		config := ProviderConfig{
 			APIKey:     apiKey,
 			Resilience: c.defaults.Resilience,
@@ -98,15 +125,13 @@ func WithOpenAI(apiKey string, baseURL ...string) ClientOption {
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
-		if provider, err := createProvider("openai", config); err == nil {
-			c.providers["openai"] = provider
-		}
+		return c.addProviderFromConfig("openai", config)
 	}
 }
 
 // WithAnthropic adds Anthropic provider with custom configuration
 func WithAnthropic(apiKey string, baseURL ...string) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		config := ProviderConfig{
 			APIKey:     apiKey,
 			Resilience: c.defaults.Resilience,
@@ -114,15 +139,13 @@ func WithAnthropic(apiKey string, baseURL ...string) ClientOption {
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
-		if provider, err := createProvider("anthropic", config); err == nil {
-			c.providers["anthropic"] = provider
-		}
+		return c.addProviderFromConfig("anthropic", config)
 	}
 }
 
 // WithGemini adds Gemini provider with custom configuration
 func WithGemini(apiKey string, baseURL ...string) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		config := ProviderConfig{
 			APIKey:     apiKey,
 			Resilience: c.defaults.Resilience,
@@ -130,15 +153,13 @@ func WithGemini(apiKey string, baseURL ...string) ClientOption {
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
-		if provider, err := createProvider("gemini", config); err == nil {
-			c.providers["gemini"] = provider
-		}
+		return c.addProviderFromConfig("gemini", config)
 	}
 }
 
 // WithDeepSeek adds DeepSeek provider with custom configuration
 func WithDeepSeek(apiKey string, baseURL ...string) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		config := ProviderConfig{
 			APIKey:     apiKey,
 			Resilience: c.defaults.Resilience,
@@ -146,15 +167,13 @@ func WithDeepSeek(apiKey string, baseURL ...string) ClientOption {
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
-		if provider, err := createProvider("deepseek", config); err == nil {
-			c.providers["deepseek"] = provider
-		}
+		return c.addProviderFromConfig("deepseek", config)
 	}
 }
 
 // WithOpenRouter adds OpenRouter provider with custom configuration
 func WithOpenRouter(apiKey string, baseURL ...string) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		config := ProviderConfig{
 			APIKey:     apiKey,
 			Resilience: c.defaults.Resilience,
@@ -162,15 +181,13 @@ func WithOpenRouter(apiKey string, baseURL ...string) ClientOption {
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
-		if provider, err := createProvider("openrouter", config); err == nil {
-			c.providers["openrouter"] = provider
-		}
+		return c.addProviderFromConfig("openrouter", config)
 	}
 }
 
 // WithQwen adds Qwen provider with custom configuration
 func WithQwen(apiKey string, baseURL ...string) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		config := ProviderConfig{
 			APIKey:     apiKey,
 			Resilience: c.defaults.Resilience,
@@ -178,15 +195,13 @@ func WithQwen(apiKey string, baseURL ...string) ClientOption {
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
-		if provider, err := createProvider("qwen", config); err == nil {
-			c.providers["qwen"] = provider
-		}
+		return c.addProviderFromConfig("qwen", config)
 	}
 }
 
 // WithGLM adds GLM provider with custom configuration
 func WithGLM(apiKey string, baseURL ...string) ClientOption {
-	return func(c *Client) {
+	return func(c *Client) error {
 		config := ProviderConfig{
 			APIKey:     apiKey,
 			Resilience: c.defaults.Resilience,
@@ -194,29 +209,25 @@ func WithGLM(apiKey string, baseURL ...string) ClientOption {
 		if len(baseURL) > 0 && baseURL[0] != "" {
 			config.BaseURL = baseURL[0]
 		}
-		if provider, err := createProvider("glm", config); err == nil {
-			c.providers["glm"] = provider
-		}
+		return c.addProviderFromConfig("glm", config)
 	}
 }
 
 // WithProvider adds a custom provider
 func WithProvider(name string, provider Provider) ClientOption {
-	return func(c *Client) {
-		if err := provider.Validate(); err == nil {
-			c.providers[name] = provider
+	return func(c *Client) error {
+		if err := provider.Validate(); err != nil {
+			return fmt.Errorf("%s provider validation: %w", name, err)
 		}
+		c.providers[name] = provider
+		return nil
 	}
 }
 
 // WithProviderConfig adds a provider using ProviderConfig
 func WithProviderConfig(name string, config ProviderConfig) ClientOption {
-	return func(c *Client) {
-		if provider, err := createProvider(name, config); err == nil {
-			if err := provider.Validate(); err == nil {
-				c.providers[name] = provider
-			}
-		}
+	return func(c *Client) error {
+		return c.addProviderFromConfig(name, config)
 	}
 }
 
@@ -286,7 +297,9 @@ func (c *Client) AddProvider(name string, provider Provider) error {
 }
 
 // autoDiscoverProviders automatically discovers and configures providers from environment variables
-func (c *Client) autoDiscoverProviders() {
+func (c *Client) autoDiscoverProviders() error {
+	var errs []error
+
 	// Auto-discover OpenAI
 	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
 		config := ProviderConfig{
@@ -294,8 +307,8 @@ func (c *Client) autoDiscoverProviders() {
 			BaseURL:    getEnvOrDefault("OPENAI_BASE_URL", "https://api.openai.com"),
 			Resilience: c.defaults.Resilience,
 		}
-		if provider, err := createProvider("openai", config); err == nil {
-			c.providers["openai"] = provider
+		if err := c.addProviderFromConfig("openai", config); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
@@ -306,8 +319,8 @@ func (c *Client) autoDiscoverProviders() {
 			BaseURL:    getEnvOrDefault("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
 			Resilience: c.defaults.Resilience,
 		}
-		if provider, err := createProvider("anthropic", config); err == nil {
-			c.providers["anthropic"] = provider
+		if err := c.addProviderFromConfig("anthropic", config); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
@@ -318,8 +331,8 @@ func (c *Client) autoDiscoverProviders() {
 			BaseURL:    getEnvOrDefault("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com"),
 			Resilience: c.defaults.Resilience,
 		}
-		if provider, err := createProvider("gemini", config); err == nil {
-			c.providers["gemini"] = provider
+		if err := c.addProviderFromConfig("gemini", config); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
@@ -330,8 +343,8 @@ func (c *Client) autoDiscoverProviders() {
 			BaseURL:    getEnvOrDefault("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
 			Resilience: c.defaults.Resilience,
 		}
-		if provider, err := createProvider("deepseek", config); err == nil {
-			c.providers["deepseek"] = provider
+		if err := c.addProviderFromConfig("deepseek", config); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
@@ -342,8 +355,8 @@ func (c *Client) autoDiscoverProviders() {
 			BaseURL:    getEnvOrDefault("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
 			Resilience: c.defaults.Resilience,
 		}
-		if provider, err := createProvider("openrouter", config); err == nil {
-			c.providers["openrouter"] = provider
+		if err := c.addProviderFromConfig("openrouter", config); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
@@ -354,8 +367,8 @@ func (c *Client) autoDiscoverProviders() {
 			BaseURL:    getEnvOrDefault("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/api/v1"),
 			Resilience: c.defaults.Resilience,
 		}
-		if provider, err := createProvider("qwen", config); err == nil {
-			c.providers["qwen"] = provider
+		if err := c.addProviderFromConfig("qwen", config); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
@@ -366,10 +379,17 @@ func (c *Client) autoDiscoverProviders() {
 			BaseURL:    getEnvOrDefault("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
 			Resilience: c.defaults.Resilience,
 		}
-		if provider, err := createProvider("glm", config); err == nil {
-			c.providers["glm"] = provider
+		if err := c.addProviderFromConfig("glm", config); err != nil {
+			errs = append(errs, err)
 		}
 	}
+
+	// If all providers failed, return combined error
+	if len(errs) > 0 && len(c.providers) == 0 {
+		return errors.Join(errs...)
+	}
+
+	return nil
 }
 
 // resolveProvider resolves the provider for a model using the configured router
@@ -412,10 +432,12 @@ func (c *Client) getAvailableModels() string {
 // applyDefaults applies default configuration to the request
 func (c *Client) applyDefaults(req *Request) {
 	if req.MaxTokens == nil {
-		req.MaxTokens = &c.defaults.MaxTokens
+		maxTokens := c.defaults.MaxTokens
+		req.MaxTokens = &maxTokens
 	}
 	if req.Temperature == nil {
-		req.Temperature = &c.defaults.Temperature
+		temperature := c.defaults.Temperature
+		req.Temperature = &temperature
 	}
 }
 
@@ -430,7 +452,10 @@ func getEnvOrDefault(key, defaultValue string) string {
 // Quick performs a quick completion with minimal configuration
 // It creates a new client with auto-discovery and makes a simple completion request
 func Quick(model, message string) (*Response, error) {
-	client := New()
+	client, err := New()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create client: %w", err)
+	}
 	return client.Chat(context.Background(), &Request{
 		Model: model,
 		Messages: []Message{
