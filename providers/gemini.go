@@ -170,7 +170,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 			for _, toolCall := range msg.ToolCalls {
 				var args map[string]any
 				if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-					args = map[string]any{"input": toolCall.Function.Arguments}
+					return nil, fmt.Errorf("gemini: invalid tool call arguments for '%s': %w", toolCall.Function.Name, err)
 				}
 				content.Parts = append(content.Parts, geminiPart{
 					FunctionCall: &geminiFunctionCall{
@@ -185,7 +185,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 		if msg.ToolCallID != "" {
 			var response map[string]any
 			if err := json.Unmarshal([]byte(msg.Content), &response); err != nil {
-				response = map[string]any{"result": msg.Content}
+				return nil, fmt.Errorf("gemini: invalid tool response content (expected JSON): %w", err)
 			}
 
 			// Get tool name from context or generate one
@@ -533,14 +533,12 @@ func intPtr(i int) *int {
 }
 
 // geminiStreamReader implements streaming for Gemini
+// Gemini uses newline-delimited JSON format (each line is a complete JSON object)
 type geminiStreamReader struct {
-	resp      *http.Response
-	scanner   *bufio.Scanner
-	provider  string
-	done      bool
-	buffer    strings.Builder
-	responses []geminiStreamResponse
-	index     int
+	resp     *http.Response
+	scanner  *bufio.Scanner
+	provider string
+	done     bool
 }
 
 func (r *geminiStreamReader) Next() (*StreamChunk, error) {
@@ -548,47 +546,31 @@ func (r *geminiStreamReader) Next() (*StreamChunk, error) {
 		return &StreamChunk{Done: true, Provider: r.provider}, nil
 	}
 
-	if r.index < len(r.responses) {
-		return r.processResponse(r.responses[r.index])
-	}
-
-	if len(r.responses) == 0 {
-		if err := r.readCompleteJSON(); err != nil {
-			return nil, err
+	// Read next line from the stream
+	for r.scanner.Scan() {
+		line := strings.TrimSpace(r.scanner.Text())
+		if line == "" {
+			continue
 		}
+
+		var streamResp geminiStreamResponse
+		if err := json.Unmarshal([]byte(line), &streamResp); err != nil {
+			// Return error instead of silently ignoring malformed data
+			return nil, fmt.Errorf("gemini: failed to parse stream chunk: %w", err)
+		}
+
+		return r.processResponse(streamResp)
 	}
 
-	if r.index < len(r.responses) {
-		return r.processResponse(r.responses[r.index])
+	if err := r.scanner.Err(); err != nil {
+		return nil, fmt.Errorf("gemini: stream read error: %w", err)
 	}
 
 	r.done = true
 	return &StreamChunk{Done: true, Provider: r.provider}, nil
 }
 
-func (r *geminiStreamReader) readCompleteJSON() error {
-	for r.scanner.Scan() {
-		line := r.scanner.Text()
-		r.buffer.WriteString(line)
-	}
-
-	if err := r.scanner.Err(); err != nil {
-		return err
-	}
-
-	jsonStr := r.buffer.String()
-
-	var responses []geminiStreamResponse
-	if err := json.Unmarshal([]byte(jsonStr), &responses); err != nil {
-		return fmt.Errorf("gemini: failed to parse stream response: %w", err)
-	}
-
-	r.responses = responses
-	return nil
-}
-
 func (r *geminiStreamReader) processResponse(streamResp geminiStreamResponse) (*StreamChunk, error) {
-	defer func() { r.index++ }()
 
 	if len(streamResp.Candidates) > 0 {
 		candidate := streamResp.Candidates[0]

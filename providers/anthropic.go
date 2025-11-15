@@ -90,11 +90,12 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 			if params, ok := tool.Function.Parameters.(map[string]any); ok {
 				inputSchema = params
 			} else {
-				if jsonBytes, err := json.Marshal(tool.Function.Parameters); err == nil {
-					if err := json.Unmarshal(jsonBytes, &inputSchema); err != nil {
-						// Skip tools with invalid parameters
-						continue
-					}
+				jsonBytes, err := json.Marshal(tool.Function.Parameters)
+				if err != nil {
+					return nil, fmt.Errorf("anthropic: failed to marshal tool parameters for '%s': %w", tool.Function.Name, err)
+				}
+				if err := json.Unmarshal(jsonBytes, &inputSchema); err != nil {
+					return nil, fmt.Errorf("anthropic: invalid tool parameters for '%s': %w", tool.Function.Name, err)
 				}
 			}
 
@@ -300,11 +301,12 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 			if params, ok := tool.Function.Parameters.(map[string]any); ok {
 				inputSchema = params
 			} else {
-				if jsonBytes, err := json.Marshal(tool.Function.Parameters); err == nil {
-					if err := json.Unmarshal(jsonBytes, &inputSchema); err != nil {
-						// Skip tools with invalid parameters
-						continue
-					}
+				jsonBytes, err := json.Marshal(tool.Function.Parameters)
+				if err != nil {
+					return nil, fmt.Errorf("anthropic: failed to marshal tool parameters for '%s': %w", tool.Function.Name, err)
+				}
+				if err := json.Unmarshal(jsonBytes, &inputSchema); err != nil {
+					return nil, fmt.Errorf("anthropic: invalid tool parameters for '%s': %w", tool.Function.Name, err)
 				}
 			}
 
@@ -494,7 +496,8 @@ func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
 
 		var chunk anthropicStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			continue
+			// Return error instead of silently ignoring malformed chunks
+			return nil, fmt.Errorf("anthropic: failed to parse stream chunk: %w", err)
 		}
 
 		// Handle text content deltas

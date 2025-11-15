@@ -462,7 +462,8 @@ func (r *openRouterStreamReader) Next() (*StreamChunk, error) {
 
 			var streamResp openRouterStreamResponse
 			if err := json.Unmarshal([]byte(data), &streamResp); err != nil {
-				continue // Skip malformed chunks
+				// Return error instead of silently ignoring malformed chunks
+				return nil, fmt.Errorf("openrouter: failed to parse stream chunk: %w", err)
 			}
 
 			// Convert to StreamChunk

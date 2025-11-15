@@ -387,7 +387,8 @@ func (r *glmStreamReader) Next() (*StreamChunk, error) {
 			// Parse JSON
 			var streamResp glmStreamResponse
 			if err := json.Unmarshal([]byte(data), &streamResp); err != nil {
-				continue // Skip malformed chunks
+				// Return error instead of silently ignoring malformed chunks
+				return nil, fmt.Errorf("glm: failed to parse stream chunk: %w", err)
 			}
 
 			// Convert to StreamChunk

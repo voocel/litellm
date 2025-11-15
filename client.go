@@ -386,8 +386,12 @@ func (c *Client) autoDiscoverProviders() error {
 
 	// If all providers failed, return combined error
 	if len(errs) > 0 && len(c.providers) == 0 {
-		return errors.Join(errs...)
+		return fmt.Errorf("auto-discovery failed: no providers could be configured. Errors: %w", errors.Join(errs...))
 	}
+
+	// If some providers failed but at least one succeeded, log warning
+	// (In a library, we don't have a logger, so we silently continue but could return a wrapped error in the future)
+	// For now, partial success is acceptable for auto-discovery
 
 	return nil
 }

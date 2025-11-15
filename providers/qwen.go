@@ -102,7 +102,7 @@ func (p *QwenProvider) Chat(ctx context.Context, req *Request) (*Response, error
 	}
 
 	// Enable thinking for reasoning-capable models
-	if p.isReasoningModel(req.Model) {
+	if p.hasCapability(req.Model, "reasoning") {
 		qwenReq.EnableThinking = true
 	}
 
@@ -129,7 +129,7 @@ func (p *QwenProvider) Chat(ctx context.Context, req *Request) (*Response, error
 	if resp.StatusCode != http.StatusOK {
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return nil, fmt.Errorf("qwen: failed to read error response: %w", err)
+			return nil, fmt.Errorf("qwen: API error %d (failed to read response body: %w)", resp.StatusCode, err)
 		}
 		return nil, fmt.Errorf("qwen: API error %d: %s", resp.StatusCode, string(body))
 	}
@@ -213,7 +213,7 @@ func (p *QwenProvider) Stream(ctx context.Context, req *Request) (StreamReader, 
 	}
 
 	// Enable thinking for reasoning models
-	if p.isReasoningModel(req.Model) {
+	if p.hasCapability(req.Model, "reasoning") {
 		qwenReq.EnableThinking = true
 	}
 
@@ -242,7 +242,7 @@ func (p *QwenProvider) Stream(ctx context.Context, req *Request) (StreamReader, 
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("qwen: failed to read stream error response: %w", err)
+			return nil, fmt.Errorf("qwen: API error %d (failed to read response body: %w)", resp.StatusCode, err)
 		}
 		return nil, fmt.Errorf("qwen: API error %d: %s", resp.StatusCode, string(body))
 	}
@@ -300,17 +300,16 @@ func (p *QwenProvider) convertTools(tools []Tool) []qwenTool {
 	return qwenTools
 }
 
-// isReasoningModel checks if the model supports reasoning
-func (p *QwenProvider) isReasoningModel(model string) bool {
-	reasoningModels := []string{
-		"qwen-plus", "qwen-max", "qwen-max-longcontext",
-		"qwen2.5-72b-instruct", "qwen2.5-32b-instruct",
-		"qwen2.5-coder-32b-instruct", "qwen2.5-math-72b-instruct",
-		"qwen3-coder-plus", "qwen3-coder-flash",
-	}
-	for _, m := range reasoningModels {
-		if m == model {
-			return true
+// hasCapability checks if a model has a specific capability
+func (p *QwenProvider) hasCapability(modelID, capability string) bool {
+	for _, m := range p.Models() {
+		if m.ID == modelID {
+			for _, c := range m.Capabilities {
+				if c == capability {
+					return true
+				}
+			}
+			return false
 		}
 	}
 	return false
@@ -420,7 +419,8 @@ func (r *qwenStreamReader) Next() (*StreamChunk, error) {
 
 			var streamResp qwenStreamResponse
 			if err := json.Unmarshal([]byte(data), &streamResp); err != nil {
-				continue // Skip malformed chunks
+				// Return error instead of silently ignoring malformed chunks
+				return nil, fmt.Errorf("qwen: failed to parse stream chunk: %w", err)
 			}
 
 			// Convert to StreamChunk

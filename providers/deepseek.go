@@ -373,7 +373,8 @@ func (r *deepseekStreamReader) Next() (*StreamChunk, error) {
 
 		var streamResp deepseekStreamResponse
 		if err := json.Unmarshal([]byte(data), &streamResp); err != nil {
-			continue // Skip invalid JSON
+			// Return error instead of silently ignoring malformed chunks
+			return nil, fmt.Errorf("deepseek: failed to parse stream chunk: %w", err)
 		}
 
 		if len(streamResp.Choices) > 0 {
