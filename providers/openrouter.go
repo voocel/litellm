@@ -69,6 +69,10 @@ func (p *OpenRouterProvider) Chat(ctx context.Context, req *Request) (*Response,
 		return nil, err
 	}
 
+	if err := p.BaseProvider.ValidateRequest(req); err != nil {
+		return nil, err
+	}
+
 	// Build OpenRouter request
 	openRouterReq := map[string]any{
 		"model":    req.Model,

@@ -109,6 +109,31 @@ func (p *BaseProvider) Validate() error {
 	return nil
 }
 
+// ValidateRequest validates common request parameters
+// This should be called by all provider implementations before processing requests
+func (p *BaseProvider) ValidateRequest(req *Request) error {
+	if req.Model == "" {
+		return fmt.Errorf("%s: model is required", p.name)
+	}
+	if len(req.Messages) == 0 {
+		return fmt.Errorf("%s: at least one message is required", p.name)
+	}
+
+	// Validate temperature if set
+	if req.Temperature != nil {
+		if *req.Temperature < 0 || *req.Temperature > 2 {
+			return fmt.Errorf("%s: temperature must be between 0 and 2, got %f", p.name, *req.Temperature)
+		}
+	}
+
+	// Validate max tokens if set
+	if req.MaxTokens != nil && *req.MaxTokens <= 0 {
+		return fmt.Errorf("%s: max_tokens must be positive, got %d", p.name, *req.MaxTokens)
+	}
+
+	return nil
+}
+
 func getDefaultBaseURL(provider string) string {
 	switch provider {
 	case "openai":

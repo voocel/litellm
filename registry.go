@@ -348,17 +348,19 @@ func convertReasoningData(reasoning *providers.ReasoningData) *ReasoningData {
 }
 
 // RegisterProvider registers a custom provider factory
-func RegisterProvider(name string, factory ProviderFactory) {
+// Returns an error if the name is empty or factory is nil
+func RegisterProvider(name string, factory ProviderFactory) error {
 	if name == "" {
-		panic("provider name cannot be empty")
+		return fmt.Errorf("provider name cannot be empty")
 	}
 	if factory == nil {
-		panic("provider factory cannot be nil")
+		return fmt.Errorf("provider factory cannot be nil")
 	}
 
 	providerMutex.Lock()
 	defer providerMutex.Unlock()
 	customProviders[name] = factory
+	return nil
 }
 
 // ListRegisteredProviders returns all registered provider names

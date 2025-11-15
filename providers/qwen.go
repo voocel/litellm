@@ -64,6 +64,10 @@ func (p *QwenProvider) Chat(ctx context.Context, req *Request) (*Response, error
 		return nil, err
 	}
 
+	if err := p.BaseProvider.ValidateRequest(req); err != nil {
+		return nil, err
+	}
+
 	qwenReq := qwenRequest{
 		Model: req.Model,
 		Input: qwenInput{

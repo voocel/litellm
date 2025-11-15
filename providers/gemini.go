@@ -83,6 +83,10 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 		return nil, err
 	}
 
+	if err := p.BaseProvider.ValidateRequest(req); err != nil {
+		return nil, err
+	}
+
 	modelName := req.Model
 
 	geminiReq := geminiRequest{
@@ -214,9 +218,9 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 	// Convert tool definitions
 	if len(req.Tools) > 0 {
 		tool := geminiTool{
-			FunctionDeclarations: make([]geminiFunctionDeclaration, len(req.Tools)),
+			FunctionDeclarations: make([]geminiFunctionDeclaration, 0, len(req.Tools)),
 		}
-		for i, t := range req.Tools {
+		for _, t := range req.Tools {
 			var params map[string]any
 			if p, ok := t.Function.Parameters.(map[string]any); ok {
 				params = p
@@ -229,11 +233,11 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 				}
 			}
 
-			tool.FunctionDeclarations[i] = geminiFunctionDeclaration{
+			tool.FunctionDeclarations = append(tool.FunctionDeclarations, geminiFunctionDeclaration{
 				Name:        t.Function.Name,
 				Description: t.Function.Description,
 				Parameters:  params,
-			}
+			})
 		}
 		geminiReq.Tools = []geminiTool{tool}
 

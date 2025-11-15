@@ -63,6 +63,10 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 		return nil, err
 	}
 
+	if err := p.BaseProvider.ValidateRequest(req); err != nil {
+		return nil, err
+	}
+
 	modelName := req.Model
 
 	anthropicReq := anthropicRequest{
@@ -80,8 +84,8 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 
 	// Convert tool definitions to Anthropic format
 	if len(req.Tools) > 0 {
-		anthropicReq.Tools = make([]anthropicTool, len(req.Tools))
-		for i, tool := range req.Tools {
+		anthropicReq.Tools = make([]anthropicTool, 0, len(req.Tools))
+		for _, tool := range req.Tools {
 			var inputSchema map[string]any
 			if params, ok := tool.Function.Parameters.(map[string]any); ok {
 				inputSchema = params
@@ -94,11 +98,11 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 				}
 			}
 
-			anthropicReq.Tools[i] = anthropicTool{
+			anthropicReq.Tools = append(anthropicReq.Tools, anthropicTool{
 				Name:        tool.Function.Name,
 				Description: tool.Function.Description,
 				InputSchema: inputSchema,
-			}
+			})
 		}
 	}
 
@@ -290,8 +294,8 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 
 	// Convert tool definitions (same as Chat method)
 	if len(req.Tools) > 0 {
-		anthropicReq.Tools = make([]anthropicTool, len(req.Tools))
-		for i, tool := range req.Tools {
+		anthropicReq.Tools = make([]anthropicTool, 0, len(req.Tools))
+		for _, tool := range req.Tools {
 			var inputSchema map[string]any
 			if params, ok := tool.Function.Parameters.(map[string]any); ok {
 				inputSchema = params
@@ -304,11 +308,11 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 				}
 			}
 
-			anthropicReq.Tools[i] = anthropicTool{
+			anthropicReq.Tools = append(anthropicReq.Tools, anthropicTool{
 				Name:        tool.Function.Name,
 				Description: tool.Function.Description,
 				InputSchema: inputSchema,
-			}
+			})
 		}
 	}
 

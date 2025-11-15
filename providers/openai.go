@@ -107,31 +107,6 @@ func (p *OpenAIProvider) isReasoningModel(model string) bool {
 	return p.needsMaxCompletionTokens(model)
 }
 
-// validateRequest validates the request parameters for OpenAI API compatibility
-func (p *OpenAIProvider) validateRequest(req *Request) error {
-	if req.Model == "" {
-		return fmt.Errorf("model is required")
-	}
-
-	if len(req.Messages) == 0 {
-		return fmt.Errorf("at least one message is required")
-	}
-
-	// Validate temperature range for non-reasoning models
-	if req.Temperature != nil && !p.isReasoningModel(req.Model) {
-		if *req.Temperature < 0 || *req.Temperature > 2 {
-			return fmt.Errorf("temperature must be between 0 and 2, got %f", *req.Temperature)
-		}
-	}
-
-	// Validate max tokens
-	if req.MaxTokens != nil && *req.MaxTokens <= 0 {
-		return fmt.Errorf("max_tokens must be positive, got %d", *req.MaxTokens)
-	}
-
-	return nil
-}
-
 // resolveTokenParams resolves token parameter conflicts based on model type
 func (p *OpenAIProvider) resolveTokenParams(req *Request) (maxTokens *int, maxCompletionTokens *int) {
 	if req.MaxTokens == nil {
@@ -152,9 +127,23 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req *Request) (*Response, err
 		return nil, err
 	}
 
-	// Validate request parameters
-	if err := p.validateRequest(req); err != nil {
-		return nil, fmt.Errorf("openai: invalid request: %w", err)
+	// Validate request parameters using base provider validation
+	// Note: Temperature validation is skipped for reasoning models as they don't support it
+	if !p.isReasoningModel(req.Model) {
+		if err := p.BaseProvider.ValidateRequest(req); err != nil {
+			return nil, err
+		}
+	} else {
+		// For reasoning models, only validate model and messages
+		if req.Model == "" {
+			return nil, fmt.Errorf("openai: model is required")
+		}
+		if len(req.Messages) == 0 {
+			return nil, fmt.Errorf("openai: at least one message is required")
+		}
+		if req.MaxTokens != nil && *req.MaxTokens <= 0 {
+			return nil, fmt.Errorf("openai: max_tokens must be positive, got %d", *req.MaxTokens)
+		}
 	}
 
 	modelName := req.Model

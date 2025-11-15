@@ -56,6 +56,10 @@ func (p *GLMProvider) Chat(ctx context.Context, req *Request) (*Response, error)
 		return nil, err
 	}
 
+	if err := p.BaseProvider.ValidateRequest(req); err != nil {
+		return nil, err
+	}
+
 	// Build GLM request (OpenAI compatible with extensions)
 	glmReq := map[string]any{
 		"model":    req.Model,

@@ -55,6 +55,11 @@ func (p *DeepSeekProvider) Chat(ctx context.Context, req *Request) (*Response, e
 		return nil, err
 	}
 
+	// Validate request parameters
+	if err := p.BaseProvider.ValidateRequest(req); err != nil {
+		return nil, err
+	}
+
 	// Build DeepSeek request (OpenAI compatible)
 	deepseekReq := map[string]any{
 		"model":    req.Model,

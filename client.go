@@ -451,15 +451,45 @@ func getEnvOrDefault(key, defaultValue string) string {
 
 // Quick performs a quick completion with minimal configuration
 // It creates a new client with auto-discovery and makes a simple completion request
+// with a default timeout of 30 seconds
 func Quick(model, message string) (*Response, error) {
+	return QuickWithTimeout(model, message, 30*time.Second)
+}
+
+// QuickWithTimeout performs a quick completion with a custom timeout
+// It creates a new client with auto-discovery and makes a simple completion request
+func QuickWithTimeout(model, message string, timeout time.Duration) (*Response, error) {
+	if model == "" {
+		return nil, fmt.Errorf("litellm.Quick: model parameter cannot be empty")
+	}
+	if message == "" {
+		return nil, fmt.Errorf("litellm.Quick: message parameter cannot be empty")
+	}
+	if timeout <= 0 {
+		return nil, fmt.Errorf("litellm.Quick: timeout must be positive, got %v", timeout)
+	}
+
+	// Create client with auto-discovery
 	client, err := New()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create client: %w", err)
+		return nil, fmt.Errorf("litellm.Quick: failed to initialize client (check API keys in environment): %w", err)
 	}
-	return client.Chat(context.Background(), &Request{
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	resp, err := client.Chat(ctx, &Request{
 		Model: model,
 		Messages: []Message{
 			{Role: "user", Content: message},
 		},
 	})
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("litellm.Quick: request timed out after %v (model: %s)", timeout, model)
+		}
+		return nil, fmt.Errorf("litellm.Quick: request failed for model %s: %w", model, err)
+	}
+
+	return resp, nil
 }
