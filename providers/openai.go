@@ -617,7 +617,7 @@ func (r *openaiStreamReader) Next() (*StreamChunk, error) {
 
 		var chunk openaiStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			continue
+			return nil, fmt.Errorf("openai: failed to parse stream chunk: %w", err)
 		}
 
 		// Handle usage chunk (comes with empty choices array)
