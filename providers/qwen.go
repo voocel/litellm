@@ -68,42 +68,36 @@ func (p *QwenProvider) Chat(ctx context.Context, req *Request) (*Response, error
 		return nil, err
 	}
 
-	qwenReq := qwenRequest{
-		Model: req.Model,
-		Input: qwenInput{
-			Messages: p.convertMessages(req.Messages),
+	// Build Qwen request using map[string]any for flexibility
+	qwenReq := map[string]any{
+		"model": req.Model,
+		"input": map[string]any{
+			"messages": ConvertMessages(req.Messages),
 		},
 	}
 
-	if req.MaxTokens != nil || req.Temperature != nil {
-		qwenReq.Parameters = &qwenParameters{}
-
-		if req.MaxTokens != nil {
-			qwenReq.Parameters.MaxTokens = req.MaxTokens
-		}
-		if req.Temperature != nil {
-			qwenReq.Parameters.Temperature = req.Temperature
-		}
+	// Build parameters if needed
+	params := make(map[string]any)
+	if req.MaxTokens != nil {
+		params["max_tokens"] = *req.MaxTokens
 	}
-
-	// Handle tools (Qwen uses different format)
+	if req.Temperature != nil {
+		params["temperature"] = *req.Temperature
+	}
 	if len(req.Tools) > 0 {
-		if qwenReq.Parameters == nil {
-			qwenReq.Parameters = &qwenParameters{}
-		}
-		qwenReq.Parameters.Tools = p.convertTools(req.Tools)
+		params["tools"] = ConvertTools(req.Tools)
+	}
+	if req.ResponseFormat != nil && req.ResponseFormat.Type == "json_object" {
+		params["result_format"] = "message"
 	}
 
-	if req.ResponseFormat != nil && req.ResponseFormat.Type == "json_object" {
-		if qwenReq.Parameters == nil {
-			qwenReq.Parameters = &qwenParameters{}
-		}
-		qwenReq.Parameters.ResultFormat = "message"
+	if len(params) > 0 {
+		qwenReq["parameters"] = params
 	}
 
 	// Enable thinking for reasoning-capable models
 	if p.hasCapability(req.Model, "reasoning") {
-		qwenReq.EnableThinking = true
+		qwenReq["enable_thinking"] = true
 	}
 
 	body, err := json.Marshal(qwenReq)
@@ -191,30 +185,31 @@ func (p *QwenProvider) Stream(ctx context.Context, req *Request) (StreamReader, 
 		return nil, err
 	}
 
-	// Build request (similar to Chat but with SSE)
-	qwenReq := qwenRequest{
-		Model: req.Model,
-		Input: qwenInput{
-			Messages: p.convertMessages(req.Messages),
-		},
-		Parameters: &qwenParameters{
-			IncrementalOutput: true, // Enable streaming
-		},
+	// Build request using map[string]any for flexibility
+	params := map[string]any{
+		"incremental_output": true, // Enable streaming
 	}
-
 	if req.MaxTokens != nil {
-		qwenReq.Parameters.MaxTokens = req.MaxTokens
+		params["max_tokens"] = *req.MaxTokens
 	}
 	if req.Temperature != nil {
-		qwenReq.Parameters.Temperature = req.Temperature
+		params["temperature"] = *req.Temperature
 	}
 	if len(req.Tools) > 0 {
-		qwenReq.Parameters.Tools = p.convertTools(req.Tools)
+		params["tools"] = ConvertTools(req.Tools)
+	}
+
+	qwenReq := map[string]any{
+		"model": req.Model,
+		"input": map[string]any{
+			"messages": ConvertMessages(req.Messages),
+		},
+		"parameters": params,
 	}
 
 	// Enable thinking for reasoning models
 	if p.hasCapability(req.Model, "reasoning") {
-		qwenReq.EnableThinking = true
+		qwenReq["enable_thinking"] = true
 	}
 
 	body, err := json.Marshal(qwenReq)
@@ -254,52 +249,6 @@ func (p *QwenProvider) Stream(ctx context.Context, req *Request) (StreamReader, 
 	}, nil
 }
 
-// convertMessages converts standard messages to Qwen format
-func (p *QwenProvider) convertMessages(messages []Message) []qwenMessage {
-	qwenMessages := make([]qwenMessage, len(messages))
-	for i, msg := range messages {
-		qwenMessages[i] = qwenMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		}
-
-		// Handle tool calls
-		if len(msg.ToolCalls) > 0 {
-			for _, toolCall := range msg.ToolCalls {
-				qwenMessages[i].ToolCalls = append(qwenMessages[i].ToolCalls, qwenToolCall{
-					ID:   toolCall.ID,
-					Type: toolCall.Type,
-					Function: qwenFunctionCall{
-						Name:      toolCall.Function.Name,
-						Arguments: toolCall.Function.Arguments,
-					},
-				})
-			}
-		}
-
-		if msg.ToolCallID != "" {
-			qwenMessages[i].ToolCallID = msg.ToolCallID
-		}
-	}
-	return qwenMessages
-}
-
-// convertTools converts standard tools to Qwen format
-func (p *QwenProvider) convertTools(tools []Tool) []qwenTool {
-	qwenTools := make([]qwenTool, len(tools))
-	for i, tool := range tools {
-		qwenTools[i] = qwenTool{
-			Type: tool.Type,
-			Function: qwenFunction{
-				Name:        tool.Function.Name,
-				Description: tool.Function.Description,
-				Parameters:  tool.Function.Parameters,
-			},
-		}
-	}
-	return qwenTools
-}
-
 // hasCapability checks if a model has a specific capability
 func (p *QwenProvider) hasCapability(modelID, capability string) bool {
 	for _, m := range p.Models() {
@@ -316,54 +265,14 @@ func (p *QwenProvider) hasCapability(modelID, capability string) bool {
 }
 
 // Qwen API structures (DashScope format)
-type qwenRequest struct {
-	Model          string          `json:"model"`
-	Input          qwenInput       `json:"input"`
-	Parameters     *qwenParameters `json:"parameters,omitempty"`
-	EnableThinking bool            `json:"enable_thinking,omitempty"`
-}
-
-type qwenInput struct {
-	Messages []qwenMessage `json:"messages"`
-}
-
-type qwenParameters struct {
-	MaxTokens         *int       `json:"max_tokens,omitempty"`
-	Temperature       *float64   `json:"temperature,omitempty"`
-	Tools             []qwenTool `json:"tools,omitempty"`
-	ResultFormat      string     `json:"result_format,omitempty"`
-	IncrementalOutput bool       `json:"incremental_output,omitempty"`
-}
-
 type qwenMessage struct {
-	Role             string         `json:"role"`
-	Content          string         `json:"content"`
-	ToolCalls        []qwenToolCall `json:"tool_calls,omitempty"`
-	ToolCallID       string         `json:"tool_call_id,omitempty"`
-	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	Role             string           `json:"role"`
+	Content          string           `json:"content"`
+	ToolCalls        []openaiToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
 }
 
-type qwenToolCall struct {
-	ID       string           `json:"id"`
-	Type     string           `json:"type"`
-	Function qwenFunctionCall `json:"function"`
-}
-
-type qwenFunctionCall struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
-
-type qwenTool struct {
-	Type     string       `json:"type"`
-	Function qwenFunction `json:"function"`
-}
-
-type qwenFunction struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Parameters  any    `json:"parameters"`
-}
 
 type qwenResponse struct {
 	Output    *qwenOutput `json:"output,omitempty"`
@@ -510,8 +419,8 @@ type qwenStreamChoice struct {
 }
 
 type qwenStreamDelta struct {
-	Role             string         `json:"role,omitempty"`
-	Content          string         `json:"content,omitempty"`
-	ReasoningContent string         `json:"reasoning_content,omitempty"`
-	ToolCalls        []qwenToolCall `json:"tool_calls,omitempty"`
+	Role             string           `json:"role,omitempty"`
+	Content          string           `json:"content,omitempty"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ToolCalls        []openaiToolCall `json:"tool_calls,omitempty"`
 }

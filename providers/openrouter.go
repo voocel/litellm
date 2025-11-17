@@ -324,10 +324,10 @@ func (p *OpenRouterProvider) convertMessages(messages []Message) []openRouterMes
 		// Handle tool calls
 		if len(msg.ToolCalls) > 0 {
 			for _, toolCall := range msg.ToolCalls {
-				openRouterMsg.ToolCalls = append(openRouterMsg.ToolCalls, openRouterToolCall{
+				openRouterMsg.ToolCalls = append(openRouterMsg.ToolCalls, openaiToolCall{
 					ID:   toolCall.ID,
 					Type: toolCall.Type,
-					Function: openRouterToolCallFunction{
+					Function: openaiToolCallFunc{
 						Name:      toolCall.Function.Name,
 						Arguments: toolCall.Function.Arguments,
 					},
@@ -363,11 +363,11 @@ func (p *OpenRouterProvider) convertTools(tools []Tool) []openRouterTool {
 
 // OpenRouter API structures
 type openRouterMessage struct {
-	Role       string               `json:"role"`
-	Content    interface{}          `json:"content,omitempty"` // Can be string or []openRouterContent for caching
-	Reasoning  string               `json:"reasoning,omitempty"`
-	ToolCalls  []openRouterToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string               `json:"tool_call_id,omitempty"`
+	Role       string           `json:"role"`
+	Content    interface{}      `json:"content,omitempty"` // Can be string or []openRouterContent for caching
+	Reasoning  string           `json:"reasoning,omitempty"`
+	ToolCalls  []openaiToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
 }
 
 // openRouterContent represents content with cache control (Anthropic format)
@@ -380,17 +380,6 @@ type openRouterContent struct {
 // openRouterCacheControl represents cache control for OpenRouter (Anthropic format)
 type openRouterCacheControl struct {
 	Type string `json:"type"`
-}
-
-type openRouterToolCall struct {
-	ID       string                     `json:"id"`
-	Type     string                     `json:"type"`
-	Function openRouterToolCallFunction `json:"function"`
-}
-
-type openRouterToolCallFunction struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
 }
 
 type openRouterTool struct {
@@ -559,8 +548,8 @@ type openRouterStreamChoice struct {
 }
 
 type openRouterDelta struct {
-	Role      string               `json:"role,omitempty"`
-	Content   string               `json:"content,omitempty"`
-	Reasoning string               `json:"reasoning,omitempty"`
-	ToolCalls []openRouterToolCall `json:"tool_calls,omitempty"`
+	Role      string           `json:"role,omitempty"`
+	Content   string           `json:"content,omitempty"`
+	Reasoning string           `json:"reasoning,omitempty"`
+	ToolCalls []openaiToolCall `json:"tool_calls,omitempty"`
 }

@@ -221,44 +221,10 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 
 	// Convert tool definitions
 	if len(req.Tools) > 0 {
-		openaiReq.Tools = make([]openaiTool, len(req.Tools))
-		for i, tool := range req.Tools {
-			openaiReq.Tools[i] = openaiTool{
-				Type: tool.Type,
-				Function: openaiToolFunction{
-					Name:        tool.Function.Name,
-					Description: tool.Function.Description,
-					Parameters:  tool.Function.Parameters,
-				},
-			}
-		}
+		openaiReq.Tools = ConvertTools(req.Tools)
 	}
 
-	openaiReq.Messages = make([]openaiMessage, len(req.Messages))
-	for i, msg := range req.Messages {
-		openaiMsg := openaiMessage{
-			Role:       msg.Role,
-			Content:    msg.Content,
-			ToolCallID: msg.ToolCallID,
-		}
-
-		// Convert tool calls
-		if len(msg.ToolCalls) > 0 {
-			openaiMsg.ToolCalls = make([]openaiToolCall, len(msg.ToolCalls))
-			for j, toolCall := range msg.ToolCalls {
-				openaiMsg.ToolCalls[j] = openaiToolCall{
-					ID:   toolCall.ID,
-					Type: toolCall.Type,
-					Function: openaiToolCallFunc{
-						Name:      toolCall.Function.Name,
-						Arguments: toolCall.Function.Arguments,
-					},
-				}
-			}
-		}
-
-		openaiReq.Messages[i] = openaiMsg
-	}
+	openaiReq.Messages = ConvertMessagesToOpenAI(req.Messages)
 
 	body, err := json.Marshal(openaiReq)
 	if err != nil {
@@ -497,17 +463,7 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 
 	// Convert tool definitions
 	if len(req.Tools) > 0 {
-		openaiReq.Tools = make([]openaiTool, len(req.Tools))
-		for i, tool := range req.Tools {
-			openaiReq.Tools[i] = openaiTool{
-				Type: tool.Type,
-				Function: openaiToolFunction{
-					Name:        tool.Function.Name,
-					Description: tool.Function.Description,
-					Parameters:  tool.Function.Parameters,
-				},
-			}
-		}
+		openaiReq.Tools = ConvertTools(req.Tools)
 	}
 
 	// Set tool choice
@@ -515,31 +471,8 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		openaiReq.ToolChoice = req.ToolChoice
 	}
 
-	// Convert messages with tool calls support
-	for i, msg := range req.Messages {
-		openaiMsg := openaiMessage{
-			Role:       msg.Role,
-			Content:    msg.Content,
-			ToolCallID: msg.ToolCallID,
-		}
-
-		// Convert tool calls
-		if len(msg.ToolCalls) > 0 {
-			openaiMsg.ToolCalls = make([]openaiToolCall, len(msg.ToolCalls))
-			for j, toolCall := range msg.ToolCalls {
-				openaiMsg.ToolCalls[j] = openaiToolCall{
-					ID:   toolCall.ID,
-					Type: toolCall.Type,
-					Function: openaiToolCallFunc{
-						Name:      toolCall.Function.Name,
-						Arguments: toolCall.Function.Arguments,
-					},
-				}
-			}
-		}
-
-		openaiReq.Messages[i] = openaiMsg
-	}
+	// Convert messages
+	openaiReq.Messages = ConvertMessagesToOpenAI(req.Messages)
 
 	body, err := json.Marshal(openaiReq)
 	if err != nil {
@@ -943,4 +876,91 @@ func (p *OpenAIProvider) cleanSchemaForOpenAI(schema interface{}) interface{} {
 // ensureStrictSchema recursively adds additionalProperties: false to all objects for OpenAI strict mode
 func (p *OpenAIProvider) ensureStrictSchema(schema interface{}) interface{} {
 	return p.cleanSchemaForOpenAI(schema)
+}
+
+// ==================== 通用转换函数（供 OpenAI 兼容 provider 使用） ====================
+
+// OpenAICompatMessage 是 OpenAI 兼容的通用消息格式
+// 可被 DeepSeek、GLM、Qwen 等使用（Content 是 interface{} 以支持更多格式）
+type OpenAICompatMessage struct {
+	Role             string           `json:"role"`
+	Content          interface{}      `json:"content,omitempty"` // string 或 array（OpenRouter 需要）
+	ToolCalls        []openaiToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"` // GLM/Qwen 需要
+}
+
+// ConvertMessagesToOpenAI 将通用 Message 转换为 OpenAI 原生格式（Content 固定为 string）
+// OpenAI provider 内部使用
+func ConvertMessagesToOpenAI(messages []Message) []openaiMessage {
+	result := make([]openaiMessage, len(messages))
+	for i, msg := range messages {
+		result[i] = openaiMessage{
+			Role:       msg.Role,
+			Content:    msg.Content,
+			ToolCallID: msg.ToolCallID,
+		}
+
+		// 转换 tool calls
+		if len(msg.ToolCalls) > 0 {
+			result[i].ToolCalls = make([]openaiToolCall, len(msg.ToolCalls))
+			for j, tc := range msg.ToolCalls {
+				result[i].ToolCalls[j] = openaiToolCall{
+					ID:   tc.ID,
+					Type: tc.Type,
+					Function: openaiToolCallFunc{
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+					},
+				}
+			}
+		}
+	}
+	return result
+}
+
+// ConvertMessages 将通用 Message 转换为 OpenAI 兼容格式（Content 是 interface{}）
+// 供 DeepSeek、GLM、Qwen 等其他 provider 使用
+func ConvertMessages(messages []Message) []OpenAICompatMessage {
+	result := make([]OpenAICompatMessage, len(messages))
+	for i, msg := range messages {
+		result[i] = OpenAICompatMessage{
+			Role:       msg.Role,
+			Content:    msg.Content, // 默认 string，也可以是其他类型
+			ToolCallID: msg.ToolCallID,
+		}
+
+		// 转换 tool calls
+		if len(msg.ToolCalls) > 0 {
+			result[i].ToolCalls = make([]openaiToolCall, len(msg.ToolCalls))
+			for j, tc := range msg.ToolCalls {
+				result[i].ToolCalls[j] = openaiToolCall{
+					ID:   tc.ID,
+					Type: tc.Type,
+					Function: openaiToolCallFunc{
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+					},
+				}
+			}
+		}
+	}
+	return result
+}
+
+// ConvertTools 将通用 Tool 转换为 OpenAI 格式
+// 可被所有 OpenAI 兼容的 provider 使用（OpenAI、DeepSeek、GLM、Qwen 等）
+func ConvertTools(tools []Tool) []openaiTool {
+	result := make([]openaiTool, len(tools))
+	for i, tool := range tools {
+		result[i] = openaiTool{
+			Type: tool.Type,
+			Function: openaiToolFunction{
+				Name:        tool.Function.Name,
+				Description: tool.Function.Description,
+				Parameters:  tool.Function.Parameters,
+			},
+		}
+	}
+	return result
 }

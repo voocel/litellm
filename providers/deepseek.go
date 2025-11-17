@@ -63,7 +63,7 @@ func (p *DeepSeekProvider) Chat(ctx context.Context, req *Request) (*Response, e
 	// Build DeepSeek request (OpenAI compatible)
 	deepseekReq := map[string]any{
 		"model":    req.Model,
-		"messages": p.convertMessages(req.Messages),
+		"messages": ConvertMessages(req.Messages),
 	}
 
 	if req.MaxTokens != nil {
@@ -73,7 +73,7 @@ func (p *DeepSeekProvider) Chat(ctx context.Context, req *Request) (*Response, e
 		deepseekReq["temperature"] = *req.Temperature
 	}
 	if len(req.Tools) > 0 {
-		deepseekReq["tools"] = p.convertTools(req.Tools)
+		deepseekReq["tools"] = ConvertTools(req.Tools)
 	}
 	if req.ToolChoice != nil {
 		deepseekReq["tool_choice"] = req.ToolChoice
@@ -185,7 +185,7 @@ func (p *DeepSeekProvider) Stream(ctx context.Context, req *Request) (StreamRead
 	// Build request (similar to Chat but with stream: true)
 	deepseekReq := map[string]any{
 		"model":    req.Model,
-		"messages": p.convertMessages(req.Messages),
+		"messages": ConvertMessages(req.Messages),
 		"stream":   true,
 	}
 
@@ -196,7 +196,7 @@ func (p *DeepSeekProvider) Stream(ctx context.Context, req *Request) (StreamRead
 		deepseekReq["temperature"] = *req.Temperature
 	}
 	if len(req.Tools) > 0 {
-		deepseekReq["tools"] = p.convertTools(req.Tools)
+		deepseekReq["tools"] = ConvertTools(req.Tools)
 	}
 
 	body, err := json.Marshal(deepseekReq)
@@ -235,81 +235,7 @@ func (p *DeepSeekProvider) Stream(ctx context.Context, req *Request) (StreamRead
 	}, nil
 }
 
-// convertMessages converts standard messages to DeepSeek format
-func (p *DeepSeekProvider) convertMessages(messages []Message) []deepseekMessage {
-	deepseekMessages := make([]deepseekMessage, len(messages))
-	for i, msg := range messages {
-		deepseekMessages[i] = deepseekMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		}
-
-		if len(msg.ToolCalls) > 0 {
-			for _, toolCall := range msg.ToolCalls {
-				deepseekMessages[i].ToolCalls = append(deepseekMessages[i].ToolCalls, deepseekToolCall{
-					ID:   toolCall.ID,
-					Type: toolCall.Type,
-					Function: deepseekFunctionCall{
-						Name:      toolCall.Function.Name,
-						Arguments: toolCall.Function.Arguments,
-					},
-				})
-			}
-		}
-
-		if msg.ToolCallID != "" {
-			deepseekMessages[i].ToolCallID = msg.ToolCallID
-		}
-	}
-	return deepseekMessages
-}
-
-// convertTools converts standard tools to DeepSeek format
-func (p *DeepSeekProvider) convertTools(tools []Tool) []deepseekTool {
-	deepseekTools := make([]deepseekTool, len(tools))
-	for i, tool := range tools {
-		deepseekTools[i] = deepseekTool{
-			Type: tool.Type,
-			Function: deepseekFunction{
-				Name:        tool.Function.Name,
-				Description: tool.Function.Description,
-				Parameters:  tool.Function.Parameters,
-			},
-		}
-	}
-	return deepseekTools
-}
-
 // DeepSeek API structures (OpenAI compatible)
-type deepseekMessage struct {
-	Role       string             `json:"role"`
-	Content    string             `json:"content"`
-	ToolCalls  []deepseekToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string             `json:"tool_call_id,omitempty"`
-}
-
-type deepseekToolCall struct {
-	ID       string               `json:"id"`
-	Type     string               `json:"type"`
-	Function deepseekFunctionCall `json:"function"`
-}
-
-type deepseekFunctionCall struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
-
-type deepseekTool struct {
-	Type     string           `json:"type"`
-	Function deepseekFunction `json:"function"`
-}
-
-type deepseekFunction struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Parameters  any    `json:"parameters"`
-}
-
 type deepseekResponse struct {
 	ID      string           `json:"id"`
 	Object  string           `json:"object"`
@@ -326,10 +252,10 @@ type deepseekChoice struct {
 }
 
 type deepseekResponseMsg struct {
-	Role             string             `json:"role"`
-	Content          string             `json:"content"`
-	ReasoningContent string             `json:"reasoning_content,omitempty"`
-	ToolCalls        []deepseekToolCall `json:"tool_calls,omitempty"`
+	Role             string           `json:"role"`
+	Content          string           `json:"content"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ToolCalls        []openaiToolCall `json:"tool_calls,omitempty"`
 }
 
 type deepseekUsage struct {
@@ -450,8 +376,8 @@ type deepseekStreamChoice struct {
 }
 
 type deepseekStreamDelta struct {
-	Role             string             `json:"role,omitempty"`
-	Content          string             `json:"content,omitempty"`
-	ReasoningContent string             `json:"reasoning_content,omitempty"`
-	ToolCalls        []deepseekToolCall `json:"tool_calls,omitempty"`
+	Role             string           `json:"role,omitempty"`
+	Content          string           `json:"content,omitempty"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ToolCalls        []openaiToolCall `json:"tool_calls,omitempty"`
 }

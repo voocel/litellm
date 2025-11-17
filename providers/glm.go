@@ -63,7 +63,7 @@ func (p *GLMProvider) Chat(ctx context.Context, req *Request) (*Response, error)
 	// Build GLM request (OpenAI compatible with extensions)
 	glmReq := map[string]any{
 		"model":    req.Model,
-		"messages": p.convertMessages(req.Messages),
+		"messages": ConvertMessages(req.Messages),
 	}
 
 	if req.MaxTokens != nil {
@@ -73,7 +73,7 @@ func (p *GLMProvider) Chat(ctx context.Context, req *Request) (*Response, error)
 		glmReq["temperature"] = *req.Temperature
 	}
 	if len(req.Tools) > 0 {
-		glmReq["tools"] = p.convertTools(req.Tools)
+		glmReq["tools"] = ConvertTools(req.Tools)
 	}
 	if req.ToolChoice != nil {
 		glmReq["tool_choice"] = req.ToolChoice
@@ -194,7 +194,7 @@ func (p *GLMProvider) Stream(ctx context.Context, req *Request) (StreamReader, e
 	// Build request (similar to Chat but with stream: true)
 	glmReq := map[string]any{
 		"model":    req.Model,
-		"messages": p.convertMessages(req.Messages),
+		"messages": ConvertMessages(req.Messages),
 		"stream":   true,
 	}
 
@@ -205,7 +205,7 @@ func (p *GLMProvider) Stream(ctx context.Context, req *Request) (StreamReader, e
 		glmReq["temperature"] = *req.Temperature
 	}
 	if len(req.Tools) > 0 {
-		glmReq["tools"] = p.convertTools(req.Tools)
+		glmReq["tools"] = ConvertTools(req.Tools)
 	}
 
 	body, err := json.Marshal(glmReq)
@@ -244,52 +244,7 @@ func (p *GLMProvider) Stream(ctx context.Context, req *Request) (StreamReader, e
 	}, nil
 }
 
-// convertMessages converts standard messages to GLM format
-func (p *GLMProvider) convertMessages(messages []Message) []glmMessage {
-	glmMessages := make([]glmMessage, len(messages))
-	for i, msg := range messages {
-		glmMessages[i] = glmMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		}
 
-		// Handle tool calls
-		if len(msg.ToolCalls) > 0 {
-			for _, toolCall := range msg.ToolCalls {
-				glmMessages[i].ToolCalls = append(glmMessages[i].ToolCalls, glmToolCall{
-					ID:   toolCall.ID,
-					Type: toolCall.Type,
-					Function: glmFunctionCall{
-						Name:      toolCall.Function.Name,
-						Arguments: toolCall.Function.Arguments,
-					},
-				})
-			}
-		}
-
-		// Handle tool call responses
-		if msg.ToolCallID != "" {
-			glmMessages[i].ToolCallID = msg.ToolCallID
-		}
-	}
-	return glmMessages
-}
-
-// convertTools converts standard tools to GLM format
-func (p *GLMProvider) convertTools(tools []Tool) []glmTool {
-	glmTools := make([]glmTool, len(tools))
-	for i, tool := range tools {
-		glmTools[i] = glmTool{
-			Type: tool.Type,
-			Function: glmFunction{
-				Name:        tool.Function.Name,
-				Description: tool.Function.Description,
-				Parameters:  tool.Function.Parameters,
-			},
-		}
-	}
-	return glmTools
-}
 
 // addJSONSchemaInstructions adds JSON schema formatting instructions
 func (p *GLMProvider) addJSONSchemaInstructions(content string, format *ResponseFormat) string {
@@ -303,34 +258,14 @@ func (p *GLMProvider) addJSONSchemaInstructions(content string, format *Response
 
 // GLM API structures
 type glmMessage struct {
-	Role             string        `json:"role"`
-	Content          string        `json:"content"`
-	ToolCalls        []glmToolCall `json:"tool_calls,omitempty"`
-	ToolCallID       string        `json:"tool_call_id,omitempty"`
-	ReasoningContent string        `json:"reasoning_content,omitempty"`
+	Role             string           `json:"role"`
+	Content          string           `json:"content"`
+	ToolCalls        []openaiToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
 }
 
-type glmToolCall struct {
-	ID       string          `json:"id"`
-	Type     string          `json:"type"`
-	Function glmFunctionCall `json:"function"`
-}
 
-type glmFunctionCall struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
-
-type glmTool struct {
-	Type     string      `json:"type"`
-	Function glmFunction `json:"function"`
-}
-
-type glmFunction struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Parameters  any    `json:"parameters"`
-}
 
 type glmResponse struct {
 	ID      string      `json:"id"`
@@ -464,8 +399,8 @@ type glmStreamChoice struct {
 }
 
 type glmStreamDelta struct {
-	Role             string        `json:"role,omitempty"`
-	Content          string        `json:"content,omitempty"`
-	ReasoningContent string        `json:"reasoning_content,omitempty"`
-	ToolCalls        []glmToolCall `json:"tool_calls,omitempty"`
+	Role             string           `json:"role,omitempty"`
+	Content          string           `json:"content,omitempty"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ToolCalls        []openaiToolCall `json:"tool_calls,omitempty"`
 }
