@@ -16,7 +16,7 @@ import (
 
 // ResilienceConfig holds network resilience configuration
 type ResilienceConfig struct {
-	MaxRetries     int           `json:"max_retries"`     // Maximum retry attempts, default 3
+	MaxRetries     int           `json:"max_retries"`     // Maximum retry attempts, default 0 (no retry)
 	InitialDelay   time.Duration `json:"initial_delay"`   // Initial delay, default 1 second
 	MaxDelay       time.Duration `json:"max_delay"`       // Maximum delay, default 30 seconds
 	Multiplier     float64       `json:"multiplier"`      // Backoff multiplier, default 2.0
@@ -28,7 +28,7 @@ type ResilienceConfig struct {
 // DefaultResilienceConfig returns default resilience configuration
 func DefaultResilienceConfig() ResilienceConfig {
 	return ResilienceConfig{
-		MaxRetries:     3,
+		MaxRetries:     0,
 		InitialDelay:   1 * time.Second,
 		MaxDelay:       30 * time.Second,
 		Multiplier:     2.0,
