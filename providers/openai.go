@@ -500,9 +500,14 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		return nil, fmt.Errorf("openai: API error %d: %s", resp.StatusCode, string(body))
 	}
 
+	scanner := bufio.NewScanner(resp.Body)
+	// Increase buffer size to handle large tokens (default 64KB, max 1MB)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
 	return &openaiStreamReader{
 		resp:     resp,
-		scanner:  bufio.NewScanner(resp.Body),
+		scanner:  scanner,
 		provider: "openai",
 	}, nil
 }
@@ -627,7 +632,7 @@ func (r *openaiStreamReader) Next() (*StreamChunk, error) {
 	}
 
 	if err := r.scanner.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("openai: stream read error: %w", err)
 	}
 
 	r.done = true
