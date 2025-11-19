@@ -3,6 +3,7 @@ package litellm
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -26,6 +27,7 @@ type SmartRouter struct {
 	strategy         RouteStrategy
 	fallbackStrategy FallbackStrategy
 	roundRobinIndex  atomic.Int64 // For round-robin strategy (thread-safe)
+	cache            sync.Map     // Cache for auto routing results
 }
 
 // FallbackStrategy defines what to do when primary routing fails
@@ -126,21 +128,32 @@ func (r *SmartRouter) routeRoundRobin(model string, providers []Provider) (Provi
 
 // routeAuto implements intelligent automatic routing
 func (r *SmartRouter) routeAuto(model string, providers []Provider) (Provider, error) {
+	// Check cache first
+	if cached, ok := r.cache.Load(model); ok {
+		return cached.(Provider), nil
+	}
+
+	// Helper to cache and return
+	returnWithCache := func(p Provider) (Provider, error) {
+		r.cache.Store(model, p)
+		return p, nil
+	}
+
 	// Strategy 1: Try exact model match first
 	for _, provider := range providers {
 		if provider.SupportsModel(model) {
-			return provider, nil
+			return returnWithCache(provider)
 		}
 	}
 
 	// Strategy 2: Fuzzy matching for common model patterns
 	if provider := r.fuzzyMatch(model, providers); provider != nil {
-		return provider, nil
+		return returnWithCache(provider)
 	}
 
 	// Strategy 3: Provider inference from model name patterns
 	if provider := r.inferProviderFromModel(model, providers); provider != nil {
-		return provider, nil
+		return returnWithCache(provider)
 	}
 
 	return r.applyFallback(model, providers, fmt.Errorf("no suitable provider found for model '%s'", model))

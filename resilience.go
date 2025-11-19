@@ -67,8 +67,8 @@ func (c *ResilientHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	var lastErr error
 	var originalBody []byte
 
-	// Read and store original body for retries
-	if req.Body != nil {
+	// Read and store original body for retries only if GetBody is not available
+	if req.Body != nil && req.GetBody == nil {
 		var err error
 		originalBody, err = io.ReadAll(req.Body)
 		if err != nil {
@@ -79,8 +79,16 @@ func (c *ResilientHTTPClient) Do(req *http.Request) (*http.Response, error) {
 
 	for attempt := 0; attempt <= c.config.MaxRetries; attempt++ {
 		// Restore request body for each attempt
-		if originalBody != nil {
-			req.Body = io.NopCloser(bytes.NewReader(originalBody))
+		if req.Body != nil {
+			if req.GetBody != nil {
+				body, err := req.GetBody()
+				if err != nil {
+					return nil, fmt.Errorf("failed to get request body: %w", err)
+				}
+				req.Body = body
+			} else if originalBody != nil {
+				req.Body = io.NopCloser(bytes.NewReader(originalBody))
+			}
 		}
 
 		resp, err := c.client.Do(req)

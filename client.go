@@ -257,11 +257,16 @@ func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error)
 
 // Models returns all available models
 func (c *Client) Models() []ModelInfo {
+	// Copy providers under lock to minimize critical section
 	c.mu.RLock()
-	defer c.mu.RUnlock()
+	providers := make([]Provider, 0, len(c.providers))
+	for _, p := range c.providers {
+		providers = append(providers, p)
+	}
+	c.mu.RUnlock()
 
 	var allModels []ModelInfo
-	for _, provider := range c.providers {
+	for _, provider := range providers {
 		models := provider.Models()
 		for _, model := range models {
 			if model.Provider == "" {
