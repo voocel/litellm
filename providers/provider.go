@@ -15,9 +15,22 @@ type ModelInfo struct {
 type Message struct {
 	Role         string
 	Content      string
+	Contents     []MessageContent
 	ToolCalls    []ToolCall
 	ToolCallID   string
 	CacheControl *CacheControl
+}
+
+type MessageContent struct {
+	Type        string
+	Text        string
+	ImageURL    *MessageImageURL
+	Annotations []map[string]interface{}
+	Logprobs    []map[string]interface{}
+}
+
+type MessageImageURL struct {
+	URL string
 }
 
 // CacheControl defines prompt caching behavior for providers
@@ -61,21 +74,54 @@ type JSONSchema struct {
 }
 
 type Request struct {
-	Model            string
-	Messages         []Message
-	MaxTokens        *int
-	Temperature      *float64
-	Stream           bool
-	Tools            []Tool
-	ToolChoice       any
-	ResponseFormat   *ResponseFormat
-	Stop             []string
-	ReasoningEffort  string
-	ReasoningSummary string
-	UseResponsesAPI  bool
+	Model             string
+	Messages          []Message
+	MaxTokens         *int
+	Temperature       *float64
+	TopP              *float64
+	TopLogProbs       *int
+	Stream            bool
+	Tools             []Tool
+	ToolChoice        any
+	ResponseFormat    *ResponseFormat
+	Stop              []string
+	ReasoningEffort   string
+	ReasoningSummary  string
+	UseResponsesAPI   bool
+	ServiceTier       string
+	Store             *bool
+	ParallelToolCalls *bool
+	SafetyIdentifier  string
+
+	ResponsesParams *ResponsesParams
 
 	// Provider-specific extensions
 	Extra map[string]interface{}
+}
+
+// ResponsesParams describes Response-API-specific or more granular controls
+type ResponsesParams struct {
+	Instructions         string
+	Conversation         string
+	PreviousResponseID   string
+	Metadata             map[string]string
+	Store                *bool
+	MaxOutputTokens      *int
+	MaxInputTokens       *int
+	MaxToolCalls         *int
+	ParallelToolCalls    *bool
+	Include              []string
+	SafetyIdentifier     string
+	ServiceTier          string
+	Temperature          *float64
+	TopP                 *float64
+	ToolChoice           any
+	ResponseFormat       *ResponseFormat
+	PromptCacheKey       string
+	PromptCacheRetention string
+	Background           *bool
+	Prompt               map[string]interface{}
+	ModelOverride        string
 }
 
 type Usage struct {
@@ -97,6 +143,7 @@ type ReasoningData struct {
 
 type Response struct {
 	Content      string
+	Contents     []MessageContent
 	ToolCalls    []ToolCall
 	Usage        Usage
 	Model        string
@@ -108,6 +155,9 @@ type Response struct {
 type StreamChunk struct {
 	Type          string
 	Content       string
+	ContentIndex  *int
+	OutputIndex   *int
+	ItemID        string
 	ToolCallDelta *ToolCallDelta
 	FinishReason  string
 	Model         string
@@ -123,6 +173,8 @@ type ToolCallDelta struct {
 	Type           string
 	FunctionName   string
 	ArgumentsDelta string
+	OutputIndex    *int
+	ItemID         string
 }
 
 type ReasoningChunk struct {
