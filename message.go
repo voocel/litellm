@@ -181,6 +181,15 @@ type ReasoningChunk struct {
 // Thread Safety: StreamReader is NOT thread-safe. Do not call Next() or Close()
 // concurrently from multiple goroutines. Each StreamReader instance should be
 // used by a single goroutine at a time.
+//
+// IMPORTANT: Always call Close() to prevent resource leaks. Use defer immediately
+// after creating the stream:
+//
+//	stream, err := client.Stream(ctx, req)
+//	if err != nil {
+//	    return err
+//	}
+//	defer stream.Close()  // Must call to release resources
 type StreamReader interface {
 	// Next returns the next chunk or io.EOF when done
 	Next() (*StreamChunk, error)
