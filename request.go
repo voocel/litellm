@@ -1,7 +1,6 @@
 package litellm
 
 import (
-	"context"
 	"time"
 )
 
@@ -238,99 +237,4 @@ type Config struct {
 	Timeout     time.Duration  `json:"timeout"`
 	Retries     int            `json:"retries"`
 	Extra       map[string]any `json:"extra,omitempty"`
-}
-
-// Option is a functional option for configuring the client
-type Option func(*Client)
-
-// ProviderConfig contains provider-specific configuration
-type ProviderConfig struct {
-	APIKey  string `json:"api_key"`
-	BaseURL string `json:"base_url,omitempty"`
-
-	// Resilience configuration integrated directly
-	Resilience ResilienceConfig `json:"resilience,omitempty"`
-
-	// Provider-specific extras
-	Extra map[string]any `json:"extra,omitempty"`
-}
-
-// Context keys for request metadata
-type contextKey string
-
-const (
-	ContextKeyRequestID  contextKey = "request_id"
-	ContextKeyRetryCount contextKey = "retry_count"
-	ContextKeyProvider   contextKey = "provider"
-)
-
-// ChatProvider defines the basic chat completion capability
-type ChatProvider interface {
-	Chat(ctx context.Context, req *Request) (*Response, error)
-}
-
-// StreamProvider defines streaming capability
-type StreamProvider interface {
-	Stream(ctx context.Context, req *Request) (StreamReader, error)
-}
-
-// ModelProvider defines model information capability
-type ModelProvider interface {
-	Models() []ModelInfo
-	SupportsModel(model string) bool
-}
-
-// Provider combines all capabilities through interface composition
-// Implementations can choose which interfaces to support
-type Provider interface {
-	ChatProvider
-	StreamProvider
-	ModelProvider
-
-	// Basic provider info
-	Name() string
-	Validate() error
-}
-
-// ProviderFactory is a function that creates a provider instance
-type ProviderFactory func(config ProviderConfig) Provider
-
-// IntPtr returns a pointer to an int value
-func IntPtr(v int) *int {
-	return &v
-}
-
-// Float64Ptr returns a pointer to a float64 value
-func Float64Ptr(v float64) *float64 {
-	return &v
-}
-
-// BoolPtr returns a pointer to a bool value
-func BoolPtr(v bool) *bool {
-	return &v
-}
-
-// Response format helpers
-
-// NewResponseFormatText creates a text response format
-func NewResponseFormatText() *ResponseFormat {
-	return &ResponseFormat{Type: ResponseFormatText}
-}
-
-// NewResponseFormatJSONObject creates a JSON object response format
-func NewResponseFormatJSONObject() *ResponseFormat {
-	return &ResponseFormat{Type: ResponseFormatJSONObject}
-}
-
-// NewResponseFormatJSONSchema creates a JSON schema response format
-func NewResponseFormatJSONSchema(name, description string, schema any, strict bool) *ResponseFormat {
-	return &ResponseFormat{
-		Type: ResponseFormatJSONSchema,
-		JSONSchema: &JSONSchema{
-			Name:        name,
-			Description: description,
-			Schema:      schema,
-			Strict:      BoolPtr(strict),
-		},
-	}
 }

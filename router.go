@@ -22,12 +22,16 @@ const (
 	StrategyRoundRobin RouteStrategy = "round_robin" // Round-robin selection
 )
 
+// maxCacheSize limits the router cache to prevent unbounded memory growth
+const maxCacheSize = 1000
+
 // SmartRouter implements intelligent routing logic
 type SmartRouter struct {
 	strategy         RouteStrategy
 	fallbackStrategy FallbackStrategy
 	roundRobinIndex  atomic.Int64 // For round-robin strategy (thread-safe)
 	cache            sync.Map     // Cache for auto routing results
+	cacheSize        atomic.Int64 // Track cache size to prevent unbounded growth
 }
 
 // FallbackStrategy defines what to do when primary routing fails
@@ -133,9 +137,13 @@ func (r *SmartRouter) routeAuto(model string, providers []Provider) (Provider, e
 		return cached.(Provider), nil
 	}
 
-	// Helper to cache and return
+	// Helper to cache and return (with size limit to prevent OOM)
 	returnWithCache := func(p Provider) (Provider, error) {
-		r.cache.Store(model, p)
+		// Only cache if below size limit
+		if r.cacheSize.Load() < maxCacheSize {
+			r.cache.Store(model, p)
+			r.cacheSize.Add(1)
+		}
 		return p, nil
 	}
 

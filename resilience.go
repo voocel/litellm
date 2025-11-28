@@ -103,7 +103,7 @@ func (c *ResilientHTTPClient) Do(req *http.Request) (*http.Response, error) {
 			lastErr = err
 		} else {
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-			resp.Body.Close() // Close response body before retry
+			_ = resp.Body.Close() // Close response body before retry
 		}
 
 		// Don't retry on last attempt or non-retryable errors

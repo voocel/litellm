@@ -233,6 +233,17 @@ func WithProviderConfig(name string, config ProviderConfig) ClientOption {
 
 // Chat performs a completion request
 func (c *Client) Chat(ctx context.Context, req *Request) (*Response, error) {
+	// Basic input validation
+	if req == nil {
+		return nil, NewError(ErrorTypeValidation, "request cannot be nil")
+	}
+	if req.Model == "" {
+		return nil, NewError(ErrorTypeValidation, "model cannot be empty")
+	}
+	if len(req.Messages) == 0 {
+		return nil, NewError(ErrorTypeValidation, "messages cannot be empty")
+	}
+
 	provider, err := c.resolveProvider(req.Model)
 	if err != nil {
 		return nil, err
@@ -245,6 +256,17 @@ func (c *Client) Chat(ctx context.Context, req *Request) (*Response, error) {
 
 // Stream performs a streaming completion request
 func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error) {
+	// Basic input validation
+	if req == nil {
+		return nil, NewError(ErrorTypeValidation, "request cannot be nil")
+	}
+	if req.Model == "" {
+		return nil, NewError(ErrorTypeValidation, "model cannot be empty")
+	}
+	if len(req.Messages) == 0 {
+		return nil, NewError(ErrorTypeValidation, "messages cannot be empty")
+	}
+
 	provider, err := c.resolveProvider(req.Model)
 	if err != nil {
 		return nil, err
@@ -404,15 +426,12 @@ func (c *Client) autoDiscoverProviders() error {
 // resolveProvider resolves the provider for a model using the configured router
 func (c *Client) resolveProvider(model string) (Provider, error) {
 	c.mu.RLock()
-	providersLen := len(c.providers)
-	c.mu.RUnlock()
-
-	if providersLen == 0 {
+	if len(c.providers) == 0 {
+		c.mu.RUnlock()
 		return nil, NewError(ErrorTypeValidation, "no providers configured")
 	}
 
-	// Convert providers map to slice for router
-	c.mu.RLock()
+	// Copy providers to slice (lightweight operation)
 	availableProviders := make([]Provider, 0, len(c.providers))
 	for _, provider := range c.providers {
 		availableProviders = append(availableProviders, provider)
