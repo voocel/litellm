@@ -35,24 +35,56 @@ func (p *AnthropicProvider) SupportsModel(model string) bool {
 
 func (p *AnthropicProvider) Models() []ModelInfo {
 	return []ModelInfo{
+		// Latest Claude 4.5 models
 		{
-			ID: "claude-sonnet-4.5", Provider: "anthropic", Name: "Claude Sonnet 4.5", MaxTokens: 200000,
+			ID: "claude-opus-4-5-20250514", Provider: "anthropic", Name: "Claude 4.5 Opus", MaxTokens: 200000,
 			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
 		},
 		{
-			ID: "claude-haiku-4.5", Provider: "anthropic", Name: "Claude Haiku 4.5", MaxTokens: 128000,
+			ID: "claude-sonnet-4-5-20250929", Provider: "anthropic", Name: "Claude 4.5 Sonnet", MaxTokens: 200000,
 			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
 		},
 		{
-			ID: "claude-opus-4.1", Provider: "anthropic", Name: "Claude Opus 4.1", MaxTokens: 200000,
+			ID: "claude-haiku-4-5-20250514", Provider: "anthropic", Name: "Claude 4.5 Haiku", MaxTokens: 200000,
+			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
+		},
+		// Claude 4 models
+		{
+			ID: "claude-opus-4-20250514", Provider: "anthropic", Name: "Claude 4 Opus", MaxTokens: 200000,
 			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
 		},
 		{
-			ID: "claude-sonnet-4", Provider: "anthropic", Name: "Claude Sonnet 4", MaxTokens: 200000,
+			ID: "claude-4-sonnet-20250514", Provider: "anthropic", Name: "Claude 4 Sonnet", MaxTokens: 200000,
+			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
+		},
+		// Claude 3.5 models
+		{
+			ID: "claude-haiku-3-5-20241022", Provider: "anthropic", Name: "Claude 3.5 Haiku", MaxTokens: 200000,
+			Capabilities: []string{"chat", "function_call", "vision"},
+		},
+		// Legacy model IDs for backward compatibility
+		{
+			ID: "claude-opus-4.5", Provider: "anthropic", Name: "Claude 4.5 Opus (legacy)", MaxTokens: 200000,
 			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
 		},
 		{
-			ID: "claude-haiku-3.5", Provider: "anthropic", Name: "Claude Haiku 3.5", MaxTokens: 200000,
+			ID: "claude-sonnet-4.5", Provider: "anthropic", Name: "Claude 4.5 Sonnet (legacy)", MaxTokens: 200000,
+			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
+		},
+		{
+			ID: "claude-haiku-4.5", Provider: "anthropic", Name: "Claude 4.5 Haiku (legacy)", MaxTokens: 200000,
+			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
+		},
+		{
+			ID: "claude-opus-4", Provider: "anthropic", Name: "Claude 4 Opus (legacy)", MaxTokens: 200000,
+			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
+		},
+		{
+			ID: "claude-sonnet-4", Provider: "anthropic", Name: "Claude 4 Sonnet (legacy)", MaxTokens: 200000,
+			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
+		},
+		{
+			ID: "claude-haiku-3.5", Provider: "anthropic", Name: "Claude 3.5 Haiku (legacy)", MaxTokens: 200000,
 			Capabilities: []string{"chat", "function_call", "vision"},
 		},
 	}
@@ -256,6 +288,10 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 					response.Reasoning.Content += "\n\n"
 				}
 				response.Reasoning.Content += content.Thinking
+				// Set summary from signature if available
+				if content.Signature != "" {
+					response.Reasoning.Summary = content.Signature
+				}
 			}
 		case "tool_use":
 			args, _ := json.Marshal(content.Input)
@@ -448,8 +484,8 @@ func (p *AnthropicProvider) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", p.Config().APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01") // Latest stable version
-	// Add beta headers for newer features if needed
-	// req.Header.Set("anthropic-beta", "context-1m-2025-08-07")
+	// Add beta header for extended thinking support
+	req.Header.Set("anthropic-beta", "extended-thinking-2025-01-01")
 }
 
 // addStructuredOutputInstructions adds JSON formatting instructions for structured output
@@ -507,6 +543,15 @@ func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
 				Content:  chunk.Delta.Text,
 				Done:     false,
 				Provider: r.provider,
+			}, nil
+		}
+
+		// Handle thinking block start
+		if chunk.Type == "content_block_start" && chunk.ContentBlock != nil && chunk.ContentBlock.Type == "thinking" {
+			return &StreamChunk{
+				Type:      "reasoning",
+				Provider:  r.provider,
+				Reasoning: &ReasoningChunk{Content: ""},
 			}, nil
 		}
 
