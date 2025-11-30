@@ -36,17 +36,27 @@ func (p *GLMProvider) SupportsModel(model string) bool {
 
 func (p *GLMProvider) Models() []ModelInfo {
 	return []ModelInfo{
+		// GLM-4.6 series (latest generation)
 		{
-			ID: "glm-4.6", Provider: "glm", Name: "GLM-4.6", MaxTokens: 128000,
+			ID: "glm-4.6", Provider: "glm", Name: "GLM-4.6", ContextWindow: 128000, MaxOutputTokens: 0,
 			Capabilities: []string{"chat", "function_call", "code", "reasoning"},
 		},
 		{
-			ID: "glm-4.5", Provider: "glm", Name: "GLM-4.5", MaxTokens: 128000,
+			ID: "glm-4.6-flash", Provider: "glm", Name: "GLM-4.6 Flash", ContextWindow: 128000, MaxOutputTokens: 0,
+			Capabilities: []string{"chat", "function_call", "code"},
+		},
+		// GLM-4.5 series
+		{
+			ID: "glm-4.5", Provider: "glm", Name: "GLM-4.5", ContextWindow: 128000, MaxOutputTokens: 0,
 			Capabilities: []string{"chat", "function_call", "code", "reasoning"},
 		},
 		{
-			ID: "glm-4.5-air", Provider: "glm", Name: "GLM-4.5 Air", MaxTokens: 128000,
-			Capabilities: []string{"chat", "function_call", "code", "reasoning"},
+			ID: "glm-4.5-flash", Provider: "glm", Name: "GLM-4.5 Flash", ContextWindow: 128000, MaxOutputTokens: 0,
+			Capabilities: []string{"chat", "function_call", "code"},
+		},
+		{
+			ID: "glm-4.5-air", Provider: "glm", Name: "GLM-4.5 Air", ContextWindow: 128000, MaxOutputTokens: 0,
+			Capabilities: []string{"chat", "function_call"},
 		},
 	}
 }
@@ -98,7 +108,13 @@ func (p *GLMProvider) Chat(ctx context.Context, req *Request) (*Response, error)
 	}
 
 	// Handle GLM-specific thinking parameter
+	// Supports: Extra["enable_thinking"] = true or Extra["thinking"] = map[string]any{"type": "..."}
 	if req.Extra != nil {
+		// Simple boolean flag
+		if enableThinking, ok := req.Extra["enable_thinking"].(bool); ok && enableThinking {
+			glmReq["thinking"] = map[string]string{"type": "enabled"}
+		}
+		// Detailed thinking configuration
 		if thinking, exists := req.Extra["thinking"]; exists {
 			if thinkingMap, ok := thinking.(map[string]any); ok {
 				if thinkingType, ok := thinkingMap["type"].(string); ok {
@@ -244,8 +260,6 @@ func (p *GLMProvider) Stream(ctx context.Context, req *Request) (StreamReader, e
 	}, nil
 }
 
-
-
 // addJSONSchemaInstructions adds JSON schema formatting instructions
 func (p *GLMProvider) addJSONSchemaInstructions(content string, format *ResponseFormat) string {
 	if format.JSONSchema != nil && format.JSONSchema.Schema != nil {
@@ -264,8 +278,6 @@ type glmMessage struct {
 	ToolCallID       string           `json:"tool_call_id,omitempty"`
 	ReasoningContent string           `json:"reasoning_content,omitempty"`
 }
-
-
 
 type glmResponse struct {
 	ID      string      `json:"id"`

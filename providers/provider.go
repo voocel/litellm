@@ -5,11 +5,12 @@ import (
 )
 
 type ModelInfo struct {
-	ID           string
-	Provider     string
-	Name         string
-	MaxTokens    int
-	Capabilities []string
+	ID              string
+	Provider        string
+	Name            string
+	ContextWindow   int
+	MaxOutputTokens int
+	Capabilities    []string
 }
 
 type Message struct {

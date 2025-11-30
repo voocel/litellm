@@ -41,25 +41,23 @@ func (p *GeminiProvider) SupportsModel(model string) bool {
 
 func (p *GeminiProvider) Models() []ModelInfo {
 	return []ModelInfo{
+		// Gemini 3 series (latest and most powerful)
 		{
-			ID: "gemini-2.5-pro", Provider: "gemini", Name: "Gemini 2.5 Pro", MaxTokens: 2000000,
+			ID: "gemini-3-pro-preview", Provider: "gemini", Name: "Gemini 3 Pro Preview", ContextWindow: 1048576, MaxOutputTokens: 65535,
+			Capabilities: []string{"chat", "vision", "code", "function_call", "thinking"},
+		},
+		// Gemini 2.5 series (advanced thinking models)
+		{
+			ID: "gemini-2.5-pro", Provider: "gemini", Name: "Gemini 2.5 Pro", ContextWindow: 1048576, MaxOutputTokens: 65535,
 			Capabilities: []string{"chat", "vision", "code", "function_call", "thinking"},
 		},
 		{
-			ID: "gemini-2.5-flash", Provider: "gemini", Name: "Gemini 2.5 Flash", MaxTokens: 1000000,
+			ID: "gemini-2.5-flash", Provider: "gemini", Name: "Gemini 2.5 Flash", ContextWindow: 1048576, MaxOutputTokens: 65535,
 			Capabilities: []string{"chat", "vision", "function_call", "thinking"},
 		},
 		{
-			ID: "gemini-2.0-flash", Provider: "gemini", Name: "Gemini 2.0 Flash", MaxTokens: 1000000,
-			Capabilities: []string{"chat", "vision", "function_call", "tool_use"},
-		},
-		{
-			ID: "gemini-2.0-flash-lite", Provider: "gemini", Name: "Gemini 2.0 Flash Lite", MaxTokens: 1000000,
-			Capabilities: []string{"chat", "function_call"},
-		},
-		{
-			ID: "gemini-2.0-pro", Provider: "gemini", Name: "Gemini 2.0 Pro Experimental", MaxTokens: 2000000,
-			Capabilities: []string{"chat", "vision", "code", "function_call", "tool_use"},
+			ID: "gemini-2.5-flash-lite", Provider: "gemini", Name: "Gemini 2.5 Flash-Lite", ContextWindow: 1048576, MaxOutputTokens: 65535,
+			Capabilities: []string{"chat", "vision", "function_call", "thinking"},
 		},
 	}
 }

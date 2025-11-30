@@ -35,56 +35,40 @@ func (p *AnthropicProvider) SupportsModel(model string) bool {
 
 func (p *AnthropicProvider) Models() []ModelInfo {
 	return []ModelInfo{
-		// Latest Claude 4.5 models
+		// Claude 4.5 family (200K context; 1M requires beta header)
 		{
-			ID: "claude-opus-4-5-20250514", Provider: "anthropic", Name: "Claude 4.5 Opus", MaxTokens: 200000,
+			ID: "claude-opus-4-5-20251101", Provider: "anthropic", Name: "Claude 4.5 Opus", ContextWindow: 200000, MaxOutputTokens: 32000,
+			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"}},
+		{
+			ID: "claude-sonnet-4-5-20250929", Provider: "anthropic", Name: "Claude 4.5 Sonnet", ContextWindow: 200000, MaxOutputTokens: 64000,
 			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
 		},
 		{
-			ID: "claude-sonnet-4-5-20250929", Provider: "anthropic", Name: "Claude 4.5 Sonnet", MaxTokens: 200000,
+			ID: "claude-haiku-4-5-20251001", Provider: "anthropic", Name: "Claude 4.5 Haiku", ContextWindow: 200000, MaxOutputTokens: 64000,
+			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
+		},
+
+		// Claude 4.1/4 family (200K context; 1M requires beta header)
+		{
+			ID: "claude-opus-4-1-20250805", Provider: "anthropic", Name: "Claude 4.1 Opus", ContextWindow: 200000, MaxOutputTokens: 32000,
 			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
 		},
 		{
-			ID: "claude-haiku-4-5-20250514", Provider: "anthropic", Name: "Claude 4.5 Haiku", MaxTokens: 200000,
-			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
-		},
-		// Claude 4 models
-		{
-			ID: "claude-opus-4-20250514", Provider: "anthropic", Name: "Claude 4 Opus", MaxTokens: 200000,
+			ID: "claude-opus-4-20250522", Provider: "anthropic", Name: "Claude 4 Opus", ContextWindow: 200000, MaxOutputTokens: 32000,
 			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
 		},
 		{
-			ID: "claude-4-sonnet-20250514", Provider: "anthropic", Name: "Claude 4 Sonnet", MaxTokens: 200000,
+			ID: "claude-sonnet-4-20250522", Provider: "anthropic", Name: "Claude 4 Sonnet", ContextWindow: 200000, MaxOutputTokens: 64000,
 			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
 		},
-		// Claude 3.5 models
+
+		// Claude 3.7 / 3.5 family (200K context per docs)
 		{
-			ID: "claude-haiku-3-5-20241022", Provider: "anthropic", Name: "Claude 3.5 Haiku", MaxTokens: 200000,
+			ID: "claude-sonnet-3-7-20250219", Provider: "anthropic", Name: "Claude 3.7 Sonnet", ContextWindow: 200000, MaxOutputTokens: 16000,
 			Capabilities: []string{"chat", "function_call", "vision"},
 		},
-		// Legacy model IDs for backward compatibility
 		{
-			ID: "claude-opus-4.5", Provider: "anthropic", Name: "Claude 4.5 Opus (legacy)", MaxTokens: 200000,
-			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
-		},
-		{
-			ID: "claude-sonnet-4.5", Provider: "anthropic", Name: "Claude 4.5 Sonnet (legacy)", MaxTokens: 200000,
-			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
-		},
-		{
-			ID: "claude-haiku-4.5", Provider: "anthropic", Name: "Claude 4.5 Haiku (legacy)", MaxTokens: 200000,
-			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
-		},
-		{
-			ID: "claude-opus-4", Provider: "anthropic", Name: "Claude 4 Opus (legacy)", MaxTokens: 200000,
-			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
-		},
-		{
-			ID: "claude-sonnet-4", Provider: "anthropic", Name: "Claude 4 Sonnet (legacy)", MaxTokens: 200000,
-			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
-		},
-		{
-			ID: "claude-haiku-3.5", Provider: "anthropic", Name: "Claude 3.5 Haiku (legacy)", MaxTokens: 200000,
+			ID: "claude-haiku-3-5-20241022", Provider: "anthropic", Name: "Claude 3.5 Haiku", ContextWindow: 200000, MaxOutputTokens: 8000,
 			Capabilities: []string{"chat", "function_call", "vision"},
 		},
 	}
@@ -484,8 +468,8 @@ func (p *AnthropicProvider) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", p.Config().APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01") // Latest stable version
-	// Add beta header for extended thinking support
-	req.Header.Set("anthropic-beta", "extended-thinking-2025-01-01")
+	// Add beta headers for prompt caching and extended thinking support
+	req.Header.Set("anthropic-beta", "prompt-caching-2024-07-31,extended-thinking-2025-01-01")
 }
 
 // addStructuredOutputInstructions adds JSON formatting instructions for structured output

@@ -37,23 +37,23 @@ func (p *QwenProvider) SupportsModel(model string) bool {
 func (p *QwenProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		{
-			ID: "qwen3-coder-plus", Provider: "qwen", Name: "Qwen Turbo", MaxTokens: 1000000,
+			ID: "qwen3-coder-plus", Provider: "qwen", Name: "Qwen Turbo", ContextWindow: 1000000,
 			Capabilities: []string{"chat", "function_call", "reasoning"},
 		},
 		{
-			ID: "qwen3-coder-flash", Provider: "qwen", Name: "Qwen Turbo", MaxTokens: 1000000,
+			ID: "qwen3-coder-flash", Provider: "qwen", Name: "Qwen Turbo", ContextWindow: 1000000,
 			Capabilities: []string{"chat", "function_call", "reasoning"},
 		},
 		{
-			ID: "qwen-plus", Provider: "qwen", Name: "Qwen Plus", MaxTokens: 32768,
+			ID: "qwen-plus", Provider: "qwen", Name: "Qwen Plus", ContextWindow: 32768,
 			Capabilities: []string{"chat", "function_call", "reasoning"},
 		},
 		{
-			ID: "qwen-max", Provider: "qwen", Name: "Qwen Max", MaxTokens: 8192,
+			ID: "qwen-max", Provider: "qwen", Name: "Qwen Max", ContextWindow: 8192,
 			Capabilities: []string{"chat", "function_call", "reasoning"},
 		},
 		{
-			ID: "qwen-max-longcontext", Provider: "qwen", Name: "Qwen Max Long Context", MaxTokens: 1000000,
+			ID: "qwen-max-longcontext", Provider: "qwen", Name: "Qwen Max Long Context", ContextWindow: 1000000,
 			Capabilities: []string{"chat", "function_call", "reasoning"},
 		},
 	}
@@ -272,7 +272,6 @@ type qwenMessage struct {
 	ToolCallID       string           `json:"tool_call_id,omitempty"`
 	ReasoningContent string           `json:"reasoning_content,omitempty"`
 }
-
 
 type qwenResponse struct {
 	Output    *qwenOutput `json:"output,omitempty"`

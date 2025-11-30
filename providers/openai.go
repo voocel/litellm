@@ -36,48 +36,65 @@ func (p *OpenAIProvider) SupportsModel(model string) bool {
 
 func (p *OpenAIProvider) Models() []ModelInfo {
 	return []ModelInfo{
+		// GPT-5.1 family (flagship)
 		{
-			ID: "gpt-5", Provider: "openai", Name: "GPT-5", MaxTokens: 128000,
+			ID: "gpt-5.1", Provider: "openai", Name: "GPT-5.1", ContextWindow: 400000, MaxOutputTokens: 128000,
+			Capabilities: []string{"chat", "function_call", "vision", "code", "reasoning"},
+		},
+		{
+			ID: "gpt-5.1-mini", Provider: "openai", Name: "GPT-5.1 Mini", ContextWindow: 400000, MaxOutputTokens: 64000,
+			Capabilities: []string{"chat", "function_call", "vision", "code", "reasoning"},
+		},
+
+		// GPT-5 family (prior generation)
+		{
+			ID: "gpt-5", Provider: "openai", Name: "GPT-5", ContextWindow: 400000, MaxOutputTokens: 128000,
+			Capabilities: []string{"chat", "function_call", "vision", "code", "reasoning"},
+		},
+		{
+			ID: "gpt-5-mini", Provider: "openai", Name: "GPT-5 Mini", ContextWindow: 400000, MaxOutputTokens: 64000,
+			Capabilities: []string{"chat", "function_call", "vision", "code", "reasoning"},
+		},
+		{
+			ID: "gpt-5-nano", Provider: "openai", Name: "GPT-5 Nano", ContextWindow: 400000, MaxOutputTokens: 32000,
+			Capabilities: []string{"chat", "function_call", "vision", "code"},
+		},
+
+		// GPT-4.1 family (~1M context, ~32K max output)
+		{
+			ID: "gpt-4.1", Provider: "openai", Name: "GPT-4.1", ContextWindow: 1000000, MaxOutputTokens: 32768,
 			Capabilities: []string{"chat", "function_call", "vision", "code"},
 		},
 		{
-			ID: "gpt-5-mini", Provider: "openai", Name: "GPT-5-Mini", MaxTokens: 128000,
+			ID: "gpt-4.1-mini", Provider: "openai", Name: "GPT-4.1 Mini", ContextWindow: 1000000, MaxOutputTokens: 32768,
 			Capabilities: []string{"chat", "function_call", "vision", "code"},
 		},
 		{
-			ID: "gpt-5-nano", Provider: "openai", Name: "GPT-5-Nano", MaxTokens: 128000,
-			Capabilities: []string{"chat", "function_call", "vision", "code"},
+			ID: "gpt-4.1-nano", Provider: "openai", Name: "GPT-4.1 Nano", ContextWindow: 1000000, MaxOutputTokens: 32768,
+			Capabilities: []string{"chat", "function_call", "code"},
 		},
+
+		// GPT-4o family (128K context, 16K max output)
 		{
-			ID: "gpt-4o", Provider: "openai", Name: "GPT-4o", MaxTokens: 128000,
+			ID: "gpt-4o", Provider: "openai", Name: "GPT-4o", ContextWindow: 128000, MaxOutputTokens: 16384,
 			Capabilities: []string{"chat", "function_call", "vision"},
 		},
 		{
-			ID: "gpt-4o-mini", Provider: "openai", Name: "GPT-4o Mini", MaxTokens: 128000,
+			ID: "gpt-4o-mini", Provider: "openai", Name: "GPT-4o Mini", ContextWindow: 128000, MaxOutputTokens: 16384,
 			Capabilities: []string{"chat", "function_call", "vision"},
 		},
+
+		// o-series reasoning（200K context, 100K max output）
 		{
-			ID: "gpt-4.1", Provider: "openai", Name: "GPT-4.1", MaxTokens: 128000,
-			Capabilities: []string{"chat", "function_call", "vision"},
-		},
-		{
-			ID: "gpt-4.1-mini", Provider: "openai", Name: "GPT-4.1 Mini", MaxTokens: 16385,
-			Capabilities: []string{"chat", "function_call"},
-		},
-		{
-			ID: "gpt-4.1-nano", Provider: "openai", Name: "GPT-4.1 Nano", MaxTokens: 16385,
-			Capabilities: []string{"chat", "function_call"},
-		},
-		{
-			ID: "o3", Provider: "openai", Name: "OpenAI o3", MaxTokens: 100000,
+			ID: "o3-pro", Provider: "openai", Name: "OpenAI o3 Pro", ContextWindow: 200000, MaxOutputTokens: 100000,
 			Capabilities: []string{"chat", "reasoning"},
 		},
 		{
-			ID: "o3-mini", Provider: "openai", Name: "OpenAI o3 Mini", MaxTokens: 65536,
+			ID: "o3", Provider: "openai", Name: "OpenAI o3", ContextWindow: 200000, MaxOutputTokens: 100000,
 			Capabilities: []string{"chat", "reasoning"},
 		},
 		{
-			ID: "o4-mini", Provider: "openai", Name: "OpenAI o4 Mini", MaxTokens: 100000,
+			ID: "o3-mini", Provider: "openai", Name: "OpenAI o3 Mini", ContextWindow: 200000, MaxOutputTokens: 100000,
 			Capabilities: []string{"chat", "reasoning"},
 		},
 	}

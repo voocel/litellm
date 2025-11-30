@@ -36,16 +36,12 @@ func (p *DeepSeekProvider) SupportsModel(model string) bool {
 func (p *DeepSeekProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		{
-			ID: "deepseek-chat", Provider: "deepseek", Name: "DeepSeek Chat V3.2", MaxTokens: 128000,
-			Capabilities: []string{"chat", "function_call", "tool_use"},
+			ID: "deepseek-chat", Provider: "deepseek", Name: "DeepSeek Chat (V3.2-Exp Non-Thinking)", ContextWindow: 128000, MaxOutputTokens: 8000,
+			Capabilities: []string{"chat", "function_call", "json_output"},
 		},
 		{
-			ID: "deepseek-reasoner", Provider: "deepseek", Name: "DeepSeek Reasoner V3.2", MaxTokens: 128000,
-			Capabilities: []string{"chat", "reasoning", "function_call", "tool_use"},
-		},
-		{
-			ID: "deepseek-coder", Provider: "deepseek", Name: "DeepSeek Coder", MaxTokens: 64000,
-			Capabilities: []string{"chat", "code", "function_call"},
+			ID: "deepseek-reasoner", Provider: "deepseek", Name: "DeepSeek Reasoner (V3.2-Exp Thinking)", ContextWindow: 128000, MaxOutputTokens: 64000,
+			Capabilities: []string{"chat", "reasoning", "json_output"},
 		},
 	}
 }
@@ -60,9 +56,13 @@ func (p *DeepSeekProvider) Chat(ctx context.Context, req *Request) (*Response, e
 		return nil, err
 	}
 
+	// Note: If deepseek-reasoner is used with tools, DeepSeek API will automatically
+	// switch to deepseek-chat model. This is expected behavior per official docs.
+	modelToUse := req.Model
+
 	// Build DeepSeek request (OpenAI compatible)
 	deepseekReq := map[string]any{
-		"model":    req.Model,
+		"model":    modelToUse,
 		"messages": ConvertMessages(req.Messages),
 	}
 

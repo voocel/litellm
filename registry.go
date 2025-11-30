@@ -103,11 +103,12 @@ func (a *providerAdapter) Models() []ModelInfo {
 			capabilities[j] = ModelCapability(cap)
 		}
 		models[i] = ModelInfo{
-			ID:           m.ID,
-			Provider:     m.Provider,
-			Name:         m.Name,
-			MaxTokens:    m.MaxTokens,
-			Capabilities: capabilities,
+			ID:              m.ID,
+			Provider:        m.Provider,
+			Name:            m.Name,
+			ContextWindow:   m.ContextWindow,
+			MaxOutputTokens: m.MaxOutputTokens,
+			Capabilities:    capabilities,
 		}
 	}
 	return models

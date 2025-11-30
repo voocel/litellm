@@ -198,11 +198,12 @@ type StreamReader interface {
 
 // ModelInfo contains information about a model
 type ModelInfo struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	Provider     string            `json:"provider"`
-	MaxTokens    int               `json:"max_tokens"`
-	Capabilities []ModelCapability `json:"capabilities"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Provider        string            `json:"provider"`
+	ContextWindow   int               `json:"context_window,omitempty"`
+	MaxOutputTokens int               `json:"max_output_tokens,omitempty"`
+	Capabilities    []ModelCapability `json:"capabilities"`
 }
 
 // ModelCapability represents what a model can do

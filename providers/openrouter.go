@@ -34,31 +34,31 @@ func (p *OpenRouterProvider) SupportsModel(model string) bool {
 func (p *OpenRouterProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		{
-			ID: "openai/gpt-4o", Provider: "openrouter", Name: "GPT-4o via OpenRouter", MaxTokens: 128000,
+			ID: "openai/gpt-4o", Provider: "openrouter", Name: "GPT-4o via OpenRouter", ContextWindow: 128000,
 			Capabilities: []string{"chat", "vision", "function_call", "tool_use"},
 		},
 		{
-			ID: "openai/gpt-4o-mini", Provider: "openrouter", Name: "GPT-4o Mini via OpenRouter", MaxTokens: 128000,
+			ID: "openai/gpt-4o-mini", Provider: "openrouter", Name: "GPT-4o Mini via OpenRouter", ContextWindow: 128000,
 			Capabilities: []string{"chat", "vision", "function_call", "tool_use"},
 		},
 		{
-			ID: "anthropic/claude-3.7-sonnet", Provider: "openrouter", Name: "Claude 3.7 Sonnet via OpenRouter", MaxTokens: 200000,
+			ID: "anthropic/claude-3.7-sonnet", Provider: "openrouter", Name: "Claude 3.7 Sonnet via OpenRouter", ContextWindow: 200000,
 			Capabilities: []string{"chat", "vision", "function_call", "tool_use"},
 		},
 		{
-			ID: "google/gemini-2.0-flash-exp", Provider: "openrouter", Name: "Gemini 2.0 Flash via OpenRouter", MaxTokens: 1000000,
+			ID: "google/gemini-2.0-flash-exp", Provider: "openrouter", Name: "Gemini 2.0 Flash via OpenRouter", ContextWindow: 1000000,
 			Capabilities: []string{"chat", "vision", "function_call", "tool_use"},
 		},
 		{
-			ID: "meta-llama/llama-3.3-70b-instruct", Provider: "openrouter", Name: "Llama 3.3 70B via OpenRouter", MaxTokens: 131072,
+			ID: "meta-llama/llama-3.3-70b-instruct", Provider: "openrouter", Name: "Llama 3.3 70B via OpenRouter", ContextWindow: 131072,
 			Capabilities: []string{"chat", "function_call", "tool_use"},
 		},
 		{
-			ID: "deepseek/deepseek-chat", Provider: "openrouter", Name: "DeepSeek Chat via OpenRouter", MaxTokens: 64000,
+			ID: "deepseek/deepseek-chat", Provider: "openrouter", Name: "DeepSeek Chat via OpenRouter", ContextWindow: 64000,
 			Capabilities: []string{"chat", "function_call", "tool_use"},
 		},
 		{
-			ID: "qwen/qwen-2.5-72b-instruct", Provider: "openrouter", Name: "Qwen 2.5 72B via OpenRouter", MaxTokens: 32768,
+			ID: "qwen/qwen-2.5-72b-instruct", Provider: "openrouter", Name: "Qwen 2.5 72B via OpenRouter", ContextWindow: 32768,
 			Capabilities: []string{"chat", "function_call", "tool_use"},
 		},
 	}
