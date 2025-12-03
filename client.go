@@ -477,15 +477,44 @@ func getEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
+var (
+	// defaultClient is the singleton client used by Quick functions
+	defaultClient     *Client
+	defaultClientOnce sync.Once
+	defaultClientErr  error
+)
+
+// getDefaultClient returns the singleton default client, creating it if necessary
+func getDefaultClient() (*Client, error) {
+	defaultClientOnce.Do(func() {
+		defaultClient, defaultClientErr = New()
+	})
+	return defaultClient, defaultClientErr
+}
+
+// ResetDefaultClient resets the default client singleton
+// This is useful for testing or when environment variables change
+func ResetDefaultClient() {
+	defaultClientOnce = sync.Once{}
+	defaultClient = nil
+	defaultClientErr = nil
+}
+
 // Quick performs a quick completion with minimal configuration
-// It creates a new client with auto-discovery and makes a simple completion request
-// with a default timeout of 30 seconds
+// It uses a singleton client with auto-discovery and makes a simple completion request
+// with a default timeout of 30 seconds.
+//
+// The client is created once on first call and reused for subsequent calls,
+// providing better performance through connection pooling.
 func Quick(model, message string) (*Response, error) {
 	return QuickWithTimeout(model, message, 30*time.Second)
 }
 
 // QuickWithTimeout performs a quick completion with a custom timeout
-// It creates a new client with auto-discovery and makes a simple completion request
+// It uses a singleton client with auto-discovery and makes a simple completion request.
+//
+// The client is created once on first call and reused for subsequent calls,
+// providing better performance through connection pooling.
 func QuickWithTimeout(model, message string, timeout time.Duration) (*Response, error) {
 	if model == "" {
 		return nil, fmt.Errorf("litellm.Quick: model parameter cannot be empty")
@@ -497,8 +526,8 @@ func QuickWithTimeout(model, message string, timeout time.Duration) (*Response, 
 		return nil, fmt.Errorf("litellm.Quick: timeout must be positive, got %v", timeout)
 	}
 
-	// Create client with auto-discovery
-	client, err := New()
+	// Get or create singleton client with auto-discovery
+	client, err := getDefaultClient()
 	if err != nil {
 		return nil, fmt.Errorf("litellm.Quick: failed to initialize client (check API keys in environment): %w", err)
 	}
