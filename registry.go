@@ -32,7 +32,6 @@ func createProvider(name string, config ProviderConfig) (Provider, error) {
 
 	resilientClient := NewResilientHTTPClient(resilienceConfig)
 
-	// Fall back to built-in providers
 	providerConfig := providers.ProviderConfig{
 		APIKey:  config.APIKey,
 		BaseURL: config.BaseURL,
@@ -49,32 +48,13 @@ func createProvider(name string, config ProviderConfig) (Provider, error) {
 		HTTPClient: resilientClient,
 	}
 
-	// Create provider directly based on name
-	switch name {
-	case "openai":
-		p := providers.NewOpenAI(providerConfig)
+	// Check builtin providers from registry
+	if factory, ok := providers.GetBuiltin(name); ok {
+		p := factory(providerConfig)
 		return &providerAdapter{p}, nil
-	case "anthropic":
-		p := providers.NewAnthropic(providerConfig)
-		return &providerAdapter{p}, nil
-	case "gemini":
-		p := providers.NewGemini(providerConfig)
-		return &providerAdapter{p}, nil
-	case "deepseek":
-		p := providers.NewDeepSeek(providerConfig)
-		return &providerAdapter{p}, nil
-	case "glm":
-		p := providers.NewGLM(providerConfig)
-		return &providerAdapter{p}, nil
-	case "openrouter":
-		p := providers.NewOpenRouter(providerConfig)
-		return &providerAdapter{p}, nil
-	case "qwen":
-		p := providers.NewQwen(providerConfig)
-		return &providerAdapter{p}, nil
-	default:
-		return nil, fmt.Errorf("unknown provider: %s", name)
 	}
+
+	return nil, fmt.Errorf("unknown provider: %s", name)
 }
 
 // providerAdapter adapts providers.Provider to main package Provider interface
@@ -366,13 +346,12 @@ func RegisterProvider(name string, factory ProviderFactory) error {
 
 // ListRegisteredProviders returns all registered provider names
 func ListRegisteredProviders() []string {
-	providerMutex.RLock()
-	defer providerMutex.RUnlock()
-
-	// Built-in providers
-	builtIn := []string{"openai", "anthropic", "gemini", "deepseek", "glm", "openrouter", "qwen"}
+	// Get builtin providers from registry
+	builtIn := providers.ListBuiltins()
 
 	// Add custom providers
+	providerMutex.RLock()
+	defer providerMutex.RUnlock()
 	for name := range customProviders {
 		builtIn = append(builtIn, name)
 	}
@@ -382,9 +361,7 @@ func ListRegisteredProviders() []string {
 
 // IsProviderRegistered checks if a provider is registered (built-in or custom)
 func IsProviderRegistered(name string) bool {
-	// Check built-in providers
-	builtIn := []string{"openai", "anthropic", "gemini", "deepseek", "glm", "openrouter", "qwen"}
-	if slices.Contains(builtIn, name) {
+	if providers.IsBuiltinRegistered(name) {
 		return true
 	}
 

@@ -233,7 +233,6 @@ func WithProviderConfig(name string, config ProviderConfig) ClientOption {
 
 // Chat performs a completion request
 func (c *Client) Chat(ctx context.Context, req *Request) (*Response, error) {
-	// Basic input validation
 	if req == nil {
 		return nil, NewError(ErrorTypeValidation, "request cannot be nil")
 	}
@@ -256,7 +255,6 @@ func (c *Client) Chat(ctx context.Context, req *Request) (*Response, error) {
 
 // Stream performs a streaming completion request
 func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error) {
-	// Basic input validation
 	if req == nil {
 		return nil, NewError(ErrorTypeValidation, "request cannot be nil")
 	}
@@ -431,7 +429,6 @@ func (c *Client) resolveProvider(model string) (Provider, error) {
 		return nil, NewError(ErrorTypeValidation, "no providers configured")
 	}
 
-	// Copy providers to slice (lightweight operation)
 	availableProviders := make([]Provider, 0, len(c.providers))
 	for _, provider := range c.providers {
 		availableProviders = append(availableProviders, provider)

@@ -11,6 +11,12 @@ import (
 	"strings"
 )
 
+func init() {
+	RegisterBuiltin("openrouter", func(cfg ProviderConfig) Provider {
+		return NewOpenRouter(cfg)
+	}, "https://openrouter.ai/api/v1")
+}
+
 // OpenRouterProvider implements OpenRouter API integration
 type OpenRouterProvider struct {
 	*BaseProvider

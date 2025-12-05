@@ -13,6 +13,12 @@ import (
 	"time"
 )
 
+func init() {
+	RegisterBuiltin("gemini", func(cfg ProviderConfig) Provider {
+		return NewGemini(cfg)
+	}, "https://generativelanguage.googleapis.com")
+}
+
 // GeminiProvider implements Google Gemini API integration
 type GeminiProvider struct {
 	*BaseProvider

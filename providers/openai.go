@@ -11,6 +11,12 @@ import (
 	"strings"
 )
 
+func init() {
+	RegisterBuiltin("openai", func(cfg ProviderConfig) Provider {
+		return NewOpenAI(cfg)
+	}, "https://api.openai.com")
+}
+
 // OpenAIProvider implements OpenAI API integration
 type OpenAIProvider struct {
 	*BaseProvider

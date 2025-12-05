@@ -11,6 +11,12 @@ import (
 	"strings"
 )
 
+func init() {
+	RegisterBuiltin("glm", func(cfg ProviderConfig) Provider {
+		return NewGLM(cfg)
+	}, "https://open.bigmodel.cn/api/paas/v4")
+}
+
 // GLMProvider implements GLM/ZhiPu AI API integration
 type GLMProvider struct {
 	*BaseProvider
@@ -107,14 +113,11 @@ func (p *GLMProvider) Chat(ctx context.Context, req *Request) (*Response, error)
 		}
 	}
 
-	// Handle GLM-specific thinking parameter
-	// Supports: Extra["enable_thinking"] = true or Extra["thinking"] = map[string]any{"type": "..."}
+	// Handle GLM thinking parameter
 	if req.Extra != nil {
-		// Simple boolean flag
 		if enableThinking, ok := req.Extra["enable_thinking"].(bool); ok && enableThinking {
 			glmReq["thinking"] = map[string]string{"type": "enabled"}
 		}
-		// Detailed thinking configuration
 		if thinking, exists := req.Extra["thinking"]; exists {
 			if thinkingMap, ok := thinking.(map[string]any); ok {
 				if thinkingType, ok := thinkingMap["type"].(string); ok {

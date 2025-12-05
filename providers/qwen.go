@@ -11,6 +11,12 @@ import (
 	"strings"
 )
 
+func init() {
+	RegisterBuiltin("qwen", func(cfg ProviderConfig) Provider {
+		return NewQwen(cfg)
+	}, "https://dashscope.aliyuncs.com/api/v1")
+}
+
 // QwenProvider implements Qwen/DashScope API integration
 type QwenProvider struct {
 	*BaseProvider

@@ -11,6 +11,12 @@ import (
 	"strings"
 )
 
+func init() {
+	RegisterBuiltin("deepseek", func(cfg ProviderConfig) Provider {
+		return NewDeepSeek(cfg)
+	}, "https://api.deepseek.com")
+}
+
 // DeepSeekProvider implements DeepSeek API integration
 type DeepSeekProvider struct {
 	*BaseProvider
@@ -56,13 +62,9 @@ func (p *DeepSeekProvider) Chat(ctx context.Context, req *Request) (*Response, e
 		return nil, err
 	}
 
-	// Note: If deepseek-reasoner is used with tools, DeepSeek API will automatically
-	// switch to deepseek-chat model. This is expected behavior per official docs.
-	modelToUse := req.Model
-
 	// Build DeepSeek request (OpenAI compatible)
 	deepseekReq := map[string]any{
-		"model":    modelToUse,
+		"model":    req.Model,
 		"messages": ConvertMessages(req.Messages),
 	}
 

@@ -135,22 +135,5 @@ func (p *BaseProvider) ValidateRequest(req *Request) error {
 }
 
 func getDefaultBaseURL(provider string) string {
-	switch provider {
-	case "openai":
-		return "https://api.openai.com"
-	case "anthropic":
-		return "https://api.anthropic.com"
-	case "gemini":
-		return "https://generativelanguage.googleapis.com"
-	case "deepseek":
-		return "https://api.deepseek.com"
-	case "openrouter":
-		return "https://openrouter.ai/api/v1"
-	case "qwen":
-		return "https://dashscope.aliyuncs.com/api/v1"
-	case "glm":
-		return "https://open.bigmodel.cn/api/paas/v4"
-	default:
-		return ""
-	}
+	return GetDefaultURL(provider)
 }

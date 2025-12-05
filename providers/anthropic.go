@@ -11,6 +11,12 @@ import (
 	"strings"
 )
 
+func init() {
+	RegisterBuiltin("anthropic", func(cfg ProviderConfig) Provider {
+		return NewAnthropic(cfg)
+	}, "https://api.anthropic.com")
+}
+
 // AnthropicProvider implements Anthropic Claude API integration
 type AnthropicProvider struct {
 	*BaseProvider
