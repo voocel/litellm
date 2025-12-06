@@ -201,6 +201,7 @@ func (r *SmartRouter) inferProviderFromModel(model string, providers []Provider)
 		"anthropic": {"claude"},
 		"gemini":    {"gemini", "bard"},
 		"deepseek":  {"deepseek"},
+		"bedrock":   {"anthropic.", "amazon.", "meta.", "mistral.", "cohere.", "ai21."},
 	}
 
 	for _, provider := range providers {

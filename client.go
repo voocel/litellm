@@ -213,6 +213,27 @@ func WithGLM(apiKey string, baseURL ...string) ClientOption {
 	}
 }
 
+// WithBedrock adds AWS Bedrock provider with custom configuration
+// accessKeyID and secretAccessKey are AWS credentials
+// regions is optional (defaults to "us-east-1")
+func WithBedrock(accessKeyID, secretAccessKey string, region ...string) ClientOption {
+	return func(c *Client) error {
+		r := "us-east-1"
+		if len(region) > 0 && region[0] != "" {
+			r = region[0]
+		}
+		config := ProviderConfig{
+			Resilience: c.defaults.Resilience,
+			Extra: map[string]any{
+				"access_key_id":     accessKeyID,
+				"secret_access_key": secretAccessKey,
+				"region":            r,
+			},
+		}
+		return c.addProviderFromConfig("bedrock", config)
+	}
+}
+
 // WithProvider adds a custom provider
 func WithProvider(name string, provider Provider) ClientOption {
 	return func(c *Client) error {
@@ -406,6 +427,25 @@ func (c *Client) autoDiscoverProviders() error {
 		}
 		if err := c.addProviderFromConfig("glm", config); err != nil {
 			errs = append(errs, err)
+		}
+	}
+
+	// Auto-discover AWS Bedrock
+	if accessKeyID := os.Getenv("AWS_ACCESS_KEY_ID"); accessKeyID != "" {
+		if secretAccessKey := os.Getenv("AWS_SECRET_ACCESS_KEY"); secretAccessKey != "" {
+			region := getEnvOrDefault("AWS_REGION", "us-east-1")
+			config := ProviderConfig{
+				Resilience: c.defaults.Resilience,
+				Extra: map[string]any{
+					"access_key_id":     accessKeyID,
+					"secret_access_key": secretAccessKey,
+					"region":            region,
+					"session_token":     os.Getenv("AWS_SESSION_TOKEN"),
+				},
+			}
+			if err := c.addProviderFromConfig("bedrock", config); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 
