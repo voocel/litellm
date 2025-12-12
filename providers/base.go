@@ -35,7 +35,7 @@ type ResilienceConfig struct {
 // DefaultResilienceConfig returns default resilience configuration for providers
 func DefaultResilienceConfig() ResilienceConfig {
 	return ResilienceConfig{
-		MaxRetries:     3,
+		MaxRetries:     0,
 		InitialDelay:   1 * time.Second,
 		MaxDelay:       30 * time.Second,
 		Multiplier:     2.0,

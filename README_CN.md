@@ -1,33 +1,10 @@
-# LiteLLM - Go 多平台 LLM API 客户端
-
-**LiteLLM** - 让 LLM API 调用变得简单优雅
+# LiteLLM（Go）— 多平台 LLM API 客户端
 
 [English](README.md) | 中文
 
-一个简洁优雅的 Go 语言库，用于统一访问多个 LLM 平台。
+LiteLLM 是一个小巧的 Go 客户端，用统一 API 访问多个 LLM 平台。
 
-## 核心设计理念
-
-- **单一入口** - 只有 `litellm.New()` - 消除多API选择困扰  
-- **智能解析** - 模型自动解析到正确提供者 (gpt-4o → OpenAI, claude → Anthropic)
-- **类型安全配置** - `WithOpenAI()`, `WithAnthropic()` 代替易出错的字符串配置
-- **零配置启动** - 环境变量即可立即使用
-- **提供者无关** - 相同代码适用于所有AI提供者
-
-## 特性
-
-- **简洁易用** - 一行代码调用任意 LLM 平台
-- **统一接口** - 所有平台使用相同的请求/响应格式
-- **网络弹性** - 可选的指数退避重试机制和智能抖动
-- **结构化输出** - JSON Schema 验证，跨平台支持
-- **推理支持** - 完整支持 OpenAI o 系列推理模型
-- **工具调用** - 完整的 Function Calling 支持
-- **流式处理** - 实时流式响应
-- **零配置** - 环境变量自动发现
-- **易扩展** - 轻松添加新的 LLM 平台
-- **类型安全** - 强类型定义和完善的错误处理
-
-## 快速开始
+## 快速上手
 
 ### 安装
 
@@ -35,615 +12,238 @@
 go get github.com/voocel/litellm
 ```
 
-### 一行代码使用
+### 1) 设置一个 API Key
+
+```bash
+export OPENAI_API_KEY="your-key"
+```
+
+### 2) 一行代码调用
 
 ```go
 package main
 
 import (
-    "fmt"
-    "github.com/voocel/litellm"
+	"fmt"
+	"log"
+
+	"github.com/voocel/litellm"
 )
 
 func main() {
-    // 设置环境变量: export OPENAI_API_KEY="your-key"
-    response, err := litellm.Quick("gpt-4o-mini", "你好，LiteLLM！")
-    if err != nil {
-        panic(err)
-    }
-    fmt.Println(response.Content)
+	resp, err := litellm.Quick("gpt-4o-mini", "你好，LiteLLM！")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(resp.Content)
 }
 ```
 
-### 完整配置
+### 3) 创建 Client（推荐在项目中使用）
 
 ```go
 package main
 
 import (
-    "context"
-    "fmt"
-    "github.com/voocel/litellm"
+	"context"
+	"log"
+	"os"
+
+	"github.com/voocel/litellm"
 )
 
 func main() {
-    // 方式1: 环境变量自动发现
-    client, err := litellm.New()
-    if err != nil {
-        panic(err)
-    }
+	client, err := litellm.New(
+		litellm.WithOpenAI(os.Getenv("OPENAI_API_KEY")),
+		litellm.WithDefaults(1024, 0.7),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-    // 方式2: 类型安全手动配置 (生产环境推荐)
-    client, err = litellm.New(
-        litellm.WithOpenAI("your-openai-key"),
-        litellm.WithAnthropic("your-anthropic-key"),
-        litellm.WithGemini("your-gemini-key"),
-        litellm.WithQwen("your-dashscope-key"),
-        litellm.WithGLM("your-glm-key"),
-        litellm.WithOpenRouter("your-openrouter-key"),
-        litellm.WithDefaults(2048, 0.8), // 自定义默认参数
-    )
-    if err != nil {
-        panic(err)
-    }
-
-    // 基础聊天
-    response, err := client.Chat(context.Background(), &litellm.Request{
-        Model: "gpt-4o-mini", // 自动解析到 OpenAI 提供者
-        Messages: []litellm.Message{
-            {Role: "user", Content: "解释什么是人工智能"},
-        },
-        MaxTokens:   litellm.IntPtr(200),
-        Temperature: litellm.Float64Ptr(0.7),
-    })
-
-    if err != nil {
-        panic(err)
-    }
-
-    fmt.Printf("回答: %s\n", response.Content)
-    fmt.Printf("Tokens: %d (输入: %d, 输出: %d)\n",
-        response.Usage.TotalTokens,
-        response.Usage.PromptTokens,
-        response.Usage.CompletionTokens)
+	_, _ = client.Chat(context.Background(), &litellm.Request{
+		Model: "gpt-4o-mini",
+		Messages: []litellm.Message{
+			{Role: "user", Content: "用一句话解释 AI。"},
+		},
+	})
 }
 ```
 
-## 结构化输出
+> 说明
+> - `providers` 子包是内部实现细节，使用者只需要引入 `github.com/voocel/litellm`。
+> - 模型字符串会原样传给上游 API；智能解析只负责选择 Provider，请优先使用各平台官方模型 ID。
 
-LiteLLM 支持结构化 JSON 输出和 JSON Schema 验证，确保跨所有平台获得可靠且可预测的响应。
+## 核心 API
 
-### 基础 JSON 对象输出
+- `New(opts...)` 创建客户端；不传参数时会从环境变量自动发现可用 Provider。
+- `Request` 是跨平台统一的：必填 `Model` 与 `Messages`，可选 `MaxTokens`、`Temperature`、`TopP`、`Stop` 等控制项。
+- `Chat(ctx, req)` 返回统一的 `Response`。
+- `Stream(ctx, req)` 返回 `StreamReader`（不支持多 goroutine 并发读），务必 `defer stream.Close()`。
+
+### 流式（最小示例）
 
 ```go
-response, err := client.Chat(context.Background(), &litellm.Request{
-    Model: "gpt-4o-mini", // 自动解析到 OpenAI 提供者
-    Messages: []litellm.Message{
-        {Role: "user", Content: "生成一个人的信息"},
-    },
-    ResponseFormat: litellm.NewResponseFormatJSONObject(),
+stream, err := client.Stream(ctx, &litellm.Request{
+	Model: "gpt-4o-mini",
+	Messages: []litellm.Message{
+		{Role: "user", Content: "讲个笑话"},
+	},
 })
-
-// 响应将是有效的 JSON
-fmt.Println(response.Content) // {"name": "张三", "age": 30, ...}
-```
-
-### JSON Schema 严格验证
-
-```go
-// 定义数据结构
-personSchema := map[string]interface{}{
-    "type": "object",
-    "properties": map[string]interface{}{
-        "name": map[string]interface{}{
-            "type": "string",
-            "description": "姓名",
-        },
-        "age": map[string]interface{}{
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 150,
-        },
-        "email": map[string]interface{}{
-            "type": "string",
-            "format": "email",
-        },
-    },
-    "required": []string{"name", "age", "email"},
-}
-
-response, err := client.Chat(context.Background(), &litellm.Request{
-    Model: "gpt-4o-mini",
-    Messages: []litellm.Message{
-        {Role: "user", Content: "生成一个软件工程师的档案"},
-    },
-    ResponseFormat: litellm.NewResponseFormatJSONSchema(
-        "person_profile",
-        "个人职业档案信息",
-        personSchema,
-        true, // 严格模式
-    ),
-})
-
-// 解析为 Go 结构体
-type Person struct {
-    Name  string `json:"name"`
-    Age   int    `json:"age"`
-    Email string `json:"email"`
-}
-
-var person Person
-json.Unmarshal([]byte(response.Content), &person)
-```
-
-### 跨平台兼容性
-
-结构化输出在所有平台上都能工作，具有智能适配：
-
-- **OpenAI**: 原生 JSON Schema 支持，带严格模式
-- **Anthropic**: 通过提示工程实现 JSON 指令
-- **Gemini**: 原生响应 schema 支持
-- **其他平台**: 自动降级到基于提示的 JSON 生成
-
-```go
-// 适用于任何平台
-providers := []string{"gpt-4o-mini", "claude-4-sonnet", "gemini-2.5-flash"}
-
-for _, model := range providers {
-    response, _ := client.Chat(ctx, &litellm.Request{
-        Model: model,
-        Messages: []litellm.Message{
-            {Role: "user", Content: "生成用户数据"},
-        },
-        ResponseFormat: litellm.NewResponseFormatJSONObject(),
-    })
-    // 所有平台都返回有效的 JSON
-}
-```
-
-## 推理模型
-
-完整支持 OpenAI o 系列推理模型，包括 Chat API 和 Responses API：
-
-```go
-response, err := client.Chat(context.Background(), &litellm.Request{
-    Model: "o3-mini",
-    Messages: []litellm.Message{
-        {Role: "user", Content: "逐步计算 15 * 8"},
-    },
-    MaxTokens:        litellm.IntPtr(500),
-    ReasoningEffort:  "medium",      // "low", "medium", "high"
-    ReasoningSummary: "detailed",    // "concise", "detailed", "auto"
-    UseResponsesAPI:  true,          // 强制使用 Responses API
-})
-
-// 获取推理过程
-if response.Reasoning != nil {
-    fmt.Printf("推理过程: %s\n", response.Reasoning.Summary)
-    fmt.Printf("推理 tokens: %d\n", response.Reasoning.TokensUsed)
-}
-```
-
-## 网络弹性
-
-可选的重试机制，指数退避处理网络故障和 API 错误。
-
-```go
-// 默认：不自动重试
-client, err := litellm.New(litellm.WithOpenAI("your-api-key"))
 if err != nil {
-    log.Fatal(err)
+	log.Fatal(err)
 }
-
-// 自定义超时
-client, err = litellm.New(
-    litellm.WithOpenAI("your-api-key"),
-    litellm.WithTimeout(60*time.Second),
-)
-if err != nil {
-    log.Fatal(err)
-}
-
-// 启用重试（用户主动配置）
-client, err = litellm.New(
-    litellm.WithOpenAI("your-api-key"),
-    litellm.WithRetries(3, 1*time.Second), // 重试 3 次，初始延迟 1 秒
-)
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-## 流式处理
-
-支持实时流式响应和推理过程展示：
-
-```go
-stream, err := client.Stream(context.Background(), &litellm.Request{
-    Model: "gpt-4o-mini",
-    Messages: []litellm.Message{
-        {Role: "user", Content: "讲一个编程笑话"},
-    },
-})
-
 defer stream.Close()
+
 for {
-    chunk, err := stream.Next()
-    if err != nil || chunk.Done {
-        break
-    }
-
-    switch chunk.Type {
-    case litellm.ChunkTypeContent:
-        fmt.Print(chunk.Content)
-    case litellm.ChunkTypeReasoning:
-        fmt.Printf("[思考: %s]", chunk.Reasoning.Summary)
-    }
+	chunk, err := stream.Next()
+	if err != nil || chunk.Done {
+		break
+	}
+	fmt.Print(chunk.Content)
 }
 ```
 
-### 思考模式 (Qwen3 Thinking)
+## 高级能力（可选）
 
-Qwen3-Coder 模型支持通过 `enable_thinking` 参数启用逐步推理，为复杂的编程和数学问题提供详细的思考过程：
+下面能力都可跨平台使用，更完整的可运行示例在 `examples/` 目录。
+
+### 结构化输出
 
 ```go
-// 启用思考模式进行复杂问题求解
-response, err := client.Chat(ctx, &litellm.Request{
-    Model: "qwen3-coder-plus",
-    Messages: []litellm.Message{
-        {Role: "user", Content: "编写一个 Python 函数实现二分查找算法。请逐步解释你的方法。"},
-    },
-    Extra: map[string]interface{}{
-        "enable_thinking": true, // 启用 Qwen3 思考模式
-    },
+schema := map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"name": map[string]any{"type": "string"},
+		"age":  map[string]any{"type": "integer"},
+	},
+	"required": []string{"name", "age"},
+}
+
+resp, err := client.Chat(ctx, &litellm.Request{
+	Model: "gpt-4o-mini",
+	Messages: []litellm.Message{{Role: "user", Content: "生成一个人。"}},
+	ResponseFormat: litellm.NewResponseFormatJSONSchema("person", "", schema, true),
 })
-
-if err != nil {
-    log.Fatal(err)
-}
-
-fmt.Printf("最终答案: %s\n", response.Content)
-if response.Reasoning != nil {
-    fmt.Printf("推理过程: %s\n", response.Reasoning.Content)
-    fmt.Printf("推理摘要: %s\n", response.Reasoning.Summary)
-    fmt.Printf("推理 Tokens: %d\n", response.Reasoning.TokensUsed)
-}
+_ = resp
 ```
 
-### 思考模式 (GLM-4.5 Thinking)
-
-GLM-4.5 模型支持通过 `enable_thinking` 参数启用混合推理能力，为复杂问题提供逐步分析：
-
-```go
-// 启用 GLM-4.5 思考模式
-response, err := client.Chat(ctx, &litellm.Request{
-    Model: "glm-4.5",
-    Messages: []litellm.Message{
-        {Role: "user", Content: "设计一个高效的算法来解决旅行商问题，并分析其时间复杂度。"},
-    },
-    Extra: map[string]interface{}{
-        "enable_thinking": true, // 启用 GLM-4.5 思考模式
-    },
-})
-
-if err != nil {
-    log.Fatal(err)
-}
-
-fmt.Printf("最终答案: %s\n", response.Content)
-if response.Reasoning != nil {
-    fmt.Printf("推理过程: %s\n", response.Reasoning.Content)
-    fmt.Printf("推理摘要: %s\n", response.Reasoning.Summary)
-    fmt.Printf("推理 Tokens: %d\n", response.Reasoning.TokensUsed)
-}
-```
-
-## 工具调用 (Function Calling)
-
-### 基础工具调用
-完整支持 Function Calling，兼容 OpenAI 和 Anthropic：
+### 工具调用（Function Calling）
 
 ```go
 tools := []litellm.Tool{
-    {
-        Type: "function",
-        Function: litellm.FunctionSchema{
-            Name:        "get_weather",
-            Description: "获取城市天气信息",
-            Parameters: map[string]interface{}{
-                "type": "object",
-                "properties": map[string]interface{}{
-                    "city": map[string]interface{}{
-                        "type":        "string",
-                        "description": "城市名称",
-                    },
-                },
-                "required": []string{"city"},
-            },
-        },
-    },
+	{
+		Type: "function",
+		Function: litellm.FunctionDef{
+			Name: "get_weather",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"city": map[string]any{"type": "string"},
+				},
+				"required": []string{"city"},
+			},
+		},
+	},
 }
 
-response, err := client.Chat(context.Background(), &litellm.Request{
-    Model: "gpt-4o-mini",
-    Messages: []litellm.Message{
-        {Role: "user", Content: "北京天气怎么样？"},
-    },
-    Tools:      tools,
-    ToolChoice: "auto",
+resp, err := client.Chat(ctx, &litellm.Request{
+	Model: "gpt-4o-mini",
+	Messages: []litellm.Message{{Role: "user", Content: "东京天气？"}},
+	Tools: tools,
+	ToolChoice: "auto",
 })
-
-// 处理工具调用
-if len(response.ToolCalls) > 0 {
-    // 执行函数并继续对话...
-}
+_ = resp
 ```
 
-### 高级流式工具调用
-实时流式处理，支持增量工具调用数据处理：
+### 推理模型 / Responses API（OpenAI）
 
 ```go
-// 启动流式工具调用
-stream, err := client.Stream(context.Background(), &litellm.Request{
-    Model: "gpt-4.1-mini",
-    Messages: []litellm.Message{
-        {Role: "user", Content: "东京和纽约的天气怎么样？使用摄氏度。"},
-    },
-    Tools:      tools,
-    ToolChoice: "auto",
+resp, err := client.Chat(ctx, &litellm.Request{
+	Model: "o3-mini",
+	Messages: []litellm.Message{{Role: "user", Content: "逐步算 15*8"}},
+	ReasoningEffort:  "medium",
+	ReasoningSummary: "auto",
+	UseResponsesAPI:  true,
 })
-
-// 使用增量数据跟踪工具调用
-toolCalls := make(map[string]*ToolCallBuilder)
-
-defer stream.Close()
-for {
-    chunk, err := stream.Next()
-    if err != nil || chunk.Done {
-        break
-    }
-
-    switch chunk.Type {
-    case litellm.ChunkTypeContent:
-        fmt.Print(chunk.Content)
-
-    case litellm.ChunkTypeToolCallDelta:
-        // 处理增量工具调用数据
-        if chunk.ToolCallDelta != nil {
-            delta := chunk.ToolCallDelta
-
-            // 创建或获取工具调用构建器
-            if _, exists := toolCalls[delta.ID]; !exists && delta.ID != "" {
-                toolCalls[delta.ID] = &ToolCallBuilder{
-                    ID:   delta.ID,
-                    Type: delta.Type,
-                    Name: delta.FunctionName,
-                }
-                fmt.Printf("\n工具调用开始: %s", delta.FunctionName)
-            }
-
-            // 累积参数
-            if delta.ArgumentsDelta != "" && delta.ID != "" {
-                if builder, exists := toolCalls[delta.ID]; exists {
-                    builder.Arguments.WriteString(delta.ArgumentsDelta)
-                    fmt.Print(".")
-                }
-            }
-        }
-    }
-}
-
-// 处理完成的工具调用
-for id, builder := range toolCalls {
-    fmt.Printf("\n工具调用: %s(%s)", builder.Name, builder.Arguments.String())
-    // 使用累积的参数执行函数
-}
+_ = resp
 ```
 
+### 重试与超时
+
 ```go
-// ToolCallBuilder 帮助累积工具调用数据
-type ToolCallBuilder struct {
-    ID        string
-    Type      string
-    Name      string
-    Arguments strings.Builder
-}
+client, _ := litellm.New(
+	litellm.WithOpenAI(os.Getenv("OPENAI_API_KEY")),
+	litellm.WithRetries(3, 1*time.Second),
+	litellm.WithTimeout(60*time.Second),
+)
+_ = client
 ```
 
-## 扩展新平台
+### 平台特定参数
 
-通过自定义提供商注册系统，添加新的 LLM 平台非常简单：
+使用 `Request.Extra` 传递平台特定参数（例如 Qwen/GLM 的 thinking）。参考 `examples/qwen`、`examples/glm`、`examples/bedrock`。
+
+## 自定义 Provider
+
+实现 `litellm.Provider` 并注册即可扩展平台：
 
 ```go
-// 1. 实现 Provider 接口
 type MyProvider struct {
-    name   string
-    config litellm.ProviderConfig
+	name   string
+	config litellm.ProviderConfig
 }
 
-func (p *MyProvider) Name() string { return p.name }
-func (p *MyProvider) Validate() error { return nil }
+func (p *MyProvider) Name() string                     { return p.name }
+func (p *MyProvider) Validate() error                 { return nil }
 func (p *MyProvider) SupportsModel(model string) bool { return true }
 func (p *MyProvider) Models() []litellm.ModelInfo {
-    return []litellm.ModelInfo{
-        {ID: "my-model", Provider: "myprovider", Name: "我的模型", MaxTokens: 4096},
-    }
+	return []litellm.ModelInfo{
+		{
+			ID:              "my-model",
+			Provider:        "myprovider",
+			Name:            "我的模型",
+			MaxOutputTokens: 4096,
+			Capabilities:    []litellm.ModelCapability{litellm.CapabilityChat},
+		},
+	}
 }
 
 func (p *MyProvider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
-    // 在这里实现你的 API 调用逻辑
-    return &litellm.Response{
-        Content:  "你好，来自我的提供商！",
-        Model:    req.Model,
-        Provider: p.name,
-        Usage:    litellm.Usage{TotalTokens: 10},
-    }, nil
+	return &litellm.Response{Content: "hello", Model: req.Model, Provider: p.name}, nil
 }
-
 func (p *MyProvider) Stream(ctx context.Context, req *litellm.Request) (litellm.StreamReader, error) {
-    // 实现流式响应
-    return nil, fmt.Errorf("未实现流式响应")
+	return nil, fmt.Errorf("未实现流式")
 }
 
-// 2. 创建工厂函数
-func NewMyProvider(config litellm.ProviderConfig) litellm.Provider {
-    return &MyProvider{name: "myprovider", config: config}
-}
-
-// 3. 注册提供商
 func init() {
-    litellm.RegisterProvider("myprovider", NewMyProvider)
-}
-
-// 4. 使用
-client, err := litellm.New(
-    litellm.WithProviderConfig("myprovider", litellm.ProviderConfig{
-        APIKey: "your-api-key",
-    }),
-)
-if err != nil {
-    log.Fatal(err)
-}
-response, err := client.Chat(ctx, &litellm.Request{
-    Model: "my-model",
-    Messages: []litellm.Message{{Role: "user", Content: "你好"}},
-})
-if err != nil {
-    log.Fatal(err)
+	litellm.RegisterProvider("myprovider", func(cfg litellm.ProviderConfig) litellm.Provider {
+		return &MyProvider{name: "myprovider", config: cfg}
+	})
 }
 ```
 
-### 提供商发现
+## 内置 Provider
 
-```go
-// 列出所有可用的提供商
-providers := litellm.ListRegisteredProviders()
-fmt.Printf("可用提供商: %v\n", providers)
+已内置：OpenAI、Anthropic、Google Gemini、DeepSeek、Qwen（DashScope）、GLM、AWS Bedrock、OpenRouter。
 
-// 检查提供商是否已注册
-if litellm.IsProviderRegistered("myprovider") {
-    fmt.Println("自定义提供商可用！")
-}
-```
-
-## 支持的平台
-
-### OpenAI
-- GPT-5, GPT-4o, GPT-4o-mini, GPT-4.1, GPT-4.1-mini, GPT-4.1-mano
-- o3, o3-mini, o4-mini (推理模型)
-- Chat Completions API 和 Responses API
-- Function Calling, Vision, 流式处理
-
-#### GPT-5 使用建议
-- 需要更强推理时，设置 `ReasoningEffort` 和/或 `ReasoningSummary`。LiteLLM 会自动切换到 Responses API，并使用 `MaxCompletionTokens` 以获得更稳定的推理行为。
-- 建议适当增大 `MaxCompletionTokens`，覆盖推理过程与最终回答的 tokens。
-- 请确认您的 API Key 具有 `gpt-5` 的访问权限；否则请求可能失败。也可尝试通过 OpenRouter 路由（`openai/gpt-5`）。
-
-
-### Anthropic
-- Claude 3.7 Sonnet, Claude 4 Sonnet, Claude 4 Opus
-- Function Calling, Vision, 流式处理
-
-### Google Gemini
-- Gemini 2.5 Pro, Gemini 2.5 Flash
-- Function Calling, Vision, 流式处理
-- 超大上下文窗口
-
-### DeepSeek
-- DeepSeek Chat, DeepSeek Reasoner
-- Function Calling, 代码生成, 推理能力
-- 超大上下文窗口
-
-### Qwen (阿里云 DashScope)
-- Qwen3-Coder-Plus, Qwen3-Coder-Flash (支持思考模式)
-- Qwen3-Coder-480B-A35B-Instruct, Qwen3-Coder-30B-A3B-Instruct (开源模型)
-- Function Calling, 代码生成, 推理能力 (通过 `enable_thinking` 参数实现逐步思考), 超大上下文窗口 (最高 1M tokens)
-- 通过 DashScope 提供 OpenAI 兼容 API
-
-### GLM (智谱AI)
-- GLM-4.5 (355B-A32B 旗舰模型，具备混合推理能力)
-- GLM-4.5-Air (106B-A12B 轻量版), GLM-4.5-Flash (快速版)
-- GLM-4, GLM-4-Flash, GLM-4-Air, GLM-4-AirX (上一代模型)
-- Function Calling, 代码生成, 推理能力 (思考模式), 大上下文窗口 (128K tokens)
-- 通过智谱AI开放平台提供 OpenAI 兼容 API
-
-### OpenRouter
-- 访问来自多个提供商的 200+ 模型
-- OpenAI, Anthropic, Google, Meta 等
-- 所有支持模型的统一 API
-- 推理模型支持
+LiteLLM 不会改写模型 ID，只做 Provider 选择，请使用官方模型 ID。
 
 ## 配置
 
-### 环境变量
+用于自动发现的环境变量：
+
 ```bash
 export OPENAI_API_KEY="sk-proj-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 export GEMINI_API_KEY="AIza..."
 export DEEPSEEK_API_KEY="sk-..."
 export QWEN_API_KEY="sk-..."
-export GLM_API_KEY="your-glm-key"  # GLM 模型
+export GLM_API_KEY="your-glm-key"
 export OPENROUTER_API_KEY="sk-or-v1-..."
-```
-
-### 代码配置 (推荐)
-```go
-client, err := litellm.New(
-    litellm.WithOpenAI("your-openai-key"),
-    litellm.WithAnthropic("your-anthropic-key"),
-    litellm.WithGemini("your-gemini-key"),
-    litellm.WithDeepSeek("your-deepseek-key"),
-    litellm.WithQwen("your-qwen-key"),
-    litellm.WithGLM("your-glm-key"),
-    litellm.WithOpenRouter("your-openrouter-key"),
-    litellm.WithDefaults(2048, 0.8),
-)
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-## API 参考
-
-### 核心类型
-```go
-type Request struct {
-    Model            string          `json:"model"`                 // 模型名称
-    Messages         []Message       `json:"messages"`              // 对话消息
-    MaxTokens        *int            `json:"max_tokens,omitempty"`  // 最大token数
-    Temperature      *float64        `json:"temperature,omitempty"` // 采样温度
-    Tools            []Tool          `json:"tools,omitempty"`       // 可用工具
-    ResponseFormat   *ResponseFormat `json:"response_format,omitempty"` // 响应格式
-    ReasoningEffort  string          `json:"reasoning_effort,omitempty"`  // 推理强度
-    ReasoningSummary string          `json:"reasoning_summary,omitempty"` // 推理摘要
-}
-
-type Response struct {
-    Content   string         `json:"content"`              // 生成内容
-    ToolCalls []ToolCall     `json:"tool_calls,omitempty"` // 工具调用
-    Usage     Usage          `json:"usage"`                // Token使用统计
-    Reasoning *ReasoningData `json:"reasoning,omitempty"`  // 推理数据
-}
-
-type ResponseFormat struct {
-    Type       string      `json:"type"`                 // "text", "json_object", "json_schema"
-    JSONSchema *JSONSchema `json:"json_schema,omitempty"` // 结构化输出的 JSON schema
-}
-
-type JSONSchema struct {
-    Name        string `json:"name"`                  // Schema 名称
-    Description string `json:"description,omitempty"` // Schema 描述
-    Schema      any    `json:"schema"`                // JSON schema 定义
-    Strict      *bool  `json:"strict,omitempty"`      // 是否强制严格遵守
-}
-```
-
-### 主要方法
-```go
-func Quick(model, message string) (*Response, error)
-func New(opts ...ClientOption) *Client
-func (c *Client) Chat(ctx context.Context, req *Request) (*Response, error)
-func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error)
+export AWS_ACCESS_KEY_ID="..."
+export AWS_SECRET_ACCESS_KEY="..."
+export AWS_REGION="us-east-1"
 ```
 
 ## 许可证

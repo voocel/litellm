@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -271,7 +272,11 @@ func (c *Client) Chat(ctx context.Context, req *Request) (*Response, error) {
 
 	c.applyDefaults(req)
 
-	return provider.Chat(ctx, req)
+	resp, err := provider.Chat(ctx, req)
+	if err != nil {
+		return nil, WrapError(err, provider.Name())
+	}
+	return resp, nil
 }
 
 // Stream performs a streaming completion request
@@ -293,7 +298,11 @@ func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error)
 
 	c.applyDefaults(req)
 
-	return provider.Stream(ctx, req)
+	stream, err := provider.Stream(ctx, req)
+	if err != nil {
+		return nil, WrapError(err, provider.Name())
+	}
+	return stream, nil
 }
 
 // Models returns all available models
@@ -474,6 +483,11 @@ func (c *Client) resolveProvider(model string) (Provider, error) {
 		availableProviders = append(availableProviders, provider)
 	}
 	c.mu.RUnlock()
+
+	// Make routing deterministic in multi-provider scenarios (avoid random map iteration order).
+	sort.Slice(availableProviders, func(i, j int) bool {
+		return availableProviders[i].Name() < availableProviders[j].Name()
+	})
 
 	// Use configured router for provider selection
 	return c.router.Route(model, availableProviders)

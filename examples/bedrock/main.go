@@ -90,7 +90,7 @@ func main() {
 			fmt.Print(chunk.Content)
 		}
 	}
-	fmt.Println("\n")
+		fmt.Println()
 
 	// Tool calling (function calling)
 	fmt.Println("=== Example 4: Tool Calling ===")

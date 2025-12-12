@@ -703,7 +703,7 @@ func (s *bedrockStreamReader) Next() (*StreamChunk, error) {
 			var stop struct {
 				StopReason string `json:"stopReason"`
 			}
-			json.Unmarshal(data, &stop)
+			_ = json.Unmarshal(data, &stop)
 			s.done = true
 			return &StreamChunk{
 				Done:         true,

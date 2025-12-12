@@ -1,650 +1,249 @@
-# LiteLLM - Go Multi-Platform LLM API Client
-
-**LiteLLM** - Making LLM API calls simple and elegant
+# LiteLLM (Go) — Multi‑Provider LLM Client
 
 [中文](README_CN.md) | English
 
-A clean and elegant Go library for unified access to multiple LLM platforms.
+LiteLLM is a small, typed Go client that lets you call multiple LLM providers through one API.
 
-## Key Design Principles
+## Get Started
 
-- **Single Entry Point** - Only `litellm.New()` - no confusing choice between multiple APIs
-- **Auto-Resolution** - Models automatically resolve to correct providers (gpt-4o → OpenAI, claude → Anthropic)
-- **Type-Safe Configuration** - `WithOpenAI()`, `WithAnthropic()` instead of error-prone string-based config
-- **Zero Configuration** - Works immediately with environment variables
-- **Provider-Agnostic** - Same code works across all AI providers
-
-## Features
-
-- **Simple & Clean** - One-line API calls to any LLM platform
-- **Unified Interface** - Same request/response format across all providers
-- **Network Resilience** - Optional retry with exponential backoff and jitter
-- **Structured Outputs** - JSON Schema validation with cross-provider support
-- **Reasoning Support** - Full support for OpenAI o-series reasoning models
-- **Function Calling** - Complete Function Calling support
-- **Streaming** - Real-time streaming responses
-- **Zero Config** - Auto-discovery from environment variables
-- **Extensible** - Easy to add new LLM platforms
-- **Type Safe** - Strong typing and comprehensive error handling
-
-## Quick Start
-
-### Installation
+### Install
 
 ```bash
 go get github.com/voocel/litellm
 ```
 
-### One-Line Usage
+### 1) Set one API key
+
+```bash
+export OPENAI_API_KEY="your-key"
+```
+
+### 2) Call a model in one line
 
 ```go
 package main
 
 import (
-    "fmt"
-    "github.com/voocel/litellm"
+	"fmt"
+	"log"
+
+	"github.com/voocel/litellm"
 )
 
 func main() {
-    // Set environment variable: export OPENAI_API_KEY="your-key"
-    response, err := litellm.Quick("gpt-4o-mini", "Hello, LiteLLM!")
-    if err != nil {
-        panic(err)
-    }
-    fmt.Println(response.Content)
+	resp, err := litellm.Quick("gpt-4o-mini", "Hello, LiteLLM!")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(resp.Content)
 }
 ```
 
-### Full Configuration
+### 3) Create a client (recommended for apps)
 
 ```go
 package main
 
 import (
-    "context"
-    "fmt"
-    "github.com/voocel/litellm"
+	"context"
+	"log"
+	"os"
+
+	"github.com/voocel/litellm"
 )
 
 func main() {
-    // Method 1: Auto-discovery from environment variables
-    client, err := litellm.New()
-    if err != nil {
-        panic(err)
-    }
+	client, err := litellm.New(
+		litellm.WithOpenAI(os.Getenv("OPENAI_API_KEY")),
+		litellm.WithDefaults(1024, 0.7),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-    // Method 2: Type-safe manual configuration (recommended for production)
-    client, err = litellm.New(
-        litellm.WithOpenAI("your-openai-key"),
-        litellm.WithAnthropic("your-anthropic-key"),
-        litellm.WithGemini("your-gemini-key"),
-        litellm.WithQwen("your-dashscope-key"),
-        litellm.WithGLM("your-glm-key"),
-        litellm.WithOpenRouter("your-openrouter-key"),
-        litellm.WithDefaults(2048, 0.8), // Custom defaults
-    )
-    if err != nil {
-        panic(err)
-    }
-
-    // Basic chat
-    response, err := client.Chat(context.Background(), &litellm.Request{
-        Model: "gpt-4o-mini", // Auto-resolves to OpenAI provider
-        Messages: []litellm.Message{
-            {Role: "user", Content: "Explain artificial intelligence"},
-        },
-        MaxTokens:   litellm.IntPtr(200),
-        Temperature: litellm.Float64Ptr(0.7),
-    })
-
-    if err != nil {
-        panic(err)
-    }
-
-    fmt.Printf("Response: %s\n", response.Content)
-    fmt.Printf("Tokens: %d (input: %d, output: %d)\n",
-        response.Usage.TotalTokens,
-        response.Usage.PromptTokens,
-        response.Usage.CompletionTokens)
+	_, _ = client.Chat(context.Background(), &litellm.Request{
+		Model: "gpt-4o-mini",
+		Messages: []litellm.Message{
+			{Role: "user", Content: "Explain AI in one sentence."},
+		},
+	})
 }
 ```
 
-## Reasoning Models
+> Notes
+> - The `providers` subpackage is an internal implementation detail. End users should only import `github.com/voocel/litellm`.
+> - Model strings are passed to the upstream API unchanged. Auto‑resolution only selects a provider, so prefer official model IDs.
 
-Full support for OpenAI o-series reasoning models with both Chat API and Responses API:
+## Core API
+
+- `New(opts...)` builds a client. If you call `New()` with no options, it auto‑discovers providers from environment variables.
+- `Request` is provider‑agnostic: set `Model` and `Messages`, then optional controls like `MaxTokens`, `Temperature`, `TopP`, `Stop`, etc.
+- `Chat(ctx, req)` returns a unified `Response`.
+- `Stream(ctx, req)` returns a `StreamReader` (not goroutine‑safe). Always `defer stream.Close()`.
+
+### Streaming (minimal)
 
 ```go
-response, err := client.Chat(context.Background(), &litellm.Request{
-    Model: "o3-mini", // Auto-resolves to OpenAI provider
-    Messages: []litellm.Message{
-        {Role: "user", Content: "Calculate 15 * 8 step by step"},
-    },
-    MaxTokens:        litellm.IntPtr(500),
-    ReasoningEffort:  "medium",      // "low", "medium", "high"
-    ReasoningSummary: "detailed",    // "concise", "detailed", "auto"
-    UseResponsesAPI:  true,          // Force Responses API
+stream, err := client.Stream(ctx, &litellm.Request{
+	Model: "gpt-4o-mini",
+	Messages: []litellm.Message{
+		{Role: "user", Content: "Tell me a joke."},
+	},
 })
-
-// Access reasoning process
-if response.Reasoning != nil {
-    fmt.Printf("Reasoning: %s\n", response.Reasoning.Summary)
-    fmt.Printf("Reasoning tokens: %d\n", response.Reasoning.TokensUsed)
-}
-```
-
-## Network Resilience
-
-Optional retry mechanism with exponential backoff for network failures and API errors.
-
-```go
-// Default: No automatic retries
-client, err := litellm.New(litellm.WithOpenAI("your-api-key"))
 if err != nil {
-    log.Fatal(err)
+	log.Fatal(err)
 }
-
-// Custom timeout
-client, err = litellm.New(
-    litellm.WithOpenAI("your-api-key"),
-    litellm.WithTimeout(60*time.Second),
-)
-if err != nil {
-    log.Fatal(err)
-}
-
-// Enable retries (user opt-in)
-client, err = litellm.New(
-    litellm.WithOpenAI("your-api-key"),
-    litellm.WithRetries(3, 1*time.Second), // 3 retries, 1s initial delay
-)
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-## Streaming
-
-Real-time streaming with reasoning process display:
-
-```go
-stream, err := client.Stream(context.Background(), &litellm.Request{
-    Model: "gpt-4o-mini", // Auto-resolves to OpenAI provider
-    Messages: []litellm.Message{
-        {Role: "user", Content: "Tell me a programming joke"},
-    },
-})
-
 defer stream.Close()
+
 for {
-    chunk, err := stream.Next()
-    if err != nil || chunk.Done {
-        break
-    }
-
-    switch chunk.Type {
-    case litellm.ChunkTypeContent:
-        fmt.Print(chunk.Content)
-    case litellm.ChunkTypeReasoning:
-        fmt.Printf("[Thinking: %s]", chunk.Reasoning.Summary)
-    }
-}
+	chunk, err := stream.Next()
+	if err != nil || chunk.Done {
+		break
+	}
+	fmt.Print(chunk.Content)
 }
 ```
 
-## Structured Outputs
+## Advanced Features (optional)
 
-LiteLLM supports structured JSON outputs with JSON Schema validation, ensuring reliable and predictable responses across all providers.
+Each feature below works across providers. Longer runnable examples live in `examples/`.
 
-### Basic JSON Object Output
+### Structured outputs
 
 ```go
-response, err := client.Chat(context.Background(), &litellm.Request{
-    Model: "gpt-4o-mini",
-    Messages: []litellm.Message{
-        {Role: "user", Content: "Generate a person's information"},
-    },
-    ResponseFormat: litellm.NewResponseFormatJSONObject(),
+schema := map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"name": map[string]any{"type": "string"},
+		"age":  map[string]any{"type": "integer"},
+	},
+	"required": []string{"name", "age"},
+}
+
+resp, err := client.Chat(ctx, &litellm.Request{
+	Model: "gpt-4o-mini",
+	Messages: []litellm.Message{{Role: "user", Content: "Generate a person."}},
+	ResponseFormat: litellm.NewResponseFormatJSONSchema("person", "", schema, true),
 })
-
-// Response will be valid JSON
-fmt.Println(response.Content) // {"name": "John Doe", "age": 30, ...}
+_ = resp
 ```
 
-### JSON Schema with Strict Validation
-
-```go
-// Define your data structure
-personSchema := map[string]interface{}{
-    "type": "object",
-    "properties": map[string]interface{}{
-        "name": map[string]interface{}{
-            "type": "string",
-            "description": "Full name",
-        },
-        "age": map[string]interface{}{
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 150,
-        },
-        "email": map[string]interface{}{
-            "type": "string",
-            "format": "email",
-        },
-    },
-    "required": []string{"name", "age", "email"},
-}
-
-response, err := client.Chat(context.Background(), &litellm.Request{
-    Model: "gpt-4o-mini",
-    Messages: []litellm.Message{
-        {Role: "user", Content: "Generate a software engineer's profile"},
-    },
-    ResponseFormat: litellm.NewResponseFormatJSONSchema(
-        "person_profile",
-        "A person's professional profile",
-        personSchema,
-        true, // strict mode
-    ),
-})
-
-// Parse into your Go struct
-type Person struct {
-    Name  string `json:"name"`
-    Age   int    `json:"age"`
-    Email string `json:"email"`
-}
-
-var person Person
-json.Unmarshal([]byte(response.Content), &person)
-```
-
-### Cross-Provider Compatibility
-
-Structured outputs work across all providers with intelligent adaptation:
-
-- **OpenAI**: Native JSON Schema support with strict mode
-- **Anthropic**: Prompt engineering with JSON instructions
-- **Gemini**: Native response schema support
-- **Other providers**: Automatic fallback to prompt-based JSON generation
-
-```go
-// Works with any provider
-providers := []string{"gpt-4o-mini", "claude-4-sonnet", "gemini-2.5-flash"}
-
-for _, model := range providers {
-    response, _ := client.Chat(ctx, &litellm.Request{
-        Model: model,
-        Messages: []litellm.Message{
-            {Role: "user", Content: "Generate user data"},
-        },
-        ResponseFormat: litellm.NewResponseFormatJSONObject(),
-    })
-    // All providers return valid JSON
-}
-```
-
-## Function Calling
-
-### Basic Function Calling
-Complete Function Calling support compatible with OpenAI and Anthropic:
+### Function calling
 
 ```go
 tools := []litellm.Tool{
-    {
-        Type: "function",
-        Function: litellm.FunctionSchema{
-            Name:        "get_weather",
-            Description: "Get weather information for a city",
-            Parameters: map[string]interface{}{
-                "type": "object",
-                "properties": map[string]interface{}{
-                    "city": map[string]interface{}{
-                        "type":        "string",
-                        "description": "City name",
-                    },
-                },
-                "required": []string{"city"},
-            },
-        },
-    },
+	{
+		Type: "function",
+		Function: litellm.FunctionDef{
+			Name: "get_weather",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"city": map[string]any{"type": "string"},
+				},
+				"required": []string{"city"},
+			},
+		},
+	},
 }
 
-response, err := client.Chat(context.Background(), &litellm.Request{
-    Model: "gpt-4o-mini",
-    Messages: []litellm.Message{
-        {Role: "user", Content: "What's the weather in Beijing?"},
-    },
-    Tools:      tools,
-    ToolChoice: "auto",
+resp, err := client.Chat(ctx, &litellm.Request{
+	Model: "gpt-4o-mini",
+	Messages: []litellm.Message{{Role: "user", Content: "Weather in Tokyo?"}},
+	Tools: tools,
+	ToolChoice: "auto",
 })
-
-// Handle tool calls
-if len(response.ToolCalls) > 0 {
-    // Execute function and continue conversation...
-}
+_ = resp
 ```
 
-### Advanced Streaming Tool Calls
-Real-time streaming with incremental tool call processing:
+### Reasoning models / Responses API (OpenAI)
 
 ```go
-// Start streaming with tool calls
-stream, err := client.Stream(context.Background(), &litellm.Request{
-    Model: "gpt-4.1-mini",
-    Messages: []litellm.Message{
-        {Role: "user", Content: "What's the weather like in Tokyo and New York? Use celsius."},
-    },
-    Tools:      tools,
-    ToolChoice: "auto",
+resp, err := client.Chat(ctx, &litellm.Request{
+	Model: "o3-mini",
+	Messages: []litellm.Message{{Role: "user", Content: "Solve 15*8 step by step."}},
+	ReasoningEffort:  "medium",
+	ReasoningSummary: "auto",
+	UseResponsesAPI:  true,
 })
-
-// Track tool calls with incremental data
-toolCalls := make(map[string]*ToolCallBuilder)
-
-defer stream.Close()
-for {
-    chunk, err := stream.Next()
-    if err != nil || chunk.Done {
-        break
-    }
-
-    switch chunk.Type {
-    case litellm.ChunkTypeContent:
-        fmt.Print(chunk.Content)
-
-    case litellm.ChunkTypeToolCallDelta:
-        // Handle incremental tool call data
-        if chunk.ToolCallDelta != nil {
-            delta := chunk.ToolCallDelta
-
-            // Create or get tool call builder
-            if _, exists := toolCalls[delta.ID]; !exists && delta.ID != "" {
-                toolCalls[delta.ID] = &ToolCallBuilder{
-                    ID:   delta.ID,
-                    Type: delta.Type,
-                    Name: delta.FunctionName,
-                }
-                fmt.Printf("\nTool call started: %s", delta.FunctionName)
-            }
-
-            // Accumulate arguments
-            if delta.ArgumentsDelta != "" && delta.ID != "" {
-                if builder, exists := toolCalls[delta.ID]; exists {
-                    builder.Arguments.WriteString(delta.ArgumentsDelta)
-                    fmt.Print(".")
-                }
-            }
-        }
-    }
-}
-
-// Process completed tool calls
-for id, builder := range toolCalls {
-    fmt.Printf("\nTool: %s(%s)", builder.Name, builder.Arguments.String())
-    // Execute the function with the accumulated arguments
-}
+_ = resp
 ```
 
+### Retries & timeouts
+
 ```go
-// ToolCallBuilder helps accumulate tool call data
-type ToolCallBuilder struct {
-    ID        string
-    Type      string
-    Name      string
-    Arguments strings.Builder
-}
+client, _ := litellm.New(
+	litellm.WithOpenAI(os.Getenv("OPENAI_API_KEY")),
+	litellm.WithRetries(3, 1*time.Second),
+	litellm.WithTimeout(60*time.Second),
+)
+_ = client
 ```
 
-### Reasoning Mode (Qwen3 Thinking)
+### Provider‑specific knobs
 
-Qwen3-Coder models support step-by-step reasoning through the `enable_thinking` parameter, providing detailed thinking process for complex coding and mathematical problems:
+Use `Request.Extra` for vendor‑specific parameters (e.g., Qwen/GLM thinking). See `examples/qwen`, `examples/glm`, and `examples/bedrock`.
 
-```go
-// Enable reasoning mode for complex problem solving
-response, err := client.Chat(ctx, &litellm.Request{
-    Model: "qwen3-coder-plus",
-    Messages: []litellm.Message{
-        {Role: "user", Content: "Write a Python function to implement binary search. Explain your approach step by step."},
-    },
-    Extra: map[string]interface{}{
-        "enable_thinking": true, // Enable Qwen3 reasoning mode
-    },
-})
+## Custom Providers
 
-if err != nil {
-    log.Fatal(err)
-}
-
-fmt.Printf("Final Answer: %s\n", response.Content)
-if response.Reasoning != nil {
-    fmt.Printf("Reasoning Process: %s\n", response.Reasoning.Content)
-    fmt.Printf("Reasoning Summary: %s\n", response.Reasoning.Summary)
-    fmt.Printf("Reasoning Tokens: %d\n", response.Reasoning.TokensUsed)
-}
-```
-
-### Reasoning Mode (GLM-4.5 Thinking)
-
-GLM-4.5 models support hybrid reasoning capabilities through the `enable_thinking` parameter, providing step-by-step analysis for complex problems:
+Implement `litellm.Provider` and register it:
 
 ```go
-// Enable thinking mode for GLM-4.5
-response, err := client.Chat(ctx, &litellm.Request{
-    Model: "glm-4.5",
-    Messages: []litellm.Message{
-        {Role: "user", Content: "Design an efficient algorithm to solve the traveling salesman problem and analyze its time complexity."},
-    },
-    Extra: map[string]interface{}{
-        "enable_thinking": true, // Enable GLM-4.5 thinking mode
-    },
-})
-
-if err != nil {
-    log.Fatal(err)
-}
-
-fmt.Printf("Final Answer: %s\n", response.Content)
-if response.Reasoning != nil {
-    fmt.Printf("Reasoning Process: %s\n", response.Reasoning.Content)
-    fmt.Printf("Reasoning Summary: %s\n", response.Reasoning.Summary)
-    fmt.Printf("Reasoning Tokens: %d\n", response.Reasoning.TokensUsed)
-}
-```
-
-## Extending New Platforms
-
-Adding new LLM platforms is simple with the custom provider registration system:
-
-```go
-// 1. Implement the Provider interface
 type MyProvider struct {
-    name   string
-    config litellm.ProviderConfig
+	name   string
+	config litellm.ProviderConfig
 }
 
-func (p *MyProvider) Name() string { return p.name }
-func (p *MyProvider) Validate() error { return nil }
+func (p *MyProvider) Name() string                     { return p.name }
+func (p *MyProvider) Validate() error                 { return nil }
 func (p *MyProvider) SupportsModel(model string) bool { return true }
 func (p *MyProvider) Models() []litellm.ModelInfo {
-    return []litellm.ModelInfo{
-        {ID: "my-model", Provider: "myprovider", Name: "My Model", MaxTokens: 4096},
-    }
+	return []litellm.ModelInfo{
+		{
+			ID:              "my-model",
+			Provider:        "myprovider",
+			Name:            "My Model",
+			MaxOutputTokens: 4096,
+			Capabilities:    []litellm.ModelCapability{litellm.CapabilityChat},
+		},
+	}
 }
 
 func (p *MyProvider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
-    // Implement your API call logic here
-    return &litellm.Response{
-        Content:  "Hello from my provider!",
-        Model:    req.Model,
-        Provider: p.name,
-        Usage:    litellm.Usage{TotalTokens: 10},
-    }, nil
+	return &litellm.Response{Content: "hello", Model: req.Model, Provider: p.name}, nil
 }
-
 func (p *MyProvider) Stream(ctx context.Context, req *litellm.Request) (litellm.StreamReader, error) {
-    // Implement streaming if needed
-    return nil, fmt.Errorf("streaming not implemented")
+	return nil, fmt.Errorf("streaming not implemented")
 }
 
-// 2. Create a factory function
-func NewMyProvider(config litellm.ProviderConfig) litellm.Provider {
-    return &MyProvider{name: "myprovider", config: config}
-}
-
-// 3. Register the provider
 func init() {
-    litellm.RegisterProvider("myprovider", NewMyProvider)
-}
-
-// 4. Use it
-client, err := litellm.New(
-    litellm.WithProviderConfig("myprovider", litellm.ProviderConfig{
-        APIKey: "your-api-key",
-    }),
-)
-if err != nil {
-    log.Fatal(err)
-}
-response, err := client.Chat(ctx, &litellm.Request{
-    Model: "my-model",
-    Messages: []litellm.Message{{Role: "user", Content: "Hello"}},
-})
-if err != nil {
-    log.Fatal(err)
+	litellm.RegisterProvider("myprovider", func(cfg litellm.ProviderConfig) litellm.Provider {
+		return &MyProvider{name: "myprovider", config: cfg}
+	})
 }
 ```
 
-### Provider Discovery
+## Supported Providers
 
-```go
-// List all available providers
-providers := litellm.ListRegisteredProviders()
-fmt.Printf("Available providers: %v\n", providers)
+Builtin providers: OpenAI, Anthropic, Google Gemini, DeepSeek, Qwen (DashScope), GLM, AWS Bedrock, OpenRouter.
 
-// Check if a provider is registered
-if litellm.IsProviderRegistered("myprovider") {
-    fmt.Println("Custom provider is available!")
-}
-```
-
-## Supported Platforms
-
-### OpenAI
-- GPT-5, GPT-4o, GPT-4o-mini, GPT-4.1, GPT-4.1-mini, GPT-4.1-mano
-- o3, o3-mini, o4-mini (reasoning models)
-- Chat Completions API & Responses API
-- Function Calling, Vision, Streaming
-
-
-#### Usage tips for GPT-5
-- For deeper reasoning, set `ReasoningEffort` and/or `ReasoningSummary`. LiteLLM will automatically switch to the Responses API and use `MaxCompletionTokens` for better reasoning behavior.
-- Consider increasing `MaxCompletionTokens` to cover both reasoning and final answer tokens.
-- Ensure your API key has access to `gpt-5`; otherwise, requests may fail. You can also try routing via OpenRouter (`openai/gpt-5`).
-
-### Anthropic
-- Claude 3.7 Sonnet, Claude 4 Sonnet, Claude 4 Opus
-- Function Calling, Vision, Streaming
-
-### Google Gemini
-- Gemini 2.5 Pro, Gemini 2.5 Flash
-- Function Calling, Vision, Streaming
-- Large context window
-
-### DeepSeek
-- DeepSeek Chat, DeepSeek Reasoner
-- Function Calling, Code Generation, Reasoning
-- Large context window
-
-### Qwen (Alibaba Cloud DashScope)
-- Qwen3-Coder-Plus, Qwen3-Coder-Flash (with thinking mode support)
-- Qwen3-Coder-480B-A35B-Instruct, Qwen3-Coder-30B-A3B-Instruct (open source models)
-- Function Calling, Code Generation, Reasoning (step-by-step thinking via `enable_thinking`), Large context window (up to 1M tokens)
-- OpenAI-compatible API through DashScope
-
-### GLM (ZhiPu AI)
-- GLM-4.5 (355B-A32B flagship model with hybrid reasoning capabilities)
-- GLM-4.5-Air (106B-A12B lightweight version), GLM-4.5-Flash (fast version)
-- GLM-4, GLM-4-Flash, GLM-4-Air, GLM-4-AirX (previous generation models)
-- Function Calling, Code Generation, Reasoning (thinking mode), Large context window (128K tokens)
-- OpenAI-compatible API through Zhipu AI Open Platform
-
-### OpenRouter
-- Access to 200+ models from multiple providers
-- OpenAI, Anthropic, Google, Meta, and more
-- Unified API for all supported models
-- Reasoning models support
+LiteLLM does not rewrite model IDs; it only selects a provider. Always use official model IDs.
 
 ## Configuration
 
-### Environment Variables
+Environment variables for auto‑discovery:
+
 ```bash
 export OPENAI_API_KEY="sk-proj-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 export GEMINI_API_KEY="AIza..."
 export DEEPSEEK_API_KEY="sk-..."
-export QWEN_API_KEY="sk-..."  # For Qwen models
-export GLM_API_KEY="your-glm-key"  # For GLM models
+export QWEN_API_KEY="sk-..."
+export GLM_API_KEY="your-glm-key"
 export OPENROUTER_API_KEY="sk-or-v1-..."
-```
-
-### Code Configuration (Recommended)
-```go
-client, err := litellm.New(
-    litellm.WithOpenAI("your-openai-key"),
-    litellm.WithAnthropic("your-anthropic-key"),
-    litellm.WithGemini("your-gemini-key"),
-    litellm.WithDeepSeek("your-deepseek-key"),
-    litellm.WithQwen("your-qwen-key"),
-    litellm.WithGLM("your-glm-key"),
-    litellm.WithOpenRouter("your-openrouter-key"),
-    litellm.WithDefaults(2048, 0.8),
-)
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-## API Reference
-
-### Core Types
-```go
-type Request struct {
-    Model            string          `json:"model"`                 // Model name
-    Messages         []Message       `json:"messages"`              // Conversation messages
-    MaxTokens        *int            `json:"max_tokens,omitempty"`  // Max tokens to generate
-    Temperature      *float64        `json:"temperature,omitempty"` // Sampling temperature
-    Tools            []Tool          `json:"tools,omitempty"`       // Available tools
-    ResponseFormat   *ResponseFormat `json:"response_format,omitempty"` // Response format
-    ReasoningEffort  string          `json:"reasoning_effort,omitempty"`  // Reasoning effort
-    ReasoningSummary string          `json:"reasoning_summary,omitempty"` // Reasoning summary
-}
-
-type Response struct {
-    Content   string         `json:"content"`              // Generated content
-    ToolCalls []ToolCall     `json:"tool_calls,omitempty"` // Tool calls
-    Usage     Usage          `json:"usage"`                // Token usage
-    Reasoning *ReasoningData `json:"reasoning,omitempty"`  // Reasoning data
-}
-
-type ResponseFormat struct {
-    Type       string      `json:"type"`                 // "text", "json_object", "json_schema"
-    JSONSchema *JSONSchema `json:"json_schema,omitempty"` // JSON schema for structured output
-}
-
-type JSONSchema struct {
-    Name        string `json:"name"`                  // Schema name
-    Description string `json:"description,omitempty"` // Schema description
-    Schema      any    `json:"schema"`                // JSON schema definition
-    Strict      *bool  `json:"strict,omitempty"`      // Whether to enforce strict adherence
-}
-```
-
-### Main Methods
-```go
-func Quick(model, message string) (*Response, error)
-func New(opts ...ClientOption) *Client
-func (c *Client) Chat(ctx context.Context, req *Request) (*Response, error)
-func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error)
+export AWS_ACCESS_KEY_ID="..."
+export AWS_SECRET_ACCESS_KEY="..."
+export AWS_REGION="us-east-1"
 ```
 
 ## License

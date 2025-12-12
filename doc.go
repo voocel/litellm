@@ -130,6 +130,13 @@ Support for OpenAI o-series and other reasoning models:
   - GLM: ZhiPu AI's GLM-4.6 family
   - OpenRouter: 200+ models from multiple providers
 
+# Package Layout
+
+The `providers` subpackage contains builtin provider implementations and is
+considered an internal detail. End users should only import `litellm`.
+If you need a custom provider, implement `litellm.Provider` and register it
+with `litellm.RegisterProvider`.
+
 # Custom Providers
 
 Extend with your own providers:

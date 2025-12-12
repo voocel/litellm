@@ -12,30 +12,15 @@ import (
 	"net/http"
 	"syscall"
 	"time"
+
+	"github.com/voocel/litellm/providers"
 )
 
-// ResilienceConfig holds network resilience configuration
-type ResilienceConfig struct {
-	MaxRetries     int           `json:"max_retries"`     // Maximum retry attempts, default 0 (no retry)
-	InitialDelay   time.Duration `json:"initial_delay"`   // Initial delay, default 1 second
-	MaxDelay       time.Duration `json:"max_delay"`       // Maximum delay, default 30 seconds
-	Multiplier     float64       `json:"multiplier"`      // Backoff multiplier, default 2.0
-	Jitter         bool          `json:"jitter"`          // Whether to add jitter, default true
-	RequestTimeout time.Duration `json:"request_timeout"` // Single request timeout, default 30 seconds
-	ConnectTimeout time.Duration `json:"connect_timeout"` // Connection timeout, default 10 seconds
-}
+// ResilienceConfig and defaults are sourced from providers; re-exported here to keep the public API small.
+type ResilienceConfig = providers.ResilienceConfig
 
-// DefaultResilienceConfig returns default resilience configuration
 func DefaultResilienceConfig() ResilienceConfig {
-	return ResilienceConfig{
-		MaxRetries:     0,
-		InitialDelay:   1 * time.Second,
-		MaxDelay:       30 * time.Second,
-		Multiplier:     2.0,
-		Jitter:         true,
-		RequestTimeout: 30 * time.Second,
-		ConnectTimeout: 10 * time.Second,
-	}
+	return providers.DefaultResilienceConfig()
 }
 
 // ResilientHTTPClient wraps http.Client with retry logic
