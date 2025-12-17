@@ -44,9 +44,9 @@ type LiteLLMError struct {
 
 func (e *LiteLLMError) Error() string {
 	if e.Provider != "" {
-		return fmt.Sprintf("[%s:%s] %s", e.Provider, e.Type, e.Message)
+		return fmt.Sprintf("[litellm:%s:%s] %s", e.Provider, e.Type, e.Message)
 	}
-	return fmt.Sprintf("[%s] %s", e.Type, e.Message)
+	return fmt.Sprintf("[litellm:%s] %s", e.Type, e.Message)
 }
 
 func (e *LiteLLMError) Unwrap() error { return e.Cause }

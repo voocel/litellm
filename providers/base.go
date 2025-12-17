@@ -119,14 +119,12 @@ func (p *BaseProvider) ValidateRequest(req *Request) error {
 		return fmt.Errorf("%s: at least one message is required", p.name)
 	}
 
-	// Validate temperature if set
 	if req.Temperature != nil {
 		if *req.Temperature < 0 || *req.Temperature > 2 {
 			return fmt.Errorf("%s: temperature must be between 0 and 2, got %f", p.name, *req.Temperature)
 		}
 	}
 
-	// Validate max tokens if set
 	if req.MaxTokens != nil && *req.MaxTokens <= 0 {
 		return fmt.Errorf("%s: max_tokens must be positive, got %d", p.name, *req.MaxTokens)
 	}

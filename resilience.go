@@ -83,12 +83,16 @@ func (c *ResilientHTTPClient) Do(req *http.Request) (*http.Response, error) {
 			}
 		}
 
-		// Store error for potential retry
 		if err != nil {
 			lastErr = err
 		} else {
-			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-			_ = resp.Body.Close() // Close response body before retry
+			bodyBytes, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if readErr != nil || len(bodyBytes) == 0 {
+				lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			} else {
+				lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+			}
 		}
 
 		// Don't retry on last attempt or non-retryable errors
@@ -120,7 +124,7 @@ func (c *ResilientHTTPClient) Do(req *http.Request) (*http.Response, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("request failed after %d attempts: %w", c.config.MaxRetries+1, lastErr)
+	return nil, lastErr
 }
 
 // calculateDelay calculates retry delay with exponential backoff and jitter

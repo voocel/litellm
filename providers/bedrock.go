@@ -368,13 +368,13 @@ func (p *BedrockProvider) Chat(ctx context.Context, req *Request) (*Response, er
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("bedrock: request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("bedrock: API error %d: %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var bedrockResp bedrockResponse
@@ -412,13 +412,13 @@ func (p *BedrockProvider) Stream(ctx context.Context, req *Request) (StreamReade
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("bedrock: request failed: %w", err)
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("bedrock: API error %d: %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	return &bedrockStreamReader{

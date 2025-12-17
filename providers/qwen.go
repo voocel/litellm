@@ -122,16 +122,13 @@ func (p *QwenProvider) Chat(ctx context.Context, req *Request) (*Response, error
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("qwen: request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("qwen: API error %d (failed to read response body: %w)", resp.StatusCode, err)
-		}
-		return nil, fmt.Errorf("qwen: API error %d: %s", resp.StatusCode, string(body))
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	var qwenResp qwenResponse
@@ -236,16 +233,13 @@ func (p *QwenProvider) Stream(ctx context.Context, req *Request) (StreamReader, 
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("qwen: request failed: %w", err)
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("qwen: API error %d (failed to read response body: %w)", resp.StatusCode, err)
-		}
-		return nil, fmt.Errorf("qwen: API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	return &qwenStreamReader{

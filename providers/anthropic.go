@@ -229,16 +229,13 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic: request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("anthropic: failed to read error response: %w", err)
-		}
-		return nil, fmt.Errorf("anthropic: API error %d: %s", resp.StatusCode, string(body))
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	var anthropicResp anthropicResponse
@@ -443,16 +440,13 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic: request failed: %w", err)
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("anthropic: failed to read stream error response: %w", err)
-		}
-		return nil, fmt.Errorf("anthropic: API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	return &anthropicStreamReader{

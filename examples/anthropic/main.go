@@ -28,6 +28,7 @@ func main() {
 	fmt.Println("\n1. Basic Chat Example")
 	fmt.Println("---------------------")
 	basicChat(client)
+	return
 
 	// Example 2: Streaming Chat
 	fmt.Println("\n2. Streaming Chat Example")
@@ -53,7 +54,7 @@ func main() {
 // Example 1: Basic Chat
 func basicChat(client *litellm.Client) {
 	request := &litellm.Request{
-		Model: "claude-haiku-3.5",
+		Model: "claude-haiku-4-5-20251001",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
@@ -95,7 +96,7 @@ Always explain the reasoning behind your recommendations and consider the broade
 	// First request - creates cache
 	fmt.Println("First request (creates cache):")
 	request1 := &litellm.Request{
-		Model: "claude-4-sonnet",
+		Model: "claude-sonnet-4-5-20250929",
 		Messages: []litellm.Message{
 			{
 				Role:         "system",
@@ -127,7 +128,7 @@ Always explain the reasoning behind your recommendations and consider the broade
 	// Second request - uses cache
 	fmt.Println("\nSecond request (uses cache):")
 	request2 := &litellm.Request{
-		Model: "claude-4-sonnet",
+		Model: "claude-sonnet-4-5-20250929",
 		Messages: []litellm.Message{
 			{
 				Role:         "system",
@@ -160,7 +161,7 @@ Always explain the reasoning behind your recommendations and consider the broade
 // Example 2: Streaming Chat
 func streamingChat(client *litellm.Client) {
 	request := &litellm.Request{
-		Model: "claude-haiku-3.5",
+		Model: "claude-haiku-4-5-20251001",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
@@ -229,7 +230,7 @@ func functionCalling(client *litellm.Client) {
 	}
 
 	request := &litellm.Request{
-		Model: "claude-sonnet-4",
+		Model: "claude-sonnet-4-5-20250929",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
@@ -287,7 +288,7 @@ func jsonSchemaExample(client *litellm.Client) {
 	}
 
 	request := &litellm.Request{
-		Model: "claude-sonnet-4",
+		Model: "claude-sonnet-4-5-20250929",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",

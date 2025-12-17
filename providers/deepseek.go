@@ -104,16 +104,13 @@ func (p *DeepSeekProvider) Chat(ctx context.Context, req *Request) (*Response, e
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("deepseek: request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("deepseek: failed to read error response: %w", err)
-		}
-		return nil, fmt.Errorf("deepseek: API error %d: %s", resp.StatusCode, string(body))
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	var deepseekResp deepseekResponse
@@ -218,16 +215,13 @@ func (p *DeepSeekProvider) Stream(ctx context.Context, req *Request) (StreamRead
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("deepseek: request failed: %w", err)
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("deepseek: failed to read stream error response: %w", err)
-		}
-		return nil, fmt.Errorf("deepseek: API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	return &deepseekStreamReader{

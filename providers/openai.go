@@ -421,16 +421,13 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("openai: request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("openai: failed to read error response: %w", err)
-		}
-		return nil, fmt.Errorf("openai: API error %d: %s", resp.StatusCode, string(body))
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	respBody, err := io.ReadAll(resp.Body)
@@ -510,16 +507,13 @@ func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Requ
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("openai: responses request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("openai: failed to read responses API error: %w", err)
-		}
-		return nil, fmt.Errorf("openai: responses API error %d: %s", resp.StatusCode, string(body))
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	var responsesResp responsesAPIResponse
@@ -711,16 +705,13 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("openai: request failed: %w", err)
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("openai: failed to read stream error response: %w", err)
-		}
-		return nil, fmt.Errorf("openai: API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -759,16 +750,13 @@ func (p *OpenAIProvider) streamWithResponsesAPI(ctx context.Context, req *Reques
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("openai: responses request failed: %w", err)
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("openai: failed to read responses stream error: %w", err)
-		}
-		return nil, fmt.Errorf("openai: responses API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	scanner := bufio.NewScanner(resp.Body)

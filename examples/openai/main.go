@@ -16,7 +16,7 @@ func main() {
 		log.Fatal("OPENAI_API_KEY environment variable is required")
 	}
 
-	client, err := litellm.New(litellm.WithOpenAI(apiKey, os.Getenv("aOPENAI_BASE_URL")))
+	client, err := litellm.New(litellm.WithOpenAI(apiKey, os.Getenv("OPENAI_BASE_URL")))
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
 	}
@@ -53,7 +53,7 @@ func main() {
 // Example 1: Basic Chat
 func basicChat(client *litellm.Client) {
 	request := &litellm.Request{
-		Model: "gpt-5",
+		Model: "anthropic/claude-haiku-4.5",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
