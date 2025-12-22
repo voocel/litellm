@@ -71,92 +71,10 @@ func (p *OpenRouterProvider) Models() []ModelInfo {
 }
 
 func (p *OpenRouterProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
-	if err := p.Validate(); err != nil {
+	httpReq, err := p.buildHTTPRequest(ctx, req, false)
+	if err != nil {
 		return nil, err
 	}
-
-	if err := p.BaseProvider.ValidateRequest(req); err != nil {
-		return nil, err
-	}
-
-	// Build OpenRouter request
-	openRouterReq := map[string]any{
-		"model":    req.Model,
-		"messages": p.convertMessages(req.Messages),
-	}
-
-	// Add optional parameters
-	if req.MaxTokens != nil {
-		openRouterReq["max_tokens"] = *req.MaxTokens
-	}
-	if req.Temperature != nil {
-		openRouterReq["temperature"] = *req.Temperature
-	}
-	if len(req.Tools) > 0 {
-		openRouterReq["tools"] = p.convertTools(req.Tools)
-	}
-	if req.ToolChoice != nil {
-		openRouterReq["tool_choice"] = req.ToolChoice
-	}
-
-	// Handle response format
-	if req.ResponseFormat != nil {
-		responseFormat := map[string]any{"type": req.ResponseFormat.Type}
-		if req.ResponseFormat.JSONSchema != nil {
-			schema := req.ResponseFormat.JSONSchema.Schema
-
-			// For strict mode or when using OpenAI models through OpenRouter,
-			// ensure all objects have additionalProperties: false
-			if req.ResponseFormat.JSONSchema.Strict != nil && *req.ResponseFormat.JSONSchema.Strict {
-				schema = p.ensureStrictSchema(schema)
-			}
-
-			responseFormat["json_schema"] = map[string]any{
-				"name":        req.ResponseFormat.JSONSchema.Name,
-				"description": req.ResponseFormat.JSONSchema.Description,
-				"schema":      schema,
-			}
-			if req.ResponseFormat.JSONSchema.Strict != nil {
-				responseFormat["json_schema"].(map[string]any)["strict"] = *req.ResponseFormat.JSONSchema.Strict
-			}
-		}
-		openRouterReq["response_format"] = responseFormat
-	}
-
-	// Handle reasoning parameters (for o1 models via OpenRouter)
-	if req.ReasoningEffort != "" || req.ReasoningSummary != "" {
-		reasoning := map[string]any{}
-		if req.MaxTokens != nil {
-			// Allocate reasonable tokens for reasoning
-			totalTokens := *req.MaxTokens
-			reasoningTokens := 1024
-			if totalTokens >= 2048 {
-				reasoningTokens = int(float64(totalTokens) * 0.3)
-				if reasoningTokens < 1024 {
-					reasoningTokens = 1024
-				}
-			}
-			reasoning["max_tokens"] = reasoningTokens
-		}
-		openRouterReq["reasoning"] = reasoning
-	}
-
-	// Send request
-	body, err := json.Marshal(openRouterReq)
-	if err != nil {
-		return nil, fmt.Errorf("openrouter: marshal request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/chat/completions", p.Config().BaseURL)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("openrouter: create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
-	httpReq.Header.Set("HTTP-Referer", "https://github.com/voocel/litellm") // OpenRouter requires referer
-	httpReq.Header.Set("X-Title", "litellm")
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -174,7 +92,6 @@ func (p *OpenRouterProvider) Chat(ctx context.Context, req *Request) (*Response,
 		return nil, fmt.Errorf("openrouter: decode response: %w", err)
 	}
 
-	// Build response
 	response := &Response{
 		Model:    openRouterResp.Model,
 		Provider: "openrouter",
@@ -197,7 +114,6 @@ func (p *OpenRouterProvider) Chat(ctx context.Context, req *Request) (*Response,
 	if len(openRouterResp.Choices) > 0 {
 		choice := openRouterResp.Choices[0]
 
-		// Handle content (can be string or array)
 		if content, ok := choice.Message.Content.(string); ok {
 			response.Content = content
 		} else if contentArray, ok := choice.Message.Content.([]interface{}); ok {
@@ -212,7 +128,6 @@ func (p *OpenRouterProvider) Chat(ctx context.Context, req *Request) (*Response,
 
 		response.FinishReason = choice.FinishReason
 
-		// Handle tool calls
 		if len(choice.Message.ToolCalls) > 0 {
 			for _, toolCall := range choice.Message.ToolCalls {
 				response.ToolCalls = append(response.ToolCalls, ToolCall{
@@ -226,12 +141,11 @@ func (p *OpenRouterProvider) Chat(ctx context.Context, req *Request) (*Response,
 			}
 		}
 
-		// Handle reasoning content (for o1 models via OpenRouter)
 		if choice.Message.Reasoning != "" {
 			response.Reasoning = &ReasoningData{
 				Content:    choice.Message.Reasoning,
 				Summary:    "OpenRouter reasoning process",
-				TokensUsed: response.Usage.ReasoningTokens, // Use the already calculated value
+				TokensUsed: response.Usage.ReasoningTokens,
 			}
 		}
 	}
@@ -240,43 +154,10 @@ func (p *OpenRouterProvider) Chat(ctx context.Context, req *Request) (*Response,
 }
 
 func (p *OpenRouterProvider) Stream(ctx context.Context, req *Request) (StreamReader, error) {
-	if err := p.Validate(); err != nil {
+	httpReq, err := p.buildHTTPRequest(ctx, req, true)
+	if err != nil {
 		return nil, err
 	}
-
-	// Build request (similar to Chat but with stream: true)
-	openRouterReq := map[string]any{
-		"model":    req.Model,
-		"messages": p.convertMessages(req.Messages),
-		"stream":   true,
-	}
-
-	if req.MaxTokens != nil {
-		openRouterReq["max_tokens"] = *req.MaxTokens
-	}
-	if req.Temperature != nil {
-		openRouterReq["temperature"] = *req.Temperature
-	}
-	if len(req.Tools) > 0 {
-		openRouterReq["tools"] = p.convertTools(req.Tools)
-	}
-
-	body, err := json.Marshal(openRouterReq)
-	if err != nil {
-		return nil, fmt.Errorf("openrouter: marshal request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/chat/completions", p.Config().BaseURL)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("openrouter: create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
-	httpReq.Header.Set("Accept", "text/event-stream")
-	httpReq.Header.Set("HTTP-Referer", "https://github.com/voocel/litellm")
-	httpReq.Header.Set("X-Title", "litellm")
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -294,6 +175,91 @@ func (p *OpenRouterProvider) Stream(ctx context.Context, req *Request) (StreamRe
 		scanner:  bufio.NewScanner(resp.Body),
 		provider: "openrouter",
 	}, nil
+}
+
+func (p *OpenRouterProvider) buildHTTPRequest(ctx context.Context, req *Request, stream bool) (*http.Request, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	if err := p.BaseProvider.ValidateRequest(req); err != nil {
+		return nil, err
+	}
+
+	openRouterReq := map[string]any{
+		"model":    req.Model,
+		"messages": p.convertMessages(req.Messages),
+	}
+	if stream {
+		openRouterReq["stream"] = true
+	}
+	if req.MaxTokens != nil {
+		openRouterReq["max_tokens"] = *req.MaxTokens
+	}
+	if req.Temperature != nil {
+		openRouterReq["temperature"] = *req.Temperature
+	}
+	if len(req.Tools) > 0 {
+		openRouterReq["tools"] = p.convertTools(req.Tools)
+	}
+	if req.ToolChoice != nil {
+		openRouterReq["tool_choice"] = req.ToolChoice
+	}
+
+	if req.ResponseFormat != nil {
+		responseFormat := map[string]any{"type": req.ResponseFormat.Type}
+		if req.ResponseFormat.JSONSchema != nil {
+			schema := req.ResponseFormat.JSONSchema.Schema
+			if req.ResponseFormat.JSONSchema.Strict != nil && *req.ResponseFormat.JSONSchema.Strict {
+				schema = p.ensureStrictSchema(schema)
+			}
+			responseFormat["json_schema"] = map[string]any{
+				"name":        req.ResponseFormat.JSONSchema.Name,
+				"description": req.ResponseFormat.JSONSchema.Description,
+				"schema":      schema,
+			}
+			if req.ResponseFormat.JSONSchema.Strict != nil {
+				responseFormat["json_schema"].(map[string]any)["strict"] = *req.ResponseFormat.JSONSchema.Strict
+			}
+		}
+		openRouterReq["response_format"] = responseFormat
+	}
+
+	if req.ReasoningEffort != "" || req.ReasoningSummary != "" {
+		reasoning := map[string]any{}
+		if req.MaxTokens != nil {
+			totalTokens := *req.MaxTokens
+			reasoningTokens := 1024
+			if totalTokens >= 2048 {
+				reasoningTokens = int(float64(totalTokens) * 0.3)
+				if reasoningTokens < 1024 {
+					reasoningTokens = 1024
+				}
+			}
+			reasoning["max_tokens"] = reasoningTokens
+		}
+		openRouterReq["reasoning"] = reasoning
+	}
+
+	body, err := json.Marshal(openRouterReq)
+	if err != nil {
+		return nil, fmt.Errorf("openrouter: marshal request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/chat/completions", p.Config().BaseURL)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("openrouter: create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
+	httpReq.Header.Set("HTTP-Referer", "https://github.com/voocel/litellm")
+	httpReq.Header.Set("X-Title", "litellm")
+	if stream {
+		httpReq.Header.Set("Accept", "text/event-stream")
+	}
+
+	return httpReq, nil
 }
 
 // convertMessages converts standard messages to OpenRouter format

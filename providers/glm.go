@@ -166,9 +166,23 @@ func (p *GLMProvider) buildHTTPRequest(ctx context.Context, req *Request, stream
 		return nil, err
 	}
 
+	messages := req.Messages
+	if req.ResponseFormat != nil && req.ResponseFormat.Type == "json_schema" && req.ResponseFormat.JSONSchema != nil {
+		messages = make([]Message, len(req.Messages))
+		copy(messages, req.Messages)
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == "user" {
+				msg := messages[i]
+				msg.Content = p.addJSONSchemaInstructions(msg.Content, req.ResponseFormat)
+				messages[i] = msg
+				break
+			}
+		}
+	}
+
 	glmReq := map[string]any{
 		"model":    req.Model,
-		"messages": ConvertMessages(req.Messages),
+		"messages": ConvertMessages(messages),
 	}
 	if stream {
 		glmReq["stream"] = true
