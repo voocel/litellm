@@ -66,59 +66,10 @@ func (p *QwenProvider) Models() []ModelInfo {
 }
 
 func (p *QwenProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
-	if err := p.Validate(); err != nil {
+	httpReq, err := p.buildHTTPRequest(ctx, req, false)
+	if err != nil {
 		return nil, err
 	}
-
-	if err := p.BaseProvider.ValidateRequest(req); err != nil {
-		return nil, err
-	}
-
-	// Build Qwen request using map[string]any for flexibility
-	qwenReq := map[string]any{
-		"model": req.Model,
-		"input": map[string]any{
-			"messages": ConvertMessages(req.Messages),
-		},
-	}
-
-	// Build parameters if needed
-	params := make(map[string]any)
-	if req.MaxTokens != nil {
-		params["max_tokens"] = *req.MaxTokens
-	}
-	if req.Temperature != nil {
-		params["temperature"] = *req.Temperature
-	}
-	if len(req.Tools) > 0 {
-		params["tools"] = ConvertTools(req.Tools)
-	}
-	if req.ResponseFormat != nil && req.ResponseFormat.Type == "json_object" {
-		params["result_format"] = "message"
-	}
-
-	if len(params) > 0 {
-		qwenReq["parameters"] = params
-	}
-
-	// Enable thinking for reasoning-capable models
-	if p.hasCapability(req.Model, "reasoning") {
-		qwenReq["enable_thinking"] = true
-	}
-
-	body, err := json.Marshal(qwenReq)
-	if err != nil {
-		return nil, fmt.Errorf("qwen: marshal request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/services/aigc/text-generation/generation", p.Config().BaseURL)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("qwen: create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -128,7 +79,7 @@ func (p *QwenProvider) Chat(ctx context.Context, req *Request) (*Response, error
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, NewHTTPError("qwen", resp.StatusCode, string(body))
 	}
 
 	var qwenResp qwenResponse
@@ -184,13 +135,40 @@ func (p *QwenProvider) Chat(ctx context.Context, req *Request) (*Response, error
 }
 
 func (p *QwenProvider) Stream(ctx context.Context, req *Request) (StreamReader, error) {
-	if err := p.Validate(); err != nil {
+	httpReq, err := p.buildHTTPRequest(ctx, req, true)
+	if err != nil {
 		return nil, err
 	}
 
-	// Build request using map[string]any for flexibility
-	params := map[string]any{
-		"incremental_output": true, // Enable streaming
+	resp, err := p.HTTPClient().Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, NewHTTPError("qwen", resp.StatusCode, string(body))
+	}
+
+	return &qwenStreamReader{
+		resp:     resp,
+		scanner:  bufio.NewScanner(resp.Body),
+		provider: "qwen",
+	}, nil
+}
+
+func (p *QwenProvider) buildHTTPRequest(ctx context.Context, req *Request, stream bool) (*http.Request, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	if err := p.BaseProvider.ValidateRequest(req); err != nil {
+		return nil, err
+	}
+
+	params := make(map[string]any)
+	if stream {
+		params["incremental_output"] = true
 	}
 	if req.MaxTokens != nil {
 		params["max_tokens"] = *req.MaxTokens
@@ -201,16 +179,19 @@ func (p *QwenProvider) Stream(ctx context.Context, req *Request) (StreamReader, 
 	if len(req.Tools) > 0 {
 		params["tools"] = ConvertTools(req.Tools)
 	}
+	if req.ResponseFormat != nil && req.ResponseFormat.Type == "json_object" {
+		params["result_format"] = "message"
+	}
 
 	qwenReq := map[string]any{
 		"model": req.Model,
 		"input": map[string]any{
 			"messages": ConvertMessages(req.Messages),
 		},
-		"parameters": params,
 	}
-
-	// Enable thinking for reasoning models
+	if len(params) > 0 {
+		qwenReq["parameters"] = params
+	}
 	if p.hasCapability(req.Model, "reasoning") {
 		qwenReq["enable_thinking"] = true
 	}
@@ -228,28 +209,14 @@ func (p *QwenProvider) Stream(ctx context.Context, req *Request) (StreamReader, 
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
-	httpReq.Header.Set("Accept", "text/event-stream")
-	httpReq.Header.Set("X-DashScope-SSE", "enable")
-
-	resp, err := p.HTTPClient().Do(httpReq)
-	if err != nil {
-		return nil, err
+	if stream {
+		httpReq.Header.Set("Accept", "text/event-stream")
+		httpReq.Header.Set("X-DashScope-SSE", "enable")
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	return &qwenStreamReader{
-		resp:     resp,
-		scanner:  bufio.NewScanner(resp.Body),
-		provider: "qwen",
-	}, nil
+	return httpReq, nil
 }
 
-// hasCapability checks if a model has a specific capability
 func (p *QwenProvider) hasCapability(modelID, capability string) bool {
 	for _, m := range p.Models() {
 		if m.ID == modelID {

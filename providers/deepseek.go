@@ -53,54 +53,10 @@ func (p *DeepSeekProvider) Models() []ModelInfo {
 }
 
 func (p *DeepSeekProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
-	if err := p.Validate(); err != nil {
+	httpReq, err := p.buildHTTPRequest(ctx, req, false)
+	if err != nil {
 		return nil, err
 	}
-
-	// Validate request parameters
-	if err := p.BaseProvider.ValidateRequest(req); err != nil {
-		return nil, err
-	}
-
-	// Build DeepSeek request (OpenAI compatible)
-	deepseekReq := map[string]any{
-		"model":    req.Model,
-		"messages": ConvertMessages(req.Messages),
-	}
-
-	if req.MaxTokens != nil {
-		deepseekReq["max_tokens"] = *req.MaxTokens
-	}
-	if req.Temperature != nil {
-		deepseekReq["temperature"] = *req.Temperature
-	}
-	if len(req.Tools) > 0 {
-		deepseekReq["tools"] = ConvertTools(req.Tools)
-	}
-	if req.ToolChoice != nil {
-		deepseekReq["tool_choice"] = req.ToolChoice
-	}
-
-	// Handle response format
-	if req.ResponseFormat != nil {
-		if req.ResponseFormat.Type == "json_object" {
-			deepseekReq["response_format"] = map[string]string{"type": "json_object"}
-		}
-	}
-
-	body, err := json.Marshal(deepseekReq)
-	if err != nil {
-		return nil, fmt.Errorf("deepseek: marshal request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/chat/completions", p.Config().BaseURL)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("deepseek: create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -110,7 +66,7 @@ func (p *DeepSeekProvider) Chat(ctx context.Context, req *Request) (*Response, e
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, NewHTTPError("deepseek", resp.StatusCode, string(body))
 	}
 
 	var deepseekResp deepseekResponse
@@ -177,17 +133,44 @@ func (p *DeepSeekProvider) Chat(ctx context.Context, req *Request) (*Response, e
 }
 
 func (p *DeepSeekProvider) Stream(ctx context.Context, req *Request) (StreamReader, error) {
-	if err := p.Validate(); err != nil {
+	httpReq, err := p.buildHTTPRequest(ctx, req, true)
+	if err != nil {
 		return nil, err
 	}
 
-	// Build request (similar to Chat but with stream: true)
+	resp, err := p.HTTPClient().Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, NewHTTPError("deepseek", resp.StatusCode, string(body))
+	}
+
+	return &deepseekStreamReader{
+		resp:     resp,
+		scanner:  bufio.NewScanner(resp.Body),
+		provider: "deepseek",
+	}, nil
+}
+
+func (p *DeepSeekProvider) buildHTTPRequest(ctx context.Context, req *Request, stream bool) (*http.Request, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	if err := p.BaseProvider.ValidateRequest(req); err != nil {
+		return nil, err
+	}
+
 	deepseekReq := map[string]any{
 		"model":    req.Model,
 		"messages": ConvertMessages(req.Messages),
-		"stream":   true,
 	}
-
+	if stream {
+		deepseekReq["stream"] = true
+	}
 	if req.MaxTokens != nil {
 		deepseekReq["max_tokens"] = *req.MaxTokens
 	}
@@ -196,6 +179,12 @@ func (p *DeepSeekProvider) Stream(ctx context.Context, req *Request) (StreamRead
 	}
 	if len(req.Tools) > 0 {
 		deepseekReq["tools"] = ConvertTools(req.Tools)
+	}
+	if req.ToolChoice != nil {
+		deepseekReq["tool_choice"] = req.ToolChoice
+	}
+	if req.ResponseFormat != nil && req.ResponseFormat.Type == "json_object" {
+		deepseekReq["response_format"] = map[string]string{"type": "json_object"}
 	}
 
 	body, err := json.Marshal(deepseekReq)
@@ -211,24 +200,11 @@ func (p *DeepSeekProvider) Stream(ctx context.Context, req *Request) (StreamRead
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
-	httpReq.Header.Set("Accept", "text/event-stream")
-
-	resp, err := p.HTTPClient().Do(httpReq)
-	if err != nil {
-		return nil, err
+	if stream {
+		httpReq.Header.Set("Accept", "text/event-stream")
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	return &deepseekStreamReader{
-		resp:     resp,
-		scanner:  bufio.NewScanner(resp.Body),
-		provider: "deepseek",
-	}, nil
+	return httpReq, nil
 }
 
 // DeepSeek API structures (OpenAI compatible)

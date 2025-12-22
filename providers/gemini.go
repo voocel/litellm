@@ -275,7 +275,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, NewHTTPError("gemini", resp.StatusCode, string(body))
 	}
 
 	var geminiResp geminiResponse
@@ -420,7 +420,7 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, NewHTTPError("gemini", resp.StatusCode, string(body))
 	}
 
 	return &geminiStreamReader{

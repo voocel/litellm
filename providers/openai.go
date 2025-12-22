@@ -427,7 +427,7 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, NewHTTPError("openai", resp.StatusCode, string(body))
 	}
 
 	respBody, err := io.ReadAll(resp.Body)
@@ -513,7 +513,7 @@ func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Requ
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, NewHTTPError("openai", resp.StatusCode, string(body))
 	}
 
 	var responsesResp responsesAPIResponse
@@ -711,7 +711,7 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, NewHTTPError("openai", resp.StatusCode, string(body))
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -756,7 +756,7 @@ func (p *OpenAIProvider) streamWithResponsesAPI(ctx context.Context, req *Reques
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, NewHTTPError("openai", resp.StatusCode, string(body))
 	}
 
 	scanner := bufio.NewScanner(resp.Body)

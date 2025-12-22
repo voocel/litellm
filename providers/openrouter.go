@@ -166,7 +166,7 @@ func (p *OpenRouterProvider) Chat(ctx context.Context, req *Request) (*Response,
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, NewHTTPError("openrouter", resp.StatusCode, string(body))
 	}
 
 	var openRouterResp openRouterResponse
@@ -286,7 +286,7 @@ func (p *OpenRouterProvider) Stream(ctx context.Context, req *Request) (StreamRe
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, NewHTTPError("openrouter", resp.StatusCode, string(body))
 	}
 
 	return &openRouterStreamReader{

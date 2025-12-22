@@ -81,151 +81,10 @@ func (p *AnthropicProvider) Models() []ModelInfo {
 }
 
 func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
-	if err := p.Validate(); err != nil {
+	httpReq, err := p.buildHTTPRequest(ctx, req, false)
+	if err != nil {
 		return nil, err
 	}
-
-	if err := p.BaseProvider.ValidateRequest(req); err != nil {
-		return nil, err
-	}
-
-	modelName := req.Model
-
-	anthropicReq := anthropicRequest{
-		Model:         modelName,
-		MaxTokens:     4096,
-		Stream:        false,
-		Temperature:   req.Temperature,
-		StopSequences: req.Stop, // Convert Stop to stop_sequences for Anthropic
-		ToolChoice:    req.ToolChoice,
-	}
-
-	if req.MaxTokens != nil {
-		anthropicReq.MaxTokens = *req.MaxTokens
-	}
-
-	// Convert tool definitions to Anthropic format
-	if len(req.Tools) > 0 {
-		anthropicReq.Tools = make([]anthropicTool, 0, len(req.Tools))
-		for _, tool := range req.Tools {
-			var inputSchema map[string]any
-			if params, ok := tool.Function.Parameters.(map[string]any); ok {
-				inputSchema = params
-			} else {
-				jsonBytes, err := json.Marshal(tool.Function.Parameters)
-				if err != nil {
-					return nil, fmt.Errorf("anthropic: failed to marshal tool parameters for '%s': %w", tool.Function.Name, err)
-				}
-				if err := json.Unmarshal(jsonBytes, &inputSchema); err != nil {
-					return nil, fmt.Errorf("anthropic: invalid tool parameters for '%s': %w", tool.Function.Name, err)
-				}
-			}
-
-			anthropicReq.Tools = append(anthropicReq.Tools, anthropicTool{
-				Name:        tool.Function.Name,
-				Description: tool.Function.Description,
-				InputSchema: inputSchema,
-			})
-		}
-	}
-
-	// Extract system messages and convert to Anthropic format
-	var systemContents []anthropicContent
-	var nonSystemMessages []Message
-
-	for _, msg := range req.Messages {
-		if msg.Role == "system" {
-			systemContent := anthropicContent{
-				Type: "text",
-				Text: msg.Content,
-			}
-			// Add cache control if specified for this system message
-			if msg.CacheControl != nil {
-				systemContent.CacheControl = &anthropicCacheControl{
-					Type: msg.CacheControl.Type,
-				}
-			}
-			systemContents = append(systemContents, systemContent)
-		} else {
-			nonSystemMessages = append(nonSystemMessages, msg)
-		}
-	}
-
-	// Set system prompt if any system messages were found
-	if len(systemContents) > 0 {
-		// If there's only one system message without cache control, use string format
-		if len(systemContents) == 1 && systemContents[0].CacheControl == nil {
-			anthropicReq.System = systemContents[0].Text
-		} else {
-			// Use array format for multiple messages or when cache control is needed
-			anthropicReq.System = systemContents
-		}
-	}
-
-	// Convert non-system messages to Anthropic format
-	anthropicReq.Messages = make([]anthropicMessage, len(nonSystemMessages))
-	for i, msg := range nonSystemMessages {
-		anthropicMsg := anthropicMessage{
-			Role: msg.Role,
-		}
-
-		content := msg.Content
-		// Handle structured output by adding instructions to the last user message
-		if req.ResponseFormat != nil && i == len(nonSystemMessages)-1 && msg.Role == "user" {
-			content = p.addStructuredOutputInstructions(content, req.ResponseFormat)
-		}
-
-		if content != "" {
-			textContent := anthropicContent{Type: "text", Text: content}
-
-			// Add cache control if specified for this message
-			if msg.CacheControl != nil {
-				textContent.CacheControl = &anthropicCacheControl{
-					Type: msg.CacheControl.Type,
-				}
-			}
-
-			anthropicMsg.Content = []anthropicContent{textContent}
-		}
-
-		// Handle tool calls (convert from OpenAI format to Anthropic format)
-		if len(msg.ToolCalls) > 0 {
-			for _, toolCall := range msg.ToolCalls {
-				var input map[string]any
-				if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &input); err != nil {
-					// Use empty map if arguments are invalid
-					input = map[string]any{}
-				}
-				anthropicMsg.Content = append(anthropicMsg.Content, anthropicContent{
-					Type:      "tool_use",
-					ToolUseID: toolCall.ID,
-					Name:      toolCall.Function.Name,
-					Input:     input,
-				})
-			}
-		}
-
-		// Handle tool responses
-		if msg.ToolCallID != "" {
-			anthropicMsg.Content = []anthropicContent{
-				{Type: "tool_result", ToolUseID: msg.ToolCallID, Text: msg.Content},
-			}
-		}
-
-		anthropicReq.Messages[i] = anthropicMsg
-	}
-
-	body, err := json.Marshal(anthropicReq)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.buildURL("/v1/messages"), bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("anthropic: create request: %w", err)
-	}
-
-	p.setHeaders(httpReq)
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -235,7 +94,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, NewHTTPError("anthropic", resp.StatusCode, string(body))
 	}
 
 	var anthropicResp anthropicResponse
@@ -297,42 +156,58 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 }
 
 func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamReader, error) {
-	if err := p.Validate(); err != nil {
+	httpReq, err := p.buildHTTPRequest(ctx, req, true)
+	if err != nil {
 		return nil, err
 	}
 
-	modelName := req.Model
+	resp, err := p.HTTPClient().Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, NewHTTPError("anthropic", resp.StatusCode, string(body))
+	}
+
+	return &anthropicStreamReader{
+		resp:     resp,
+		scanner:  bufio.NewScanner(resp.Body),
+		provider: "anthropic",
+	}, nil
+}
+
+func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, stream bool) (*http.Request, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	if err := p.BaseProvider.ValidateRequest(req); err != nil {
+		return nil, err
+	}
+
+	maxTokens := 65536
+	if req.MaxTokens != nil {
+		maxTokens = *req.MaxTokens
+	}
 
 	anthropicReq := anthropicRequest{
-		Model:         modelName,
-		MaxTokens:     4096,
-		Stream:        true,
+		Model:         req.Model,
+		MaxTokens:     maxTokens,
+		Stream:        stream,
 		Temperature:   req.Temperature,
-		StopSequences: req.Stop, // Convert Stop to stop_sequences for Anthropic
+		StopSequences: req.Stop,
 		ToolChoice:    req.ToolChoice,
 	}
 
-	if req.MaxTokens != nil {
-		anthropicReq.MaxTokens = *req.MaxTokens
-	}
-
-	// Convert tool definitions (same as Chat method)
 	if len(req.Tools) > 0 {
 		anthropicReq.Tools = make([]anthropicTool, 0, len(req.Tools))
 		for _, tool := range req.Tools {
-			var inputSchema map[string]any
-			if params, ok := tool.Function.Parameters.(map[string]any); ok {
-				inputSchema = params
-			} else {
-				jsonBytes, err := json.Marshal(tool.Function.Parameters)
-				if err != nil {
-					return nil, fmt.Errorf("anthropic: failed to marshal tool parameters for '%s': %w", tool.Function.Name, err)
-				}
-				if err := json.Unmarshal(jsonBytes, &inputSchema); err != nil {
-					return nil, fmt.Errorf("anthropic: invalid tool parameters for '%s': %w", tool.Function.Name, err)
-				}
+			inputSchema, err := p.convertToolParameters(tool)
+			if err != nil {
+				return nil, err
 			}
-
 			anthropicReq.Tools = append(anthropicReq.Tools, anthropicTool{
 				Name:        tool.Function.Name,
 				Description: tool.Function.Description,
@@ -341,90 +216,7 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 		}
 	}
 
-	// Extract system messages and convert to Anthropic format (same as Chat method)
-	var systemContents []anthropicContent
-	var nonSystemMessages []Message
-
-	for _, msg := range req.Messages {
-		if msg.Role == "system" {
-			systemContent := anthropicContent{
-				Type: "text",
-				Text: msg.Content,
-			}
-			// Add cache control if specified for this system message
-			if msg.CacheControl != nil {
-				systemContent.CacheControl = &anthropicCacheControl{
-					Type: msg.CacheControl.Type,
-				}
-			}
-			systemContents = append(systemContents, systemContent)
-		} else {
-			nonSystemMessages = append(nonSystemMessages, msg)
-		}
-	}
-
-	// Set system prompt if any system messages were found
-	if len(systemContents) > 0 {
-		// If there's only one system message without cache control, use string format
-		if len(systemContents) == 1 && systemContents[0].CacheControl == nil {
-			anthropicReq.System = systemContents[0].Text
-		} else {
-			// Use array format for multiple messages or when cache control is needed
-			anthropicReq.System = systemContents
-		}
-	}
-
-	// Convert non-system messages to Anthropic format
-	anthropicReq.Messages = make([]anthropicMessage, len(nonSystemMessages))
-	for i, msg := range nonSystemMessages {
-		anthropicMsg := anthropicMessage{
-			Role: msg.Role,
-		}
-
-		content := msg.Content
-		if req.ResponseFormat != nil && i == len(nonSystemMessages)-1 && msg.Role == "user" {
-			content = p.addStructuredOutputInstructions(content, req.ResponseFormat)
-		}
-
-		if content != "" {
-			textContent := anthropicContent{Type: "text", Text: content}
-
-			// Add cache control if specified for this message
-			if msg.CacheControl != nil {
-				textContent.CacheControl = &anthropicCacheControl{
-					Type: msg.CacheControl.Type,
-				}
-			}
-
-			anthropicMsg.Content = []anthropicContent{textContent}
-		}
-
-		// Handle tool calls
-		if len(msg.ToolCalls) > 0 {
-			for _, toolCall := range msg.ToolCalls {
-				var input map[string]any
-				if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &input); err != nil {
-					// Use empty map if arguments are invalid
-					input = map[string]any{}
-				}
-				anthropicMsg.Content = append(anthropicMsg.Content, anthropicContent{
-					Type:      "tool_use",
-					ToolUseID: toolCall.ID,
-					Name:      toolCall.Function.Name,
-					Input:     input,
-				})
-			}
-		}
-
-		// Handle tool responses
-		if msg.ToolCallID != "" {
-			anthropicMsg.Content = []anthropicContent{
-				{Type: "tool_result", ToolUseID: msg.ToolCallID, Text: msg.Content},
-			}
-		}
-
-		anthropicReq.Messages[i] = anthropicMsg
-	}
+	anthropicReq.System, anthropicReq.Messages = p.convertMessages(req)
 
 	body, err := json.Marshal(anthropicReq)
 	if err != nil {
@@ -437,23 +229,91 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 	}
 
 	p.setHeaders(httpReq)
+	return httpReq, nil
+}
 
-	resp, err := p.HTTPClient().Do(httpReq)
+func (p *AnthropicProvider) convertToolParameters(tool Tool) (map[string]any, error) {
+	if params, ok := tool.Function.Parameters.(map[string]any); ok {
+		return params, nil
+	}
+	jsonBytes, err := json.Marshal(tool.Function.Parameters)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("anthropic: failed to marshal tool parameters for '%s': %w", tool.Function.Name, err)
+	}
+	var inputSchema map[string]any
+	if err := json.Unmarshal(jsonBytes, &inputSchema); err != nil {
+		return nil, fmt.Errorf("anthropic: invalid tool parameters for '%s': %w", tool.Function.Name, err)
+	}
+	return inputSchema, nil
+}
+
+func (p *AnthropicProvider) convertMessages(req *Request) (any, []anthropicMessage) {
+	var systemContents []anthropicContent
+	var nonSystemMessages []Message
+
+	for _, msg := range req.Messages {
+		if msg.Role == "system" {
+			systemContent := anthropicContent{Type: "text", Text: msg.Content}
+			if msg.CacheControl != nil {
+				systemContent.CacheControl = &anthropicCacheControl{Type: msg.CacheControl.Type}
+			}
+			systemContents = append(systemContents, systemContent)
+		} else {
+			nonSystemMessages = append(nonSystemMessages, msg)
+		}
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	var system any
+	if len(systemContents) == 1 && systemContents[0].CacheControl == nil {
+		system = systemContents[0].Text
+	} else if len(systemContents) > 0 {
+		system = systemContents
 	}
 
-	return &anthropicStreamReader{
-		resp:     resp,
-		scanner:  bufio.NewScanner(resp.Body),
-		provider: "anthropic",
-	}, nil
+	messages := make([]anthropicMessage, len(nonSystemMessages))
+	for i, msg := range nonSystemMessages {
+		messages[i] = p.convertSingleMessage(msg, req.ResponseFormat, i == len(nonSystemMessages)-1)
+	}
+
+	return system, messages
+}
+
+func (p *AnthropicProvider) convertSingleMessage(msg Message, respFormat *ResponseFormat, isLast bool) anthropicMessage {
+	anthropicMsg := anthropicMessage{Role: msg.Role}
+
+	content := msg.Content
+	if respFormat != nil && isLast && msg.Role == "user" {
+		content = p.addStructuredOutputInstructions(content, respFormat)
+	}
+
+	if content != "" {
+		textContent := anthropicContent{Type: "text", Text: content}
+		if msg.CacheControl != nil {
+			textContent.CacheControl = &anthropicCacheControl{Type: msg.CacheControl.Type}
+		}
+		anthropicMsg.Content = []anthropicContent{textContent}
+	}
+
+	for _, toolCall := range msg.ToolCalls {
+		var input map[string]any
+		if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &input); err != nil {
+			input = map[string]any{}
+		}
+		anthropicMsg.Content = append(anthropicMsg.Content, anthropicContent{
+			Type:      "tool_use",
+			ToolUseID: toolCall.ID,
+			Name:      toolCall.Function.Name,
+			Input:     input,
+		})
+	}
+
+	if msg.ToolCallID != "" {
+		anthropicMsg.Content = []anthropicContent{
+			{Type: "tool_result", ToolUseID: msg.ToolCallID, Text: msg.Content},
+		}
+	}
+
+	return anthropicMsg
 }
 
 func (p *AnthropicProvider) buildURL(endpoint string) string {

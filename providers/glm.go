@@ -68,78 +68,10 @@ func (p *GLMProvider) Models() []ModelInfo {
 }
 
 func (p *GLMProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
-	if err := p.Validate(); err != nil {
+	httpReq, err := p.buildHTTPRequest(ctx, req, false)
+	if err != nil {
 		return nil, err
 	}
-
-	if err := p.BaseProvider.ValidateRequest(req); err != nil {
-		return nil, err
-	}
-
-	// Build GLM request (OpenAI compatible with extensions)
-	glmReq := map[string]any{
-		"model":    req.Model,
-		"messages": ConvertMessages(req.Messages),
-	}
-
-	if req.MaxTokens != nil {
-		glmReq["max_tokens"] = *req.MaxTokens
-	}
-	if req.Temperature != nil {
-		glmReq["temperature"] = *req.Temperature
-	}
-	if len(req.Tools) > 0 {
-		glmReq["tools"] = ConvertTools(req.Tools)
-	}
-	if req.ToolChoice != nil {
-		glmReq["tool_choice"] = req.ToolChoice
-	}
-
-	// Handle response format
-	if req.ResponseFormat != nil {
-		if req.ResponseFormat.Type == "json_object" {
-			glmReq["response_format"] = map[string]string{"type": "json_object"}
-		}
-		// GLM doesn't support json_schema, so we use json_object + prompt engineering
-		if req.ResponseFormat.Type == "json_schema" {
-			glmReq["response_format"] = map[string]string{"type": "json_object"}
-			// Add schema instructions to the last user message
-			if messages, ok := glmReq["messages"].([]glmMessage); ok && len(messages) > 0 {
-				lastMsg := &messages[len(messages)-1]
-				if lastMsg.Role == "user" && req.ResponseFormat.JSONSchema != nil {
-					lastMsg.Content = p.addJSONSchemaInstructions(lastMsg.Content, req.ResponseFormat)
-				}
-			}
-		}
-	}
-
-	// Handle GLM thinking parameter
-	if req.Extra != nil {
-		if enableThinking, ok := req.Extra["enable_thinking"].(bool); ok && enableThinking {
-			glmReq["thinking"] = map[string]string{"type": "enabled"}
-		}
-		if thinking, exists := req.Extra["thinking"]; exists {
-			if thinkingMap, ok := thinking.(map[string]any); ok {
-				if thinkingType, ok := thinkingMap["type"].(string); ok {
-					glmReq["thinking"] = map[string]string{"type": thinkingType}
-				}
-			}
-		}
-	}
-
-	body, err := json.Marshal(glmReq)
-	if err != nil {
-		return nil, fmt.Errorf("glm: marshal request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/chat/completions", p.Config().BaseURL)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("glm: create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -149,7 +81,7 @@ func (p *GLMProvider) Chat(ctx context.Context, req *Request) (*Response, error)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, NewHTTPError("glm", resp.StatusCode, string(body))
 	}
 
 	var glmResp glmResponse
@@ -203,17 +135,44 @@ func (p *GLMProvider) Chat(ctx context.Context, req *Request) (*Response, error)
 }
 
 func (p *GLMProvider) Stream(ctx context.Context, req *Request) (StreamReader, error) {
-	if err := p.Validate(); err != nil {
+	httpReq, err := p.buildHTTPRequest(ctx, req, true)
+	if err != nil {
 		return nil, err
 	}
 
-	// Build request (similar to Chat but with stream: true)
+	resp, err := p.HTTPClient().Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, NewHTTPError("glm", resp.StatusCode, string(body))
+	}
+
+	return &glmStreamReader{
+		resp:     resp,
+		scanner:  bufio.NewScanner(resp.Body),
+		provider: "glm",
+	}, nil
+}
+
+func (p *GLMProvider) buildHTTPRequest(ctx context.Context, req *Request, stream bool) (*http.Request, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	if err := p.BaseProvider.ValidateRequest(req); err != nil {
+		return nil, err
+	}
+
 	glmReq := map[string]any{
 		"model":    req.Model,
 		"messages": ConvertMessages(req.Messages),
-		"stream":   true,
 	}
-
+	if stream {
+		glmReq["stream"] = true
+	}
 	if req.MaxTokens != nil {
 		glmReq["max_tokens"] = *req.MaxTokens
 	}
@@ -222,6 +181,28 @@ func (p *GLMProvider) Stream(ctx context.Context, req *Request) (StreamReader, e
 	}
 	if len(req.Tools) > 0 {
 		glmReq["tools"] = ConvertTools(req.Tools)
+	}
+	if req.ToolChoice != nil {
+		glmReq["tool_choice"] = req.ToolChoice
+	}
+
+	if req.ResponseFormat != nil {
+		if req.ResponseFormat.Type == "json_object" || req.ResponseFormat.Type == "json_schema" {
+			glmReq["response_format"] = map[string]string{"type": "json_object"}
+		}
+	}
+
+	if req.Extra != nil {
+		if enableThinking, ok := req.Extra["enable_thinking"].(bool); ok && enableThinking {
+			glmReq["thinking"] = map[string]string{"type": "enabled"}
+		}
+		if thinking, exists := req.Extra["thinking"]; exists {
+			if thinkingMap, ok := thinking.(map[string]any); ok {
+				if thinkingType, ok := thinkingMap["type"].(string); ok {
+					glmReq["thinking"] = map[string]string{"type": thinkingType}
+				}
+			}
+		}
 	}
 
 	body, err := json.Marshal(glmReq)
@@ -237,27 +218,13 @@ func (p *GLMProvider) Stream(ctx context.Context, req *Request) (StreamReader, e
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
-	httpReq.Header.Set("Accept", "text/event-stream")
-
-	resp, err := p.HTTPClient().Do(httpReq)
-	if err != nil {
-		return nil, err
+	if stream {
+		httpReq.Header.Set("Accept", "text/event-stream")
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	return &glmStreamReader{
-		resp:     resp,
-		scanner:  bufio.NewScanner(resp.Body),
-		provider: "glm",
-	}, nil
+	return httpReq, nil
 }
 
-// addJSONSchemaInstructions adds JSON schema formatting instructions
 func (p *GLMProvider) addJSONSchemaInstructions(content string, format *ResponseFormat) string {
 	if format.JSONSchema != nil && format.JSONSchema.Schema != nil {
 		schemaJSON, _ := json.Marshal(format.JSONSchema.Schema)

@@ -374,7 +374,7 @@ func (p *BedrockProvider) Chat(ctx context.Context, req *Request) (*Response, er
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, NewHTTPError("bedrock", resp.StatusCode, string(respBody))
 	}
 
 	var bedrockResp bedrockResponse
@@ -418,7 +418,7 @@ func (p *BedrockProvider) Stream(ctx context.Context, req *Request) (StreamReade
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, NewHTTPError("bedrock", resp.StatusCode, string(respBody))
 	}
 
 	return &bedrockStreamReader{
