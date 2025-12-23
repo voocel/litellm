@@ -31,15 +31,6 @@ func NewQwen(config ProviderConfig) *QwenProvider {
 	}
 }
 
-func (p *QwenProvider) SupportsModel(model string) bool {
-	for _, m := range p.Models() {
-		if m.ID == model {
-			return true
-		}
-	}
-	return false
-}
-
 func (p *QwenProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		{

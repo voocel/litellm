@@ -90,6 +90,11 @@ func (p *BaseProvider) Name() string {
 	return p.name
 }
 
+// SupportsModel returns true for any non-empty model name
+func (p *BaseProvider) SupportsModel(model string) bool {
+	return model != ""
+}
+
 func (p *BaseProvider) Config() ProviderConfig {
 	return p.config
 }

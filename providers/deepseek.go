@@ -30,15 +30,6 @@ func NewDeepSeek(config ProviderConfig) *DeepSeekProvider {
 	}
 }
 
-func (p *DeepSeekProvider) SupportsModel(model string) bool {
-	for _, m := range p.Models() {
-		if m.ID == model {
-			return true
-		}
-	}
-	return false
-}
-
 func (p *DeepSeekProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		{

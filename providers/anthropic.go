@@ -30,15 +30,6 @@ func NewAnthropic(config ProviderConfig) *AnthropicProvider {
 	}
 }
 
-func (p *AnthropicProvider) SupportsModel(model string) bool {
-	for _, m := range p.Models() {
-		if m.ID == model {
-			return true
-		}
-	}
-	return false
-}
-
 func (p *AnthropicProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		// Claude 4.5 family (200K context; 1M requires beta header)

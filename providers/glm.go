@@ -31,15 +31,6 @@ func NewGLM(config ProviderConfig) *GLMProvider {
 	}
 }
 
-func (p *GLMProvider) SupportsModel(model string) bool {
-	for _, m := range p.Models() {
-		if m.ID == model {
-			return true
-		}
-	}
-	return false
-}
-
 func (p *GLMProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		// GLM-4.6 series (latest generation)

@@ -31,15 +31,6 @@ func NewOpenAI(config ProviderConfig) *OpenAIProvider {
 	}
 }
 
-func (p *OpenAIProvider) SupportsModel(model string) bool {
-	for _, m := range p.Models() {
-		if m.ID == model {
-			return true
-		}
-	}
-	return false
-}
-
 func (p *OpenAIProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		// GPT-5.1 family (flagship)

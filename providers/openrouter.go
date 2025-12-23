@@ -31,12 +31,6 @@ func NewOpenRouter(config ProviderConfig) *OpenRouterProvider {
 	}
 }
 
-func (p *OpenRouterProvider) SupportsModel(model string) bool {
-	// OpenRouter supports many models from different providers
-	// We'll accept any model name and let OpenRouter validate it
-	return model != ""
-}
-
 func (p *OpenRouterProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		{

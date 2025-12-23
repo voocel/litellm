@@ -36,15 +36,6 @@ func NewGemini(config ProviderConfig) *GeminiProvider {
 	}
 }
 
-func (p *GeminiProvider) SupportsModel(model string) bool {
-	for _, m := range p.Models() {
-		if m.ID == model {
-			return true
-		}
-	}
-	return false
-}
-
 func (p *GeminiProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		// Gemini 3 series (latest and most powerful)
