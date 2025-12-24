@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 )
@@ -56,7 +55,7 @@ func New(opts ...ClientOption) (*Client, error) {
 
 	// Validate that at least one provider is configured
 	if len(client.providers) == 0 {
-		return nil, fmt.Errorf("no providers configured")
+		return nil, fmt.Errorf("no providers configured: set environment variables (e.g., OPENAI_API_KEY) or use WithOpenAI()/WithAnthropic() options")
 	}
 
 	return client, nil
@@ -307,7 +306,6 @@ func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error)
 
 // Models returns all available models
 func (c *Client) Models() []ModelInfo {
-	// Copy providers under lock to minimize critical section
 	c.mu.RLock()
 	providers := make([]Provider, 0, len(c.providers))
 	for _, p := range c.providers {
@@ -351,104 +349,50 @@ func (c *Client) AddProvider(name string, provider Provider) error {
 	return nil
 }
 
+// providerEnvConfig defines environment variable mapping for auto-discovery
+type providerEnvConfig struct {
+	name       string
+	keyEnv     string
+	urlEnv     string
+	defaultURL string
+}
+
+// standardProviders lists all API-key based providers for auto-discovery
+var standardProviders = []providerEnvConfig{
+	{"openai", "OPENAI_API_KEY", "OPENAI_BASE_URL", "https://api.openai.com"},
+	{"anthropic", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "https://api.anthropic.com"},
+	{"gemini", "GEMINI_API_KEY", "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com"},
+	{"deepseek", "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "https://api.deepseek.com"},
+	{"openrouter", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"},
+	{"qwen", "QWEN_API_KEY", "QWEN_BASE_URL", "https://dashscope.aliyuncs.com/api/v1"},
+	{"glm", "GLM_API_KEY", "GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"},
+}
+
 // autoDiscoverProviders automatically discovers and configures providers from environment variables
 func (c *Client) autoDiscoverProviders() error {
 	var errs []error
-
-	// Auto-discover OpenAI
-	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
-		config := ProviderConfig{
-			APIKey:     apiKey,
-			BaseURL:    getEnvOrDefault("OPENAI_BASE_URL", "https://api.openai.com"),
-			Resilience: c.defaults.Resilience,
-		}
-		if err := c.addProviderFromConfig("openai", config); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	// Auto-discover Anthropic
-	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
-		config := ProviderConfig{
-			APIKey:     apiKey,
-			BaseURL:    getEnvOrDefault("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
-			Resilience: c.defaults.Resilience,
-		}
-		if err := c.addProviderFromConfig("anthropic", config); err != nil {
-			errs = append(errs, err)
+	for _, p := range standardProviders {
+		if apiKey := os.Getenv(p.keyEnv); apiKey != "" {
+			config := ProviderConfig{
+				APIKey:     apiKey,
+				BaseURL:    getEnvOrDefault(p.urlEnv, p.defaultURL),
+				Resilience: c.defaults.Resilience,
+			}
+			if err := c.addProviderFromConfig(p.name, config); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 
-	// Auto-discover Gemini
-	if apiKey := os.Getenv("GEMINI_API_KEY"); apiKey != "" {
-		config := ProviderConfig{
-			APIKey:     apiKey,
-			BaseURL:    getEnvOrDefault("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com"),
-			Resilience: c.defaults.Resilience,
-		}
-		if err := c.addProviderFromConfig("gemini", config); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	// Auto-discover DeepSeek
-	if apiKey := os.Getenv("DEEPSEEK_API_KEY"); apiKey != "" {
-		config := ProviderConfig{
-			APIKey:     apiKey,
-			BaseURL:    getEnvOrDefault("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-			Resilience: c.defaults.Resilience,
-		}
-		if err := c.addProviderFromConfig("deepseek", config); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	// Auto-discover OpenRouter
-	if apiKey := os.Getenv("OPENROUTER_API_KEY"); apiKey != "" {
-		config := ProviderConfig{
-			APIKey:     apiKey,
-			BaseURL:    getEnvOrDefault("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-			Resilience: c.defaults.Resilience,
-		}
-		if err := c.addProviderFromConfig("openrouter", config); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	// Auto-discover Qwen (DashScope)
-	if apiKey := os.Getenv("QWEN_API_KEY"); apiKey != "" {
-		config := ProviderConfig{
-			APIKey:     apiKey,
-			BaseURL:    getEnvOrDefault("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/api/v1"),
-			Resilience: c.defaults.Resilience,
-		}
-		if err := c.addProviderFromConfig("qwen", config); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	// Auto-discover GLM
-	if apiKey := os.Getenv("GLM_API_KEY"); apiKey != "" {
-		config := ProviderConfig{
-			APIKey:     apiKey,
-			BaseURL:    getEnvOrDefault("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
-			Resilience: c.defaults.Resilience,
-		}
-		if err := c.addProviderFromConfig("glm", config); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	// Auto-discover AWS Bedrock
+	// Discover AWS Bedrock (uses AWS credentials instead of API key)
 	if accessKeyID := os.Getenv("AWS_ACCESS_KEY_ID"); accessKeyID != "" {
 		if secretAccessKey := os.Getenv("AWS_SECRET_ACCESS_KEY"); secretAccessKey != "" {
-			region := getEnvOrDefault("AWS_REGION", "us-east-1")
 			config := ProviderConfig{
 				Resilience: c.defaults.Resilience,
 				Extra: map[string]any{
 					"access_key_id":     accessKeyID,
 					"secret_access_key": secretAccessKey,
-					"region":            region,
+					"region":            getEnvOrDefault("AWS_REGION", "us-east-1"),
 					"session_token":     os.Getenv("AWS_SESSION_TOKEN"),
 				},
 			}
@@ -458,14 +402,9 @@ func (c *Client) autoDiscoverProviders() error {
 		}
 	}
 
-	// If all providers failed, return combined error
 	if len(errs) > 0 && len(c.providers) == 0 {
 		return fmt.Errorf("auto-discovery failed: no providers could be configured. Errors: %w", errors.Join(errs...))
 	}
-
-	// If some providers failed but at least one succeeded, log warning
-	// (In a library, we don't have a logger, so we silently continue but could return a wrapped error in the future)
-	// For now, partial success is acceptable for auto-discovery
 
 	return nil
 }
@@ -475,7 +414,7 @@ func (c *Client) resolveProvider(model string) (Provider, error) {
 	c.mu.RLock()
 	if len(c.providers) == 0 {
 		c.mu.RUnlock()
-		return nil, NewError(ErrorTypeValidation, "no providers configured")
+		return nil, NewError(ErrorTypeValidation, "no providers configured: set environment variables (e.g., OPENAI_API_KEY) or use WithOpenAI()/WithAnthropic() options")
 	}
 
 	availableProviders := make([]Provider, 0, len(c.providers))
@@ -491,21 +430,6 @@ func (c *Client) resolveProvider(model string) (Provider, error) {
 
 	// Use configured router for provider selection
 	return c.router.Route(model, availableProviders)
-}
-
-// getAvailableModels returns a string of available models for error messages
-func (c *Client) getAvailableModels() string {
-	var models []string
-	for _, provider := range c.providers {
-		for _, modelInfo := range provider.Models() {
-			models = append(models, modelInfo.ID)
-		}
-	}
-	if len(models) > 10 {
-		models = models[:10]
-		models = append(models, "...")
-	}
-	return strings.Join(models, ", ")
 }
 
 // applyDefaults applies default configuration to the request

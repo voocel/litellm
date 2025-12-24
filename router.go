@@ -87,15 +87,9 @@ func (r *SmartRouter) Route(model string, availableProviders []Provider) (Provid
 	}
 }
 
-// routeExact finds exact model match
+// routeExact finds exact model match (same as routeFirst)
 func (r *SmartRouter) routeExact(model string, providers []Provider) (Provider, error) {
-	for _, provider := range providers {
-		if provider.SupportsModel(model) {
-			return provider, nil
-		}
-	}
-
-	return r.applyFallback(model, providers, fmt.Errorf("no provider supports model '%s'", model))
+	return r.routeFirst(model, providers)
 }
 
 // routeFirst returns first provider that supports the model
@@ -105,7 +99,6 @@ func (r *SmartRouter) routeFirst(model string, providers []Provider) (Provider, 
 			return provider, nil
 		}
 	}
-
 	return r.applyFallback(model, providers, fmt.Errorf("no provider supports model '%s'", model))
 }
 
