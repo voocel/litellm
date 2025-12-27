@@ -137,7 +137,7 @@ func (c *ResilientHTTPClient) calculateDelay(attempt int) time.Duration {
 
 	// Add jitter to avoid thundering herd
 	if c.config.Jitter {
-		// Add random jitter of ±25%
+		// Add random jitter of +/-25%
 		jitter := delay * 0.25 * (2*rand.Float64() - 1)
 		delay += jitter
 		if delay < 0 {

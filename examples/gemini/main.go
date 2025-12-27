@@ -16,7 +16,9 @@ func main() {
 		log.Fatal("GEMINI_API_KEY environment variable is required")
 	}
 
-	client, err := litellm.New(litellm.WithGemini(apiKey))
+	client, err := litellm.NewWithProvider("gemini", litellm.ProviderConfig{
+		APIKey: apiKey,
+	})
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
 	}
@@ -91,7 +93,6 @@ func streamingChat(client *litellm.Client) {
 		},
 		MaxTokens:   litellm.IntPtr(2000),
 		Temperature: litellm.Float64Ptr(0.8),
-		Stream:      true,
 	}
 
 	ctx := context.Background()

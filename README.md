@@ -12,34 +12,13 @@ LiteLLM is a small, typed Go client that lets you call multiple LLM providers th
 go get github.com/voocel/litellm
 ```
 
-### 1) Set one API key
+### 1) Prepare an API key
 
 ```bash
 export OPENAI_API_KEY="your-key"
 ```
 
-### 2) Call a model in one line
-
-```go
-package main
-
-import (
-	"fmt"
-	"log"
-
-	"github.com/voocel/litellm"
-)
-
-func main() {
-	resp, err := litellm.Quick("gpt-4o-mini", "Hello, LiteLLM!")
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println(resp.Content)
-}
-```
-
-### 3) Create a client (recommended for apps)
+### 2) Create a client (explicit provider)
 
 ```go
 package main
@@ -53,10 +32,9 @@ import (
 )
 
 func main() {
-	client, err := litellm.New(
-		litellm.WithOpenAI(os.Getenv("OPENAI_API_KEY")),
-		litellm.WithDefaults(1024, 0.7),
-	)
+	client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
+		APIKey: os.Getenv("OPENAI_API_KEY"),
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -71,12 +49,13 @@ func main() {
 ```
 
 > Notes
-> - The `providers` subpackage is an internal implementation detail. End users should only import `github.com/voocel/litellm`.
-> - Model strings are passed to the upstream API unchanged. Auto‑resolution only selects a provider, so prefer official model IDs.
+> - The `providers` package is an internal implementation detail. End users should only import `github.com/voocel/litellm`.
+> - LiteLLM does not auto-discover providers or auto-route models. You must configure providers explicitly.
 
 ## Core API
 
-- `New(opts...)` builds a client. If you call `New()` with no options, it auto‑discovers providers from environment variables.
+- `New(provider, opts...)` builds a client with an explicit provider.
+- `NewWithProvider(name, config, opts...)` builds a client from a provider name and config.
 - `Request` is provider‑agnostic: set `Model` and `Messages`, then optional controls like `MaxTokens`, `Temperature`, `TopP`, `Stop`, etc.
 - `Chat(ctx, req)` returns a unified `Response`.
 - `Stream(ctx, req)` returns a `StreamReader` (not goroutine‑safe). Always `defer stream.Close()`.
@@ -156,15 +135,15 @@ resp, err := client.Chat(ctx, &litellm.Request{
 _ = resp
 ```
 
-### Reasoning models / Responses API (OpenAI)
+### OpenAI Responses API
 
 ```go
-resp, err := client.Chat(ctx, &litellm.Request{
+resp, err := client.Responses(ctx, &litellm.OpenAIResponsesRequest{
 	Model: "o3-mini",
 	Messages: []litellm.Message{{Role: "user", Content: "Solve 15*8 step by step."}},
 	ReasoningEffort:  "medium",
 	ReasoningSummary: "auto",
-	UseResponsesAPI:  true,
+	MaxOutputTokens:  litellm.IntPtr(800),
 })
 _ = resp
 ```
@@ -172,17 +151,25 @@ _ = resp
 ### Retries & timeouts
 
 ```go
-client, _ := litellm.New(
-	litellm.WithOpenAI(os.Getenv("OPENAI_API_KEY")),
-	litellm.WithRetries(3, 1*time.Second),
-	litellm.WithTimeout(60*time.Second),
-)
+res := litellm.DefaultResilienceConfig()
+res.MaxRetries = 3
+res.InitialDelay = 1 * time.Second
+res.RequestTimeout = 60 * time.Second
+
+client, _ := litellm.NewWithProvider("openai", litellm.ProviderConfig{
+	APIKey:     os.Getenv("OPENAI_API_KEY"),
+	Resilience: res,
+})
 _ = client
 ```
 
 ### Provider‑specific knobs
 
-Use `Request.Extra` for vendor‑specific parameters (e.g., Qwen/GLM thinking). See `examples/qwen`, `examples/glm`, and `examples/bedrock`.
+`Request.Extra` is validated per provider. Unsupported providers will return an error.
+
+Supported keys:
+- Gemini: `tool_name` (string) for tool response naming
+- GLM: `enable_thinking` (bool) or `thinking` (object with `type` string)
 
 ## Custom Providers
 
@@ -196,18 +183,6 @@ type MyProvider struct {
 
 func (p *MyProvider) Name() string                     { return p.name }
 func (p *MyProvider) Validate() error                 { return nil }
-func (p *MyProvider) SupportsModel(model string) bool { return true }
-func (p *MyProvider) Models() []litellm.ModelInfo {
-	return []litellm.ModelInfo{
-		{
-			ID:              "my-model",
-			Provider:        "myprovider",
-			Name:            "My Model",
-			MaxOutputTokens: 4096,
-			Capabilities:    []litellm.ModelCapability{litellm.CapabilityChat},
-		},
-	}
-}
 
 func (p *MyProvider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
 	return &litellm.Response{Content: "hello", Model: req.Model, Provider: p.name}, nil
@@ -227,23 +202,18 @@ func init() {
 
 Builtin providers: OpenAI, Anthropic, Google Gemini, DeepSeek, Qwen (DashScope), GLM, AWS Bedrock, OpenRouter.
 
-LiteLLM does not rewrite model IDs; it only selects a provider. Always use official model IDs.
+LiteLLM does not rewrite model IDs. Always use official model IDs.
 
 ## Configuration
 
-Environment variables for auto‑discovery:
+Configure providers explicitly:
 
-```bash
-export OPENAI_API_KEY="sk-proj-..."
-export ANTHROPIC_API_KEY="sk-ant-..."
-export GEMINI_API_KEY="AIza..."
-export DEEPSEEK_API_KEY="sk-..."
-export QWEN_API_KEY="sk-..."
-export GLM_API_KEY="your-glm-key"
-export OPENROUTER_API_KEY="sk-or-v1-..."
-export AWS_ACCESS_KEY_ID="..."
-export AWS_SECRET_ACCESS_KEY="..."
-export AWS_REGION="us-east-1"
+```go
+client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
+	APIKey:  os.Getenv("OPENAI_API_KEY"),
+	BaseURL: os.Getenv("OPENAI_BASE_URL"), // optional
+})
+_ = client
 ```
 
 ## License

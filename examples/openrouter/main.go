@@ -16,7 +16,9 @@ func main() {
 		log.Fatal("OPENROUTER_API_KEY environment variable is required")
 	}
 
-	client, err := litellm.New(litellm.WithOpenRouter(apiKey))
+	client, err := litellm.NewWithProvider("openrouter", litellm.ProviderConfig{
+		APIKey: apiKey,
+	})
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
 	}
@@ -70,9 +72,8 @@ func testOpenAI(client *litellm.Client) {
 				Content: "What model are you?",
 			},
 		},
-		MaxTokens:       litellm.IntPtr(2000),
-		Temperature:     litellm.Float64Ptr(0.7),
-		UseResponsesAPI: false,
+		MaxTokens:   litellm.IntPtr(2000),
+		Temperature: litellm.Float64Ptr(0.7),
 	}
 
 	ctx := context.Background()
@@ -241,7 +242,6 @@ func streamingChat(client *litellm.Client) {
 		},
 		MaxTokens:   litellm.IntPtr(500),
 		Temperature: litellm.Float64Ptr(0.8),
-		Stream:      true,
 	}
 
 	ctx := context.Background()

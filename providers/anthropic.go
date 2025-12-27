@@ -30,47 +30,6 @@ func NewAnthropic(config ProviderConfig) *AnthropicProvider {
 	}
 }
 
-func (p *AnthropicProvider) Models() []ModelInfo {
-	return []ModelInfo{
-		// Claude 4.5 family (200K context; 1M requires beta header)
-		{
-			ID: "claude-opus-4-5-20251101", Provider: "anthropic", Name: "Claude 4.5 Opus", ContextWindow: 200000, MaxOutputTokens: 32000,
-			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"}},
-		{
-			ID: "claude-sonnet-4-5-20250929", Provider: "anthropic", Name: "Claude 4.5 Sonnet", ContextWindow: 200000, MaxOutputTokens: 64000,
-			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
-		},
-		{
-			ID: "claude-haiku-4-5-20251001", Provider: "anthropic", Name: "Claude 4.5 Haiku", ContextWindow: 200000, MaxOutputTokens: 64000,
-			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
-		},
-
-		// Claude 4.1/4 family (200K context; 1M requires beta header)
-		{
-			ID: "claude-opus-4-1-20250805", Provider: "anthropic", Name: "Claude 4.1 Opus", ContextWindow: 200000, MaxOutputTokens: 32000,
-			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
-		},
-		{
-			ID: "claude-opus-4-20250522", Provider: "anthropic", Name: "Claude 4 Opus", ContextWindow: 200000, MaxOutputTokens: 32000,
-			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
-		},
-		{
-			ID: "claude-sonnet-4-20250522", Provider: "anthropic", Name: "Claude 4 Sonnet", ContextWindow: 200000, MaxOutputTokens: 64000,
-			Capabilities: []string{"chat", "function_call", "vision", "extended_thinking"},
-		},
-
-		// Claude 3.7 / 3.5 family (200K context per docs)
-		{
-			ID: "claude-sonnet-3-7-20250219", Provider: "anthropic", Name: "Claude 3.7 Sonnet", ContextWindow: 200000, MaxOutputTokens: 16000,
-			Capabilities: []string{"chat", "function_call", "vision"},
-		},
-		{
-			ID: "claude-haiku-3-5-20241022", Provider: "anthropic", Name: "Claude 3.5 Haiku", ContextWindow: 200000, MaxOutputTokens: 8000,
-			Capabilities: []string{"chat", "function_call", "vision"},
-		},
-	}
-}
-
 func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
 	httpReq, err := p.buildHTTPRequest(ctx, req, false)
 	if err != nil {
@@ -172,6 +131,9 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 
 func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, stream bool) (*http.Request, error) {
 	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	if err := p.BaseProvider.ValidateExtra(req.Extra, nil); err != nil {
 		return nil, err
 	}
 	if err := p.BaseProvider.ValidateRequest(req); err != nil {

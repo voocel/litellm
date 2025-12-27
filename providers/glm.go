@@ -31,31 +31,30 @@ func NewGLM(config ProviderConfig) *GLMProvider {
 	}
 }
 
-func (p *GLMProvider) Models() []ModelInfo {
-	return []ModelInfo{
-		// GLM-4.6 series (latest generation)
-		{
-			ID: "glm-4.6", Provider: "glm", Name: "GLM-4.6", ContextWindow: 128000, MaxOutputTokens: 0,
-			Capabilities: []string{"chat", "function_call", "code", "reasoning"},
-		},
-		{
-			ID: "glm-4.6-flash", Provider: "glm", Name: "GLM-4.6 Flash", ContextWindow: 128000, MaxOutputTokens: 0,
-			Capabilities: []string{"chat", "function_call", "code"},
-		},
-		// GLM-4.5 series
-		{
-			ID: "glm-4.5", Provider: "glm", Name: "GLM-4.5", ContextWindow: 128000, MaxOutputTokens: 0,
-			Capabilities: []string{"chat", "function_call", "code", "reasoning"},
-		},
-		{
-			ID: "glm-4.5-flash", Provider: "glm", Name: "GLM-4.5 Flash", ContextWindow: 128000, MaxOutputTokens: 0,
-			Capabilities: []string{"chat", "function_call", "code"},
-		},
-		{
-			ID: "glm-4.5-air", Provider: "glm", Name: "GLM-4.5 Air", ContextWindow: 128000, MaxOutputTokens: 0,
-			Capabilities: []string{"chat", "function_call"},
-		},
+func (p *GLMProvider) validateExtra(req *Request) error {
+	if err := p.BaseProvider.ValidateExtra(req.Extra, []string{"enable_thinking", "thinking"}); err != nil {
+		return err
 	}
+	if req.Extra == nil {
+		return nil
+	}
+	if value, ok := req.Extra["enable_thinking"]; ok {
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("glm: extra parameter 'enable_thinking' must be a bool")
+		}
+	}
+	if value, ok := req.Extra["thinking"]; ok {
+		thinking, ok := value.(map[string]any)
+		if !ok {
+			return fmt.Errorf("glm: extra parameter 'thinking' must be an object")
+		}
+		if thinkingType, ok := thinking["type"]; ok {
+			if _, ok := thinkingType.(string); !ok {
+				return fmt.Errorf("glm: extra parameter 'thinking.type' must be a string")
+			}
+		}
+	}
+	return nil
 }
 
 func (p *GLMProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
@@ -151,6 +150,9 @@ func (p *GLMProvider) Stream(ctx context.Context, req *Request) (StreamReader, e
 
 func (p *GLMProvider) buildHTTPRequest(ctx context.Context, req *Request, stream bool) (*http.Request, error) {
 	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	if err := p.validateExtra(req); err != nil {
 		return nil, err
 	}
 	if err := p.BaseProvider.ValidateRequest(req); err != nil {

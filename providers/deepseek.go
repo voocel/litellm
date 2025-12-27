@@ -30,19 +30,6 @@ func NewDeepSeek(config ProviderConfig) *DeepSeekProvider {
 	}
 }
 
-func (p *DeepSeekProvider) Models() []ModelInfo {
-	return []ModelInfo{
-		{
-			ID: "deepseek-chat", Provider: "deepseek", Name: "DeepSeek Chat (V3.2-Exp Non-Thinking)", ContextWindow: 128000, MaxOutputTokens: 8000,
-			Capabilities: []string{"chat", "function_call", "json_output"},
-		},
-		{
-			ID: "deepseek-reasoner", Provider: "deepseek", Name: "DeepSeek Reasoner (V3.2-Exp Thinking)", ContextWindow: 128000, MaxOutputTokens: 64000,
-			Capabilities: []string{"chat", "reasoning", "json_output"},
-		},
-	}
-}
-
 func (p *DeepSeekProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
 	httpReq, err := p.buildHTTPRequest(ctx, req, false)
 	if err != nil {
@@ -149,6 +136,9 @@ func (p *DeepSeekProvider) Stream(ctx context.Context, req *Request) (StreamRead
 
 func (p *DeepSeekProvider) buildHTTPRequest(ctx context.Context, req *Request, stream bool) (*http.Request, error) {
 	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	if err := p.BaseProvider.ValidateExtra(req.Extra, nil); err != nil {
 		return nil, err
 	}
 	if err := p.BaseProvider.ValidateRequest(req); err != nil {

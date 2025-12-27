@@ -4,30 +4,21 @@ import (
 	"context"
 )
 
-type ModelInfo struct {
-	ID              string            `json:"id"`
-	Provider        string            `json:"provider"`
-	Name            string            `json:"name"`
-	ContextWindow   int               `json:"context_window,omitempty"`
-	MaxOutputTokens int               `json:"max_output_tokens,omitempty"`
-	Capabilities    []ModelCapability `json:"capabilities"`
-}
-
 type Message struct {
-	Role         string        `json:"role"`
-	Content      string        `json:"content"`
+	Role         string           `json:"role"`
+	Content      string           `json:"content"`
 	Contents     []MessageContent `json:"contents,omitempty"`
-	ToolCalls    []ToolCall    `json:"tool_calls,omitempty"`
-	ToolCallID   string        `json:"tool_call_id,omitempty"`
-	CacheControl *CacheControl `json:"cache_control,omitempty"`
+	ToolCalls    []ToolCall       `json:"tool_calls,omitempty"`
+	ToolCallID   string           `json:"tool_call_id,omitempty"`
+	CacheControl *CacheControl    `json:"cache_control,omitempty"`
 }
 
 type MessageContent struct {
-	Type        string                 `json:"type"`
-	Text        string                 `json:"text,omitempty"`
-	ImageURL    *MessageImageURL       `json:"image_url,omitempty"`
-	Annotations []map[string]any       `json:"annotations,omitempty"`
-	Logprobs    []map[string]any       `json:"logprobs,omitempty"`
+	Type        string           `json:"type"`
+	Text        string           `json:"text,omitempty"`
+	ImageURL    *MessageImageURL `json:"image_url,omitempty"`
+	Annotations []map[string]any `json:"annotations,omitempty"`
+	Logprobs    []map[string]any `json:"logprobs,omitempty"`
 }
 
 type MessageImageURL struct {
@@ -75,54 +66,18 @@ type JSONSchema struct {
 }
 
 type Request struct {
-	Model             string           `json:"model"`
-	Messages          []Message        `json:"messages"`
-	MaxTokens         *int             `json:"max_tokens,omitempty"`
-	Temperature       *float64         `json:"temperature,omitempty"`
-	TopP              *float64         `json:"top_p,omitempty"`
-	TopLogProbs       *int             `json:"top_logprobs,omitempty"`
-	Stream            bool             `json:"stream,omitempty"`
-	Tools             []Tool           `json:"tools,omitempty"`
-	ToolChoice        any              `json:"tool_choice,omitempty"`
-	ResponseFormat    *ResponseFormat  `json:"response_format,omitempty"`
-	Stop              []string         `json:"stop,omitempty"`
-	ReasoningEffort   string           `json:"reasoning_effort,omitempty"`
-	ReasoningSummary  string           `json:"reasoning_summary,omitempty"`
-	UseResponsesAPI   bool             `json:"use_responses_api,omitempty"`
-	ServiceTier       string           `json:"service_tier,omitempty"`
-	Store             *bool            `json:"store,omitempty"`
-	ParallelToolCalls *bool            `json:"parallel_tool_calls,omitempty"`
-	SafetyIdentifier  string           `json:"safety_identifier,omitempty"`
-
-	ResponsesParams *ResponsesParams
+	Model          string          `json:"model"`
+	Messages       []Message       `json:"messages"`
+	MaxTokens      *int            `json:"max_tokens,omitempty"`
+	Temperature    *float64        `json:"temperature,omitempty"`
+	TopP           *float64        `json:"top_p,omitempty"`
+	Tools          []Tool          `json:"tools,omitempty"`
+	ToolChoice     any             `json:"tool_choice,omitempty"`
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
+	Stop           []string        `json:"stop,omitempty"`
 
 	// Provider-specific extensions
 	Extra map[string]any `json:"extra,omitempty"`
-}
-
-// ResponsesParams describes Response-API-specific or more granular controls
-type ResponsesParams struct {
-	Instructions         string            `json:"instructions,omitempty"`
-	Conversation         string            `json:"conversation,omitempty"`
-	PreviousResponseID   string            `json:"previous_response_id,omitempty"`
-	Metadata             map[string]string `json:"metadata,omitempty"`
-	Store                *bool             `json:"store,omitempty"`
-	MaxOutputTokens      *int              `json:"max_output_tokens,omitempty"`
-	MaxInputTokens       *int              `json:"max_input_tokens,omitempty"`
-	MaxToolCalls         *int              `json:"max_tool_calls,omitempty"`
-	ParallelToolCalls    *bool             `json:"parallel_tool_calls,omitempty"`
-	Include              []string          `json:"include,omitempty"`
-	SafetyIdentifier     string            `json:"safety_identifier,omitempty"`
-	ServiceTier          string            `json:"service_tier,omitempty"`
-	Temperature          *float64          `json:"temperature,omitempty"`
-	TopP                 *float64          `json:"top_p,omitempty"`
-	ToolChoice           any               `json:"tool_choice,omitempty"`
-	ResponseFormat       *ResponseFormat   `json:"response_format,omitempty"`
-	PromptCacheKey       string            `json:"prompt_cache_key,omitempty"`
-	PromptCacheRetention string            `json:"prompt_cache_retention,omitempty"`
-	Background           *bool             `json:"background,omitempty"`
-	Prompt               map[string]any    `json:"prompt,omitempty"`
-	ModelOverride        string            `json:"model_override,omitempty"`
 }
 
 type Usage struct {
@@ -192,20 +147,6 @@ type StreamReader interface {
 type Provider interface {
 	Name() string
 	Validate() error
-	SupportsModel(model string) bool
-	Models() []ModelInfo
 	Chat(ctx context.Context, req *Request) (*Response, error)
 	Stream(ctx context.Context, req *Request) (StreamReader, error)
 }
-
-// ModelCapability describes model capabilities (string alias for easy extension).
-type ModelCapability = string
-
-// Common capability constants.
-const (
-	CapabilityChat         ModelCapability = "chat"
-	CapabilityFunctionCall ModelCapability = "function_call"
-	CapabilityVision       ModelCapability = "vision"
-	CapabilityReasoning    ModelCapability = "reasoning"
-	CapabilityCode         ModelCapability = "code"
-)

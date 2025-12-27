@@ -4,32 +4,29 @@ import "github.com/voocel/litellm/providers"
 
 // Core types are sourced from providers; litellm re-exports them.
 type (
-	ModelInfo       = providers.ModelInfo
-	ModelCapability = providers.ModelCapability
-
 	Message         = providers.Message
 	MessageContent  = providers.MessageContent
 	MessageImageURL = providers.MessageImageURL
 	CacheControl    = providers.CacheControl
 
-	Tool         = providers.Tool
-	FunctionDef  = providers.FunctionDef
-	ToolCall     = providers.ToolCall
-	FunctionCall = providers.FunctionCall
+	Tool          = providers.Tool
+	FunctionDef   = providers.FunctionDef
+	ToolCall      = providers.ToolCall
+	FunctionCall  = providers.FunctionCall
 	ToolCallDelta = providers.ToolCallDelta
 
-	ResponseFormat  = providers.ResponseFormat
-	JSONSchema      = providers.JSONSchema
-	ResponsesParams = providers.ResponsesParams
+	ResponseFormat         = providers.ResponseFormat
+	JSONSchema             = providers.JSONSchema
+	OpenAIResponsesRequest = providers.OpenAIResponsesRequest
 
-	Request      = providers.Request
-	Response     = providers.Response
-	Usage        = providers.Usage
+	Request       = providers.Request
+	Response      = providers.Response
+	Usage         = providers.Usage
 	ReasoningData = providers.ReasoningData
 
-	StreamChunk   = providers.StreamChunk
+	StreamChunk    = providers.StreamChunk
 	ReasoningChunk = providers.ReasoningChunk
-	StreamReader  = providers.StreamReader
+	StreamReader   = providers.StreamReader
 )
 
 // CacheControl type constants.
@@ -50,15 +47,6 @@ const (
 	ResponseFormatText       = "text"
 	ResponseFormatJSONObject = "json_object"
 	ResponseFormatJSONSchema = "json_schema"
-)
-
-// Model capability constants.
-const (
-	CapabilityChat         ModelCapability = providers.CapabilityChat
-	CapabilityFunctionCall ModelCapability = providers.CapabilityFunctionCall
-	CapabilityVision       ModelCapability = providers.CapabilityVision
-	CapabilityReasoning    ModelCapability = providers.CapabilityReasoning
-	CapabilityCode         ModelCapability = providers.CapabilityCode
 )
 
 // NewEphemeralCache creates an ephemeral cache control (TTL is provider-defined, typically ~5 minutes).

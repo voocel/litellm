@@ -82,183 +82,6 @@ func (p *BedrockProvider) Validate() error {
 	return nil
 }
 
-func (p *BedrockProvider) SupportsModel(model string) bool {
-	supportedPrefixes := []string{
-		"anthropic.", "amazon.", "meta.", "mistral.",
-		"cohere.", "ai21.", "stability.", "deepseek.", "qwen.", "google.",
-	}
-	for _, prefix := range supportedPrefixes {
-		if strings.HasPrefix(model, prefix) {
-			return true
-		}
-	}
-	for _, m := range p.Models() {
-		if m.ID == model {
-			return true
-		}
-	}
-	return false
-}
-
-func (p *BedrockProvider) Models() []ModelInfo {
-	return []ModelInfo{
-		// Claude 4.5
-		{
-			ID: "anthropic.claude-opus-4-5-20251101-v1:0", Provider: "bedrock", Name: "Claude Opus 4.5",
-			ContextWindow: 200000, MaxOutputTokens: 32000,
-			Capabilities: []string{"chat", "vision", "function_call", "extended_thinking"},
-		},
-		{
-			ID: "anthropic.claude-sonnet-4-5-20250929-v1:0", Provider: "bedrock", Name: "Claude Sonnet 4.5",
-			ContextWindow: 200000, MaxOutputTokens: 64000,
-			Capabilities: []string{"chat", "vision", "function_call", "extended_thinking"},
-		},
-		{
-			ID: "anthropic.claude-haiku-4-5-20251001-v1:0", Provider: "bedrock", Name: "Claude Haiku 4.5",
-			ContextWindow: 200000, MaxOutputTokens: 64000,
-			Capabilities: []string{"chat", "vision", "function_call"},
-		},
-		// Claude 4
-		{
-			ID: "anthropic.claude-opus-4-1-20250805-v1:0", Provider: "bedrock", Name: "Claude Opus 4.1",
-			ContextWindow: 200000, MaxOutputTokens: 32000,
-			Capabilities: []string{"chat", "vision", "function_call", "extended_thinking"},
-		},
-		{
-			ID: "anthropic.claude-opus-4-20250514-v1:0", Provider: "bedrock", Name: "Claude Opus 4",
-			ContextWindow: 200000, MaxOutputTokens: 32000,
-			Capabilities: []string{"chat", "vision", "function_call", "extended_thinking"},
-		},
-		{
-			ID: "anthropic.claude-sonnet-4-20250514-v1:0", Provider: "bedrock", Name: "Claude Sonnet 4",
-			ContextWindow: 200000, MaxOutputTokens: 64000,
-			Capabilities: []string{"chat", "vision", "function_call", "extended_thinking"},
-		},
-		// Claude 3.7/3.5/3
-		{
-			ID: "anthropic.claude-3-7-sonnet-20250219-v1:0", Provider: "bedrock", Name: "Claude 3.7 Sonnet",
-			ContextWindow: 200000, MaxOutputTokens: 64000,
-			Capabilities: []string{"chat", "vision", "function_call", "extended_thinking"},
-		},
-		{
-			ID: "anthropic.claude-3-5-haiku-20241022-v1:0", Provider: "bedrock", Name: "Claude 3.5 Haiku",
-			ContextWindow: 200000, MaxOutputTokens: 8192,
-			Capabilities: []string{"chat", "function_call"},
-		},
-		{
-			ID: "anthropic.claude-3-haiku-20240307-v1:0", Provider: "bedrock", Name: "Claude 3 Haiku",
-			ContextWindow: 200000, MaxOutputTokens: 4096,
-			Capabilities: []string{"chat", "vision", "function_call"},
-		},
-		// Amazon Nova
-		{
-			ID: "amazon.nova-premier-v1:0", Provider: "bedrock", Name: "Amazon Nova Premier",
-			ContextWindow: 1000000, MaxOutputTokens: 5000,
-			Capabilities: []string{"chat", "vision", "video", "function_call", "reasoning"},
-		},
-		{
-			ID: "amazon.nova-2-lite-v1:0", Provider: "bedrock", Name: "Amazon Nova 2 Lite",
-			ContextWindow: 300000, MaxOutputTokens: 5000,
-			Capabilities: []string{"chat", "vision", "video", "function_call"},
-		},
-		{
-			ID: "amazon.nova-pro-v1:0", Provider: "bedrock", Name: "Amazon Nova Pro",
-			ContextWindow: 300000, MaxOutputTokens: 5000,
-			Capabilities: []string{"chat", "vision", "video", "function_call", "reasoning"},
-		},
-		{
-			ID: "amazon.nova-lite-v1:0", Provider: "bedrock", Name: "Amazon Nova Lite",
-			ContextWindow: 300000, MaxOutputTokens: 5000,
-			Capabilities: []string{"chat", "vision", "video", "function_call"},
-		},
-		{
-			ID: "amazon.nova-micro-v1:0", Provider: "bedrock", Name: "Amazon Nova Micro",
-			ContextWindow: 128000, MaxOutputTokens: 5000,
-			Capabilities: []string{"chat", "function_call"},
-		},
-		// Meta Llama
-		{
-			ID: "meta.llama4-maverick-17b-instruct-v1:0", Provider: "bedrock", Name: "Llama 4 Maverick 17B",
-			ContextWindow: 128000, MaxOutputTokens: 4096,
-			Capabilities: []string{"chat", "function_call"},
-		},
-		{
-			ID: "meta.llama4-scout-17b-instruct-v1:0", Provider: "bedrock", Name: "Llama 4 Scout 17B",
-			ContextWindow: 128000, MaxOutputTokens: 4096,
-			Capabilities: []string{"chat", "function_call"},
-		},
-		{
-			ID: "meta.llama3-3-70b-instruct-v1:0", Provider: "bedrock", Name: "Llama 3.3 70B Instruct",
-			ContextWindow: 128000, MaxOutputTokens: 4096,
-			Capabilities: []string{"chat", "function_call"},
-		},
-		{
-			ID: "meta.llama3-2-90b-instruct-v1:0", Provider: "bedrock", Name: "Llama 3.2 90B Instruct",
-			ContextWindow: 128000, MaxOutputTokens: 4096,
-			Capabilities: []string{"chat", "vision", "function_call"},
-		},
-		{
-			ID: "meta.llama3-1-405b-instruct-v1:0", Provider: "bedrock", Name: "Llama 3.1 405B Instruct",
-			ContextWindow: 128000, MaxOutputTokens: 4096,
-			Capabilities: []string{"chat", "function_call"},
-		},
-		{
-			ID: "meta.llama3-1-70b-instruct-v1:0", Provider: "bedrock", Name: "Llama 3.1 70B Instruct",
-			ContextWindow: 128000, MaxOutputTokens: 4096,
-			Capabilities: []string{"chat", "function_call"},
-		},
-		// Mistral
-		{
-			ID: "mistral.mistral-large-2411-v1:0", Provider: "bedrock", Name: "Mistral Large 3",
-			ContextWindow: 128000, MaxOutputTokens: 8192,
-			Capabilities: []string{"chat", "function_call"},
-		},
-		{
-			ID: "mistral.pixtral-large-2502-v1:0", Provider: "bedrock", Name: "Pixtral Large",
-			ContextWindow: 128000, MaxOutputTokens: 8192,
-			Capabilities: []string{"chat", "vision", "function_call"},
-		},
-		{
-			ID: "mistral.magistral-small-2509-v1:0", Provider: "bedrock", Name: "Magistral Small",
-			ContextWindow: 128000, MaxOutputTokens: 8192,
-			Capabilities: []string{"chat", "function_call"},
-		},
-		// DeepSeek
-		{
-			ID: "deepseek.r1-v1:0", Provider: "bedrock", Name: "DeepSeek R1",
-			ContextWindow: 128000, MaxOutputTokens: 64000,
-			Capabilities: []string{"chat", "reasoning"},
-		},
-		{
-			ID: "deepseek.v3-v1:0", Provider: "bedrock", Name: "DeepSeek V3.1",
-			ContextWindow: 128000, MaxOutputTokens: 8000,
-			Capabilities: []string{"chat", "function_call"},
-		},
-		// Qwen
-		{
-			ID: "qwen.qwen3-235b-a22b-2507-v1:0", Provider: "bedrock", Name: "Qwen3 235B",
-			ContextWindow: 128000, MaxOutputTokens: 8192,
-			Capabilities: []string{"chat", "function_call", "reasoning"},
-		},
-		{
-			ID: "qwen.qwen3-32b-instruct-v1:0", Provider: "bedrock", Name: "Qwen3 32B Instruct",
-			ContextWindow: 128000, MaxOutputTokens: 8192,
-			Capabilities: []string{"chat", "function_call"},
-		},
-		// Cohere
-		{
-			ID: "cohere.command-r-plus-v1:0", Provider: "bedrock", Name: "Command R+",
-			ContextWindow: 128000, MaxOutputTokens: 4096,
-			Capabilities: []string{"chat", "function_call"},
-		},
-		{
-			ID: "cohere.command-r-v1:0", Provider: "bedrock", Name: "Command R",
-			ContextWindow: 128000, MaxOutputTokens: 4096,
-			Capabilities: []string{"chat", "function_call"},
-		},
-	}
-}
-
 type bedrockRequest struct {
 	Messages                     []bedrockMessage        `json:"messages"`
 	System                       []bedrockSystemContent  `json:"system,omitempty"`
@@ -345,6 +168,9 @@ func (p *BedrockProvider) Chat(ctx context.Context, req *Request) (*Response, er
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
+	if err := p.BaseProvider.ValidateExtra(req.Extra, nil); err != nil {
+		return nil, err
+	}
 	if err := p.BaseProvider.ValidateRequest(req); err != nil {
 		return nil, err
 	}
@@ -387,6 +213,9 @@ func (p *BedrockProvider) Chat(ctx context.Context, req *Request) (*Response, er
 
 func (p *BedrockProvider) Stream(ctx context.Context, req *Request) (StreamReader, error) {
 	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	if err := p.BaseProvider.ValidateExtra(req.Extra, nil); err != nil {
 		return nil, err
 	}
 	if err := p.BaseProvider.ValidateRequest(req); err != nil {

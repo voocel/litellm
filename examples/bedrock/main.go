@@ -11,21 +11,26 @@ import (
 )
 
 func main() {
-	// Auto-discovery from environment variables
-	// Set these environment variables:
+	// Explicit configuration (store credentials in env vars)
+	// Required env vars:
 	//   AWS_ACCESS_KEY_ID=your-access-key-id
 	//   AWS_SECRET_ACCESS_KEY=your-secret-access-key
 	//   AWS_REGION=us-east-1 (optional, defaults to us-east-1)
 	//   AWS_SESSION_TOKEN=your-session-token (optional, for temporary credentials)
 
-	// Explicit configuration
-	client, err := litellm.New(
-		litellm.WithBedrock(
-			os.Getenv("AWS_ACCESS_KEY_ID"),
-			os.Getenv("AWS_SECRET_ACCESS_KEY"),
-			os.Getenv("AWS_REGION"), // optional, defaults to "us-east-1"
-		),
-	)
+	region := os.Getenv("AWS_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	client, err := litellm.NewWithProvider("bedrock", litellm.ProviderConfig{
+		Extra: map[string]any{
+			"access_key_id":     os.Getenv("AWS_ACCESS_KEY_ID"),
+			"secret_access_key": os.Getenv("AWS_SECRET_ACCESS_KEY"),
+			"region":            region,
+			"session_token":     os.Getenv("AWS_SESSION_TOKEN"),
+		},
+	})
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
 	}

@@ -16,7 +16,9 @@ func main() {
 		log.Fatal("GLM_API_KEY environment variable is required")
 	}
 
-	client, err := litellm.New(litellm.WithGLM(apiKey))
+	client, err := litellm.NewWithProvider("glm", litellm.ProviderConfig{
+		APIKey: apiKey,
+	})
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
 	}
@@ -177,7 +179,6 @@ func streamingChat(client *litellm.Client) {
 		},
 		MaxTokens:   litellm.IntPtr(400),
 		Temperature: litellm.Float64Ptr(0.8),
-		Stream:      true,
 	}
 
 	ctx := context.Background()
@@ -222,7 +223,7 @@ func jsonResponseFormat(client *litellm.Client) {
 			},
 			{
 				Role:    "user",
-				Content: "Please analyze the main characteristics of China’s four first-tier cities (Beijing, Shanghai, Guangzhou, Shenzhen), including information such as population, GDP, and major industries, and return the results in JSON format.",
+				Content: "Please analyze the main characteristics of China's four first-tier cities (Beijing, Shanghai, Guangzhou, Shenzhen), including information such as population, GDP, and major industries, and return the results in JSON format.",
 			},
 		},
 		ResponseFormat: &litellm.ResponseFormat{

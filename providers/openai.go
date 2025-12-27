@@ -31,72 +31,6 @@ func NewOpenAI(config ProviderConfig) *OpenAIProvider {
 	}
 }
 
-func (p *OpenAIProvider) Models() []ModelInfo {
-	return []ModelInfo{
-		// GPT-5.1 family (flagship)
-		{
-			ID: "gpt-5.1", Provider: "openai", Name: "GPT-5.1", ContextWindow: 400000, MaxOutputTokens: 128000,
-			Capabilities: []string{"chat", "function_call", "vision", "code", "reasoning"},
-		},
-		{
-			ID: "gpt-5.1-mini", Provider: "openai", Name: "GPT-5.1 Mini", ContextWindow: 400000, MaxOutputTokens: 64000,
-			Capabilities: []string{"chat", "function_call", "vision", "code", "reasoning"},
-		},
-
-		// GPT-5 family (prior generation)
-		{
-			ID: "gpt-5", Provider: "openai", Name: "GPT-5", ContextWindow: 400000, MaxOutputTokens: 128000,
-			Capabilities: []string{"chat", "function_call", "vision", "code", "reasoning"},
-		},
-		{
-			ID: "gpt-5-mini", Provider: "openai", Name: "GPT-5 Mini", ContextWindow: 400000, MaxOutputTokens: 64000,
-			Capabilities: []string{"chat", "function_call", "vision", "code", "reasoning"},
-		},
-		{
-			ID: "gpt-5-nano", Provider: "openai", Name: "GPT-5 Nano", ContextWindow: 400000, MaxOutputTokens: 32000,
-			Capabilities: []string{"chat", "function_call", "vision", "code"},
-		},
-
-		// GPT-4.1 family (~1M context, ~32K max output)
-		{
-			ID: "gpt-4.1", Provider: "openai", Name: "GPT-4.1", ContextWindow: 1000000, MaxOutputTokens: 32768,
-			Capabilities: []string{"chat", "function_call", "vision", "code"},
-		},
-		{
-			ID: "gpt-4.1-mini", Provider: "openai", Name: "GPT-4.1 Mini", ContextWindow: 1000000, MaxOutputTokens: 32768,
-			Capabilities: []string{"chat", "function_call", "vision", "code"},
-		},
-		{
-			ID: "gpt-4.1-nano", Provider: "openai", Name: "GPT-4.1 Nano", ContextWindow: 1000000, MaxOutputTokens: 32768,
-			Capabilities: []string{"chat", "function_call", "code"},
-		},
-
-		// GPT-4o family (128K context, 16K max output)
-		{
-			ID: "gpt-4o", Provider: "openai", Name: "GPT-4o", ContextWindow: 128000, MaxOutputTokens: 16384,
-			Capabilities: []string{"chat", "function_call", "vision"},
-		},
-		{
-			ID: "gpt-4o-mini", Provider: "openai", Name: "GPT-4o Mini", ContextWindow: 128000, MaxOutputTokens: 16384,
-			Capabilities: []string{"chat", "function_call", "vision"},
-		},
-
-		// o-series reasoning（200K context, 100K max output）
-		{
-			ID: "o3-pro", Provider: "openai", Name: "OpenAI o3 Pro", ContextWindow: 200000, MaxOutputTokens: 100000,
-			Capabilities: []string{"chat", "reasoning"},
-		},
-		{
-			ID: "o3", Provider: "openai", Name: "OpenAI o3", ContextWindow: 200000, MaxOutputTokens: 100000,
-			Capabilities: []string{"chat", "reasoning"},
-		},
-		{
-			ID: "o3-mini", Provider: "openai", Name: "OpenAI o3 Mini", ContextWindow: 200000, MaxOutputTokens: 100000,
-			Capabilities: []string{"chat", "reasoning"},
-		},
-	}
-}
-
 // needsMaxCompletionTokens checks if the model requires max_completion_tokens instead of max_tokens
 func (p *OpenAIProvider) needsMaxCompletionTokens(model string) bool {
 	modelLower := strings.ToLower(model)
@@ -140,6 +74,9 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req *Request) (*Response, err
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
+	if err := p.BaseProvider.ValidateExtra(req.Extra, nil); err != nil {
+		return nil, err
+	}
 
 	// Validate request parameters using base provider validation
 	// Note: Temperature validation is skipped for reasoning models as they don't support it
@@ -163,29 +100,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req *Request) (*Response, err
 	modelName := req.Model
 
 	// Check if should use Responses API
-	shouldUseResponsesAPI := req.UseResponsesAPI ||
-		(p.isReasoningModel(modelName) && (req.ReasoningEffort != "" || req.ReasoningSummary != ""))
-
-	if shouldUseResponsesAPI {
-		// Try using Responses API
-		response, err := p.completeWithResponsesAPI(ctx, req, modelName)
-		if err != nil {
-			// If Responses API fails, fall back to traditional mode
-			fallbackReq := *req
-			fallbackReq.UseResponsesAPI = false
-
-			// Only clear reasoning parameters for OpenAI endpoints
-			if !strings.Contains(p.Config().BaseURL, "openrouter") {
-				fallbackReq.ReasoningEffort = ""
-				fallbackReq.ReasoningSummary = ""
-			}
-
-			return p.completeWithChatAPI(ctx, &fallbackReq, modelName)
-		}
-		return response, nil
-	}
-
-	// Use traditional Chat Completions API
+	// Use Chat Completions API
 	return p.completeWithChatAPI(ctx, req, modelName)
 }
 
@@ -203,26 +118,6 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 	}
 
 	openaiReq.TopP = req.TopP
-	openaiReq.TopLogProbs = req.TopLogProbs
-	if req.ServiceTier != "" {
-		openaiReq.ServiceTier = req.ServiceTier
-	}
-	if req.Store != nil {
-		openaiReq.Store = req.Store
-	}
-	if req.ParallelToolCalls != nil {
-		openaiReq.ParallelToolCalls = req.ParallelToolCalls
-	}
-	if req.SafetyIdentifier != "" {
-		openaiReq.SafetyIdentifier = req.SafetyIdentifier
-	}
-
-	// Set reasoning_effort for Chat Completions API (top-level parameter)
-	// Note: Chat Completions API uses reasoning_effort directly, not nested reasoning object
-	// Values: none, minimal, low, medium, high, xhigh
-	if req.ReasoningEffort != "" {
-		openaiReq.ReasoningEffort = req.ReasoningEffort
-	}
 
 	// Resolve token parameters based on model type
 	maxTokens, maxCompletionTokens := p.resolveTokenParams(req)
@@ -331,16 +226,11 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
+	if err := p.BaseProvider.ValidateExtra(req.Extra, nil); err != nil {
+		return nil, err
+	}
 
 	modelName := req.Model
-
-	// Check if should use Responses API (same logic as Chat)
-	shouldUseResponsesAPI := req.UseResponsesAPI ||
-		(p.isReasoningModel(modelName) && (req.ReasoningEffort != "" || req.ReasoningSummary != ""))
-
-	if shouldUseResponsesAPI {
-		return p.streamWithResponsesAPI(ctx, req, modelName)
-	}
 
 	openaiReq := openaiRequest{
 		Model:    modelName,
@@ -361,13 +251,6 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	if p.isReasoningModel(modelName) {
 		// Reasoning models always use max_completion_tokens
 		openaiReq.MaxCompletionTokens = req.MaxTokens
-
-		// Set reasoning_effort for Chat Completions API (top-level parameter)
-		// Note: reasoning_effort is supported in streaming mode for Chat Completions API
-		// but reasoning summary is only available in Responses API
-		if req.ReasoningEffort != "" {
-			openaiReq.ReasoningEffort = req.ReasoningEffort
-		}
 	} else {
 		// Traditional models use max_tokens and temperature
 		openaiReq.MaxTokens = req.MaxTokens
@@ -578,9 +461,8 @@ type openaiRequest struct {
 	LogitBias        map[string]int `json:"logit_bias,omitempty"`        // Token ID to bias (-100 to 100)
 
 	// Output configuration
-	N           *int  `json:"n,omitempty"`            // Number of completions, default 1
-	Logprobs    *bool `json:"logprobs,omitempty"`     // Return log probabilities
-	TopLogProbs *int  `json:"top_logprobs,omitempty"` // 0-20, number of top tokens with logprobs
+	N        *int  `json:"n,omitempty"`        // Number of completions, default 1
+	Logprobs *bool `json:"logprobs,omitempty"` // Return log probabilities
 
 	// Streaming
 	Stream        bool                 `json:"stream,omitempty"`
@@ -590,16 +472,11 @@ type openaiRequest struct {
 	Stop []string `json:"stop,omitempty"`
 
 	// Tool/Function calling
-	Tools             []openaiTool `json:"tools,omitempty"`
-	ToolChoice        any          `json:"tool_choice,omitempty"` // "none", "auto", "required", or specific tool
-	ParallelToolCalls *bool        `json:"parallel_tool_calls,omitempty"`
+	Tools      []openaiTool `json:"tools,omitempty"`
+	ToolChoice any          `json:"tool_choice,omitempty"` // "none", "auto", "required", or specific tool
 
 	// Response format
 	ResponseFormat *openaiResponseFormat `json:"response_format,omitempty"`
-
-	// Reasoning (for o-series and gpt-5 models)
-	// Values: none, minimal, low, medium, high, xhigh
-	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 
 	// Caching
 	PromptCacheKey       string `json:"prompt_cache_key,omitempty"`       // Replaces user field
@@ -609,12 +486,7 @@ type openaiRequest struct {
 	Prediction *openaiPrediction `json:"prediction,omitempty"`
 
 	// Metadata and identification
-	Metadata         map[string]string `json:"metadata,omitempty"` // Max 16 key-value pairs
-	SafetyIdentifier string            `json:"safety_identifier,omitempty"`
-
-	// Service configuration
-	ServiceTier string `json:"service_tier,omitempty"` // auto, default, flex, priority
-	Store       *bool  `json:"store,omitempty"`        // Store for distillation/evals
+	Metadata map[string]string `json:"metadata,omitempty"` // Max 16 key-value pairs
 
 	// Output modalities (for audio-capable models)
 	Modalities []string `json:"modalities,omitempty"` // ["text"] or ["text", "audio"]

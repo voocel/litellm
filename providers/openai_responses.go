@@ -13,6 +13,33 @@ import (
 
 // ==================== Responses API Types ====================
 
+// OpenAIResponsesRequest is a dedicated request type for OpenAI Responses API.
+// It avoids polluting the generic Request with OpenAI-only fields.
+type OpenAIResponsesRequest struct {
+	Model string `json:"model"`
+
+	// Use standard messages to build input items for Responses API.
+	Messages []Message `json:"messages"`
+
+	// Output configuration
+	MaxOutputTokens *int `json:"max_output_tokens,omitempty"`
+
+	// Sampling parameters
+	Temperature *float64 `json:"temperature,omitempty"`
+	TopP        *float64 `json:"top_p,omitempty"`
+
+	// Text format configuration (replaces response_format in Responses API)
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
+
+	// Tool configuration
+	Tools      []Tool `json:"tools,omitempty"`
+	ToolChoice any    `json:"tool_choice,omitempty"`
+
+	// Reasoning configuration (for gpt-5 and o-series models)
+	ReasoningEffort  string `json:"reasoning_effort,omitempty"`  // none, low, medium, high
+	ReasoningSummary string `json:"reasoning_summary,omitempty"` // auto, concise, detailed
+}
+
 // responsesAPIRequest represents the request structure for OpenAI Responses API
 // See: https://platform.openai.com/docs/api-reference/responses/create
 type responsesAPIRequest struct {
@@ -27,13 +54,14 @@ type responsesAPIRequest struct {
 	Instructions string `json:"instructions,omitempty"`
 
 	// Conversation management (mutually exclusive with PreviousResponseID)
-	Conversation       any    `json:"conversation,omitempty"`        // string or object
+	Conversation       any    `json:"conversation,omitempty"`         // string or object
 	PreviousResponseID string `json:"previous_response_id,omitempty"` // for multi-turn without conversation
 
 	// Output configuration
 	MaxOutputTokens *int     `json:"max_output_tokens,omitempty"`
 	MaxToolCalls    *int     `json:"max_tool_calls,omitempty"`
 	Include         []string `json:"include,omitempty"` // e.g., "message.output_text.logprobs", "reasoning.encrypted_content"
+	Stream          *bool    `json:"stream,omitempty"`
 
 	// Sampling parameters
 	Temperature *float64 `json:"temperature,omitempty"`
@@ -202,15 +230,46 @@ type responsesAPIErrorEvent struct {
 
 // ==================== Responses API Methods ====================
 
-// buildResponsesAPIRequest maps internal Request into the official Responses API payload
-func (p *OpenAIProvider) buildResponsesAPIRequest(req *Request, modelName string) responsesAPIRequest {
-	targetModel := modelName
-	if rp := req.ResponsesParams; rp != nil && rp.ModelOverride != "" {
-		targetModel = rp.ModelOverride
+// Responses executes a Responses API request for OpenAI.
+func (p *OpenAIProvider) Responses(ctx context.Context, req *OpenAIResponsesRequest) (*Response, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, fmt.Errorf("openai: responses request cannot be nil")
+	}
+	if req.Model == "" {
+		return nil, fmt.Errorf("openai: model is required for responses request")
+	}
+	if len(req.Messages) == 0 {
+		return nil, fmt.Errorf("openai: messages are required for responses request")
 	}
 
+	return p.completeWithResponsesAPI(ctx, req)
+}
+
+// ResponsesStream executes a streaming Responses API request for OpenAI.
+func (p *OpenAIProvider) ResponsesStream(ctx context.Context, req *OpenAIResponsesRequest) (StreamReader, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, fmt.Errorf("openai: responses request cannot be nil")
+	}
+	if req.Model == "" {
+		return nil, fmt.Errorf("openai: model is required for responses request")
+	}
+	if len(req.Messages) == 0 {
+		return nil, fmt.Errorf("openai: messages are required for responses request")
+	}
+
+	return p.streamWithResponsesAPI(ctx, req)
+}
+
+// buildResponsesAPIRequest maps OpenAIResponsesRequest into the official Responses API payload.
+func (p *OpenAIProvider) buildResponsesAPIRequest(req *OpenAIResponsesRequest) responsesAPIRequest {
 	responsesReq := responsesAPIRequest{
-		Model: targetModel,
+		Model: req.Model,
 	}
 
 	if inputItems := convertMessagesToResponsesInput(req.Messages); len(inputItems) > 0 {
@@ -230,7 +289,7 @@ func (p *OpenAIProvider) buildResponsesAPIRequest(req *Request, modelName string
 		responsesReq.Reasoning = reasoning
 	}
 
-	// Responses API still supports function/file_search and other tools
+	// Responses API supports tools
 	if len(req.Tools) > 0 {
 		responsesReq.Tools = make([]openaiTool, len(req.Tools))
 		for i, tool := range req.Tools {
@@ -249,98 +308,30 @@ func (p *OpenAIProvider) buildResponsesAPIRequest(req *Request, modelName string
 		}
 	}
 
-	if rp := req.ResponsesParams; rp != nil && rp.ToolChoice != nil {
-		responsesReq.ToolChoice = rp.ToolChoice
-	} else if req.ToolChoice != nil {
+	if req.ToolChoice != nil {
 		responsesReq.ToolChoice = req.ToolChoice
 	}
 
 	// Convert response format to text.format structure for Responses API
 	responsesReq.Text = p.convertToTextFormat(req)
 
-	if rp := req.ResponsesParams; rp != nil && rp.Temperature != nil {
-		responsesReq.Temperature = rp.Temperature
-	} else if req.Temperature != nil {
+	if req.Temperature != nil {
 		responsesReq.Temperature = req.Temperature
 	}
-
-	if rp := req.ResponsesParams; rp != nil && rp.TopP != nil {
-		responsesReq.TopP = rp.TopP
-	} else if req.TopP != nil {
+	if req.TopP != nil {
 		responsesReq.TopP = req.TopP
 	}
 
-	// Token limits: prefer Responses-specific, otherwise fall back to generic MaxTokens
-	if rp := req.ResponsesParams; rp != nil && rp.MaxOutputTokens != nil {
-		responsesReq.MaxOutputTokens = rp.MaxOutputTokens
-	} else if req.MaxTokens != nil {
-		responsesReq.MaxOutputTokens = req.MaxTokens
-	}
-
-	if rp := req.ResponsesParams; rp != nil && rp.MaxToolCalls != nil {
-		responsesReq.MaxToolCalls = rp.MaxToolCalls
-	}
-	if rp := req.ResponsesParams; rp != nil && rp.ParallelToolCalls != nil {
-		responsesReq.ParallelToolCalls = rp.ParallelToolCalls
-	} else if req.ParallelToolCalls != nil {
-		responsesReq.ParallelToolCalls = req.ParallelToolCalls
-	}
-
-	if rp := req.ResponsesParams; rp != nil {
-		if rp.Instructions != "" {
-			responsesReq.Instructions = rp.Instructions
-		}
-		if rp.Conversation != "" {
-			responsesReq.Conversation = rp.Conversation
-		}
-		if rp.PreviousResponseID != "" {
-			responsesReq.PreviousResponseID = rp.PreviousResponseID
-		}
-		if len(rp.Metadata) > 0 {
-			responsesReq.Metadata = rp.Metadata
-		}
-		if rp.Store != nil {
-			responsesReq.Store = rp.Store
-		}
-		if len(rp.Include) > 0 {
-			responsesReq.Include = rp.Include
-		}
-		if rp.SafetyIdentifier != "" {
-			responsesReq.SafetyIdentifier = rp.SafetyIdentifier
-		}
-		if rp.ServiceTier != "" {
-			responsesReq.ServiceTier = rp.ServiceTier
-		}
-		if rp.PromptCacheKey != "" {
-			responsesReq.PromptCacheKey = rp.PromptCacheKey
-		}
-		if rp.PromptCacheRetention != "" {
-			responsesReq.PromptCacheRetention = rp.PromptCacheRetention
-		}
-		if rp.Background != nil {
-			responsesReq.Background = rp.Background
-		}
-		if len(rp.Prompt) > 0 {
-			responsesReq.Prompt = rp.Prompt
-		}
-	}
-
-	if responsesReq.Store == nil && req.Store != nil {
-		responsesReq.Store = req.Store
-	}
-	if responsesReq.SafetyIdentifier == "" && req.SafetyIdentifier != "" {
-		responsesReq.SafetyIdentifier = req.SafetyIdentifier
-	}
-	if responsesReq.ServiceTier == "" && req.ServiceTier != "" {
-		responsesReq.ServiceTier = req.ServiceTier
+	if req.MaxOutputTokens != nil {
+		responsesReq.MaxOutputTokens = req.MaxOutputTokens
 	}
 
 	return responsesReq
 }
 
-// completeWithResponsesAPI uses OpenAI Responses API to handle reasoning models
-func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Request, modelName string) (*Response, error) {
-	responsesReq := p.buildResponsesAPIRequest(req, modelName)
+// completeWithResponsesAPI uses OpenAI Responses API.
+func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *OpenAIResponsesRequest) (*Response, error) {
+	responsesReq := p.buildResponsesAPIRequest(req)
 
 	body, err := json.Marshal(responsesReq)
 	if err != nil {
@@ -458,15 +449,10 @@ func (p *OpenAIProvider) extractResponsesOutput(responsesResp *responsesAPIRespo
 	return content, messageContents, toolCalls, reasoning
 }
 
-// convertToTextFormat converts ResponseFormat to Responses API text.format structure
+// convertToTextFormat converts ResponseFormat to Responses API text.format structure.
 // See: https://platform.openai.com/docs/api-reference/responses/create
-func (p *OpenAIProvider) convertToTextFormat(req *Request) *responsesAPITextConfig {
-	var rf *ResponseFormat
-	if req.ResponsesParams != nil && req.ResponsesParams.ResponseFormat != nil {
-		rf = req.ResponsesParams.ResponseFormat
-	} else if req.ResponseFormat != nil {
-		rf = req.ResponseFormat
-	}
+func (p *OpenAIProvider) convertToTextFormat(req *OpenAIResponsesRequest) *responsesAPITextConfig {
+	rf := req.ResponseFormat
 
 	if rf == nil {
 		return nil
@@ -520,17 +506,19 @@ func convertResponsesUsage(apiUsage responsesAPIUsage) *Usage {
 	return usage
 }
 
-// streamWithResponsesAPI handles streaming for the /responses endpoint
-func (p *OpenAIProvider) streamWithResponsesAPI(ctx context.Context, req *Request, modelName string) (StreamReader, error) {
-	responsesReq := p.buildResponsesAPIRequest(req, modelName)
+// streamWithResponsesAPI handles streaming for the /responses endpoint.
+func (p *OpenAIProvider) streamWithResponsesAPI(ctx context.Context, req *OpenAIResponsesRequest) (StreamReader, error) {
+	responsesReq := p.buildResponsesAPIRequest(req)
+	stream := true
+	responsesReq.Stream = &stream
 
 	body, err := json.Marshal(responsesReq)
 	if err != nil {
 		return nil, fmt.Errorf("openai: marshal responses request: %w", err)
 	}
 
-	// Use Responses API with stream=true query param
-	url := p.buildURL("/responses") + "?stream=true"
+	// Use Responses API with stream=true in request body
+	url := p.buildURL("/responses")
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("openai: create responses request: %w", err)
@@ -559,7 +547,7 @@ func (p *OpenAIProvider) streamWithResponsesAPI(ctx context.Context, req *Reques
 		resp:     resp,
 		scanner:  scanner,
 		provider: "openai",
-		model:    modelName,
+		model:    req.Model,
 	}, nil
 }
 
@@ -696,12 +684,12 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 			}
 			streamChunk.Type = "tool_call_done"
 			streamChunk.ToolCallDelta = &ToolCallDelta{
-				ID:          done.CallID,
-				Type:        "function",
-				FunctionName: done.Name,
+				ID:             done.CallID,
+				Type:           "function",
+				FunctionName:   done.Name,
 				ArgumentsDelta: done.Arguments,
-				OutputIndex: done.OutputIndex,
-				ItemID:      done.ItemID,
+				OutputIndex:    done.OutputIndex,
+				ItemID:         done.ItemID,
 			}
 			streamChunk.ItemID = done.ItemID
 			streamChunk.OutputIndex = done.OutputIndex

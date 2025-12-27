@@ -15,7 +15,7 @@ func Float64Ptr(v float64) *float64 {
 }
 
 // BoolPtr returns a pointer to a bool value
-// Example: req.Store = litellm.BoolPtr(true)
+// Example: enabled := litellm.BoolPtr(true)
 func BoolPtr(v bool) *bool {
 	return &v
 }

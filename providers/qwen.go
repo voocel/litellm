@@ -31,31 +31,6 @@ func NewQwen(config ProviderConfig) *QwenProvider {
 	}
 }
 
-func (p *QwenProvider) Models() []ModelInfo {
-	return []ModelInfo{
-		{
-			ID: "qwen3-coder-plus", Provider: "qwen", Name: "Qwen Turbo", ContextWindow: 1000000,
-			Capabilities: []string{"chat", "function_call", "reasoning"},
-		},
-		{
-			ID: "qwen3-coder-flash", Provider: "qwen", Name: "Qwen Turbo", ContextWindow: 1000000,
-			Capabilities: []string{"chat", "function_call", "reasoning"},
-		},
-		{
-			ID: "qwen-plus", Provider: "qwen", Name: "Qwen Plus", ContextWindow: 32768,
-			Capabilities: []string{"chat", "function_call", "reasoning"},
-		},
-		{
-			ID: "qwen-max", Provider: "qwen", Name: "Qwen Max", ContextWindow: 8192,
-			Capabilities: []string{"chat", "function_call", "reasoning"},
-		},
-		{
-			ID: "qwen-max-longcontext", Provider: "qwen", Name: "Qwen Max Long Context", ContextWindow: 1000000,
-			Capabilities: []string{"chat", "function_call", "reasoning"},
-		},
-	}
-}
-
 func (p *QwenProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
 	httpReq, err := p.buildHTTPRequest(ctx, req, false)
 	if err != nil {
@@ -153,6 +128,9 @@ func (p *QwenProvider) buildHTTPRequest(ctx context.Context, req *Request, strea
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
+	if err := p.BaseProvider.ValidateExtra(req.Extra, nil); err != nil {
+		return nil, err
+	}
 	if err := p.BaseProvider.ValidateRequest(req); err != nil {
 		return nil, err
 	}
@@ -183,10 +161,6 @@ func (p *QwenProvider) buildHTTPRequest(ctx context.Context, req *Request, strea
 	if len(params) > 0 {
 		qwenReq["parameters"] = params
 	}
-	if p.hasCapability(req.Model, "reasoning") {
-		qwenReq["enable_thinking"] = true
-	}
-
 	body, err := json.Marshal(qwenReq)
 	if err != nil {
 		return nil, fmt.Errorf("qwen: marshal request: %w", err)
@@ -206,20 +180,6 @@ func (p *QwenProvider) buildHTTPRequest(ctx context.Context, req *Request, strea
 	}
 
 	return httpReq, nil
-}
-
-func (p *QwenProvider) hasCapability(modelID, capability string) bool {
-	for _, m := range p.Models() {
-		if m.ID == modelID {
-			for _, c := range m.Capabilities {
-				if c == capability {
-					return true
-				}
-			}
-			return false
-		}
-	}
-	return false
 }
 
 // Qwen API structures (DashScope format)

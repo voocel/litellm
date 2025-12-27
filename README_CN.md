@@ -12,34 +12,13 @@ LiteLLM 是一个小巧的 Go 客户端，用统一 API 访问多个 LLM 平台�
 go get github.com/voocel/litellm
 ```
 
-### 1) 设置一个 API Key
+### 1) 准备 API Key
 
 ```bash
 export OPENAI_API_KEY="your-key"
 ```
 
-### 2) 一行代码调用
-
-```go
-package main
-
-import (
-	"fmt"
-	"log"
-
-	"github.com/voocel/litellm"
-)
-
-func main() {
-	resp, err := litellm.Quick("gpt-4o-mini", "你好，LiteLLM！")
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println(resp.Content)
-}
-```
-
-### 3) 创建 Client（推荐在项目中使用）
+### 2) 创建 Client（显式 Provider）
 
 ```go
 package main
@@ -53,10 +32,9 @@ import (
 )
 
 func main() {
-	client, err := litellm.New(
-		litellm.WithOpenAI(os.Getenv("OPENAI_API_KEY")),
-		litellm.WithDefaults(1024, 0.7),
-	)
+	client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
+		APIKey: os.Getenv("OPENAI_API_KEY"),
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -71,12 +49,13 @@ func main() {
 ```
 
 > 说明
-> - `providers` 子包是内部实现细节，使用者只需要引入 `github.com/voocel/litellm`。
-> - 模型字符串会原样传给上游 API；智能解析只负责选择 Provider，请优先使用各平台官方模型 ID。
+> - `providers` 包是内部实现细节，使用者只需要引入 `github.com/voocel/litellm`。
+> - LiteLLM 不自动发现 Provider，也不自动路由模型，必须显式配置。
 
 ## 核心 API
 
-- `New(opts...)` 创建客户端；不传参数时会从环境变量自动发现可用 Provider。
+- `New(provider, opts...)` 使用显式 Provider 创建客户端。
+- `NewWithProvider(name, config, opts...)` 通过名称与配置创建客户端。
 - `Request` 是跨平台统一的：必填 `Model` 与 `Messages`，可选 `MaxTokens`、`Temperature`、`TopP`、`Stop` 等控制项。
 - `Chat(ctx, req)` 返回统一的 `Response`。
 - `Stream(ctx, req)` 返回 `StreamReader`（不支持多 goroutine 并发读），务必 `defer stream.Close()`。
@@ -156,15 +135,15 @@ resp, err := client.Chat(ctx, &litellm.Request{
 _ = resp
 ```
 
-### 推理模型 / Responses API（OpenAI）
+### OpenAI Responses API
 
 ```go
-resp, err := client.Chat(ctx, &litellm.Request{
+resp, err := client.Responses(ctx, &litellm.OpenAIResponsesRequest{
 	Model: "o3-mini",
 	Messages: []litellm.Message{{Role: "user", Content: "逐步算 15*8"}},
 	ReasoningEffort:  "medium",
 	ReasoningSummary: "auto",
-	UseResponsesAPI:  true,
+	MaxOutputTokens:  litellm.IntPtr(800),
 })
 _ = resp
 ```
@@ -172,17 +151,25 @@ _ = resp
 ### 重试与超时
 
 ```go
-client, _ := litellm.New(
-	litellm.WithOpenAI(os.Getenv("OPENAI_API_KEY")),
-	litellm.WithRetries(3, 1*time.Second),
-	litellm.WithTimeout(60*time.Second),
-)
+res := litellm.DefaultResilienceConfig()
+res.MaxRetries = 3
+res.InitialDelay = 1 * time.Second
+res.RequestTimeout = 60 * time.Second
+
+client, _ := litellm.NewWithProvider("openai", litellm.ProviderConfig{
+	APIKey:     os.Getenv("OPENAI_API_KEY"),
+	Resilience: res,
+})
 _ = client
 ```
 
 ### 平台特定参数
 
-使用 `Request.Extra` 传递平台特定参数（例如 Qwen/GLM 的 thinking）。参考 `examples/qwen`、`examples/glm`、`examples/bedrock`。
+`Request.Extra` 会按 Provider 进行校验，不支持的 Provider 会直接报错。
+
+支持的键：
+- Gemini：`tool_name`（string），用于 tool response 命名
+- GLM：`enable_thinking`（bool）或 `thinking`（包含 `type` 的对象）
 
 ## 自定义 Provider
 
@@ -196,18 +183,6 @@ type MyProvider struct {
 
 func (p *MyProvider) Name() string                     { return p.name }
 func (p *MyProvider) Validate() error                 { return nil }
-func (p *MyProvider) SupportsModel(model string) bool { return true }
-func (p *MyProvider) Models() []litellm.ModelInfo {
-	return []litellm.ModelInfo{
-		{
-			ID:              "my-model",
-			Provider:        "myprovider",
-			Name:            "我的模型",
-			MaxOutputTokens: 4096,
-			Capabilities:    []litellm.ModelCapability{litellm.CapabilityChat},
-		},
-	}
-}
 
 func (p *MyProvider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
 	return &litellm.Response{Content: "hello", Model: req.Model, Provider: p.name}, nil
@@ -227,23 +202,18 @@ func init() {
 
 已内置：OpenAI、Anthropic、Google Gemini、DeepSeek、Qwen（DashScope）、GLM、AWS Bedrock、OpenRouter。
 
-LiteLLM 不会改写模型 ID，只做 Provider 选择，请使用官方模型 ID。
+LiteLLM 不会改写模型 ID，请使用官方模型 ID。
 
 ## 配置
 
-用于自动发现的环境变量：
+显式配置 Provider：
 
-```bash
-export OPENAI_API_KEY="sk-proj-..."
-export ANTHROPIC_API_KEY="sk-ant-..."
-export GEMINI_API_KEY="AIza..."
-export DEEPSEEK_API_KEY="sk-..."
-export QWEN_API_KEY="sk-..."
-export GLM_API_KEY="your-glm-key"
-export OPENROUTER_API_KEY="sk-or-v1-..."
-export AWS_ACCESS_KEY_ID="..."
-export AWS_SECRET_ACCESS_KEY="..."
-export AWS_REGION="us-east-1"
+```go
+client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
+	APIKey:  os.Getenv("OPENAI_API_KEY"),
+	BaseURL: os.Getenv("OPENAI_BASE_URL"), // 可选
+})
+_ = client
 ```
 
 ## 许可证

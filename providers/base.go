@@ -90,11 +90,6 @@ func (p *BaseProvider) Name() string {
 	return p.name
 }
 
-// SupportsModel returns true for any non-empty model name
-func (p *BaseProvider) SupportsModel(model string) bool {
-	return model != ""
-}
-
 func (p *BaseProvider) Config() ProviderConfig {
 	return p.config
 }
@@ -110,6 +105,27 @@ func (p *BaseProvider) ResilienceConfig() ResilienceConfig {
 func (p *BaseProvider) Validate() error {
 	if p.config.APIKey == "" {
 		return fmt.Errorf("%s: API key is required", p.name)
+	}
+	return nil
+}
+
+// ValidateExtra validates request-level extra parameters for a provider.
+func (p *BaseProvider) ValidateExtra(extra map[string]any, allowedKeys []string) error {
+	if len(extra) == 0 {
+		return nil
+	}
+	if len(allowedKeys) == 0 {
+		return fmt.Errorf("%s: request extra parameters are not supported", p.name)
+	}
+
+	allowed := make(map[string]struct{}, len(allowedKeys))
+	for _, key := range allowedKeys {
+		allowed[key] = struct{}{}
+	}
+	for key := range extra {
+		if _, ok := allowed[key]; !ok {
+			return fmt.Errorf("%s: unsupported extra parameter '%s'", p.name, key)
+		}
 	}
 	return nil
 }

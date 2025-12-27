@@ -36,45 +36,25 @@ func NewGemini(config ProviderConfig) *GeminiProvider {
 	}
 }
 
-func (p *GeminiProvider) Models() []ModelInfo {
-	return []ModelInfo{
-		// Gemini 3 series (latest and most powerful)
-		{
-			ID: "gemini-3-pro-preview", Provider: "gemini", Name: "Gemini 3 Pro Preview", ContextWindow: 1048576, MaxOutputTokens: 65535,
-			Capabilities: []string{"chat", "vision", "code", "function_call", "thinking"},
-		},
-		// Gemini 2.5 series (advanced thinking models)
-		{
-			ID: "gemini-2.5-pro", Provider: "gemini", Name: "Gemini 2.5 Pro", ContextWindow: 1048576, MaxOutputTokens: 65535,
-			Capabilities: []string{"chat", "vision", "code", "function_call", "thinking"},
-		},
-		{
-			ID: "gemini-2.5-flash", Provider: "gemini", Name: "Gemini 2.5 Flash", ContextWindow: 1048576, MaxOutputTokens: 65535,
-			Capabilities: []string{"chat", "vision", "function_call", "thinking"},
-		},
-		{
-			ID: "gemini-2.5-flash-lite", Provider: "gemini", Name: "Gemini 2.5 Flash-Lite", ContextWindow: 1048576, MaxOutputTokens: 65535,
-			Capabilities: []string{"chat", "vision", "function_call", "thinking"},
-		},
+func (p *GeminiProvider) validateExtra(req *Request) error {
+	if err := p.BaseProvider.ValidateExtra(req.Extra, []string{"tool_name"}); err != nil {
+		return err
 	}
-}
-
-// supportsThinking checks if the model supports thinking capability
-func (p *GeminiProvider) supportsThinking(model string) bool {
-	for _, m := range p.Models() {
-		if m.ID == model {
-			for _, cap := range m.Capabilities {
-				if cap == "thinking" {
-					return true
-				}
+	if req.Extra != nil {
+		if value, ok := req.Extra["tool_name"]; ok {
+			if _, ok := value.(string); !ok {
+				return fmt.Errorf("gemini: extra parameter 'tool_name' must be a string")
 			}
 		}
 	}
-	return false
+	return nil
 }
 
 func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
 	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	if err := p.validateExtra(req); err != nil {
 		return nil, err
 	}
 
@@ -89,19 +69,11 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 	}
 
 	// Set generation configuration
-	if req.Temperature != nil || req.MaxTokens != nil || req.ResponseFormat != nil || len(req.Stop) > 0 || p.supportsThinking(modelName) {
+	if req.Temperature != nil || req.MaxTokens != nil || req.ResponseFormat != nil || len(req.Stop) > 0 {
 		geminiReq.GenerationConfig = &geminiGenerationConfig{
 			Temperature:     req.Temperature,
 			MaxOutputTokens: req.MaxTokens,
 			StopSequences:   req.Stop, // Map Stop to stopSequences for Gemini
-		}
-
-		// Enable thinking for models that support it
-		if p.supportsThinking(modelName) {
-			geminiReq.GenerationConfig.ThinkingConfig = &geminiThinkingConfig{
-				ThinkingBudget:  intPtr(-1), // Dynamic thinking budget
-				IncludeThoughts: boolPtr(true),
-			}
 		}
 
 		// Handle response format
@@ -335,25 +307,19 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
+	if err := p.validateExtra(req); err != nil {
+		return nil, err
+	}
 
-	modelName := req.Model
 	geminiReq := geminiRequest{
 		Contents: make([]geminiContent, 0),
 	}
 
-	if req.Temperature != nil || req.MaxTokens != nil || len(req.Stop) > 0 || p.supportsThinking(modelName) {
+	if req.Temperature != nil || req.MaxTokens != nil || len(req.Stop) > 0 {
 		geminiReq.GenerationConfig = &geminiGenerationConfig{
 			Temperature:     req.Temperature,
 			MaxOutputTokens: req.MaxTokens,
 			StopSequences:   req.Stop, // Map Stop to stopSequences for Gemini
-		}
-
-		// Enable thinking for models that support it
-		if p.supportsThinking(modelName) {
-			geminiReq.GenerationConfig.ThinkingConfig = &geminiThinkingConfig{
-				ThinkingBudget:  intPtr(-1), // Dynamic thinking budget for complete thoughts
-				IncludeThoughts: boolPtr(true),
-			}
 		}
 	}
 
@@ -394,7 +360,7 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	}
 
 	url := fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?key=%s",
-		p.Config().BaseURL, modelName, p.Config().APIKey)
+		p.Config().BaseURL, req.Model, p.Config().APIKey)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {

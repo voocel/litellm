@@ -31,39 +31,6 @@ func NewOpenRouter(config ProviderConfig) *OpenRouterProvider {
 	}
 }
 
-func (p *OpenRouterProvider) Models() []ModelInfo {
-	return []ModelInfo{
-		{
-			ID: "openai/gpt-4o", Provider: "openrouter", Name: "GPT-4o via OpenRouter", ContextWindow: 128000,
-			Capabilities: []string{"chat", "vision", "function_call", "tool_use"},
-		},
-		{
-			ID: "openai/gpt-4o-mini", Provider: "openrouter", Name: "GPT-4o Mini via OpenRouter", ContextWindow: 128000,
-			Capabilities: []string{"chat", "vision", "function_call", "tool_use"},
-		},
-		{
-			ID: "anthropic/claude-3.7-sonnet", Provider: "openrouter", Name: "Claude 3.7 Sonnet via OpenRouter", ContextWindow: 200000,
-			Capabilities: []string{"chat", "vision", "function_call", "tool_use"},
-		},
-		{
-			ID: "google/gemini-2.0-flash-exp", Provider: "openrouter", Name: "Gemini 2.0 Flash via OpenRouter", ContextWindow: 1000000,
-			Capabilities: []string{"chat", "vision", "function_call", "tool_use"},
-		},
-		{
-			ID: "meta-llama/llama-3.3-70b-instruct", Provider: "openrouter", Name: "Llama 3.3 70B via OpenRouter", ContextWindow: 131072,
-			Capabilities: []string{"chat", "function_call", "tool_use"},
-		},
-		{
-			ID: "deepseek/deepseek-chat", Provider: "openrouter", Name: "DeepSeek Chat via OpenRouter", ContextWindow: 64000,
-			Capabilities: []string{"chat", "function_call", "tool_use"},
-		},
-		{
-			ID: "qwen/qwen-2.5-72b-instruct", Provider: "openrouter", Name: "Qwen 2.5 72B via OpenRouter", ContextWindow: 32768,
-			Capabilities: []string{"chat", "function_call", "tool_use"},
-		},
-	}
-}
-
 func (p *OpenRouterProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
 	httpReq, err := p.buildHTTPRequest(ctx, req, false)
 	if err != nil {
@@ -175,6 +142,9 @@ func (p *OpenRouterProvider) buildHTTPRequest(ctx context.Context, req *Request,
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
+	if err := p.BaseProvider.ValidateExtra(req.Extra, nil); err != nil {
+		return nil, err
+	}
 	if err := p.BaseProvider.ValidateRequest(req); err != nil {
 		return nil, err
 	}
@@ -216,22 +186,6 @@ func (p *OpenRouterProvider) buildHTTPRequest(ctx context.Context, req *Request,
 			}
 		}
 		openRouterReq["response_format"] = responseFormat
-	}
-
-	if req.ReasoningEffort != "" || req.ReasoningSummary != "" {
-		reasoning := map[string]any{}
-		if req.MaxTokens != nil {
-			totalTokens := *req.MaxTokens
-			reasoningTokens := 1024
-			if totalTokens >= 2048 {
-				reasoningTokens = int(float64(totalTokens) * 0.3)
-				if reasoningTokens < 1024 {
-					reasoningTokens = 1024
-				}
-			}
-			reasoning["max_tokens"] = reasoningTokens
-		}
-		openRouterReq["reasoning"] = reasoning
 	}
 
 	body, err := json.Marshal(openRouterReq)
