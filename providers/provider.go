@@ -65,6 +65,11 @@ type JSONSchema struct {
 	Strict      *bool  `json:"strict,omitempty"`
 }
 
+type ThinkingConfig struct {
+	Type         string `json:"type"` // "enabled" or "disabled"
+	BudgetTokens *int   `json:"budget_tokens,omitempty"`
+}
+
 type Request struct {
 	Model          string          `json:"model"`
 	Messages       []Message       `json:"messages"`
@@ -75,6 +80,7 @@ type Request struct {
 	ToolChoice     any             `json:"tool_choice,omitempty"`
 	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
 	Stop           []string        `json:"stop,omitempty"`
+	Thinking       *ThinkingConfig `json:"thinking,omitempty"`
 
 	// Provider-specific extensions
 	Extra map[string]any `json:"extra,omitempty"`

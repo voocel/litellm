@@ -139,6 +139,9 @@ func (p *BaseProvider) ValidateRequest(req *Request) error {
 	if len(req.Messages) == 0 {
 		return fmt.Errorf("%s: at least one message is required", p.name)
 	}
+	if err := validateThinking(req.Thinking); err != nil {
+		return fmt.Errorf("%s: %w", p.name, err)
+	}
 
 	if req.Temperature != nil {
 		if *req.Temperature < 0 || *req.Temperature > 2 {

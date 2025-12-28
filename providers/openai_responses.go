@@ -38,6 +38,9 @@ type OpenAIResponsesRequest struct {
 	// Reasoning configuration (for gpt-5 and o-series models)
 	ReasoningEffort  string `json:"reasoning_effort,omitempty"`  // none, low, medium, high
 	ReasoningSummary string `json:"reasoning_summary,omitempty"` // auto, concise, detailed
+
+	// Unified thinking control (optional). If set, it maps to reasoning fields.
+	Thinking *ThinkingConfig `json:"thinking,omitempty"`
 }
 
 // responsesAPIRequest represents the request structure for OpenAI Responses API
@@ -287,6 +290,18 @@ func (p *OpenAIProvider) buildResponsesAPIRequest(req *OpenAIResponsesRequest) r
 			reasoning.Summary = "auto"
 		}
 		responsesReq.Reasoning = reasoning
+	}
+	if req.Thinking != nil {
+		thinking := normalizeThinking(&Request{Thinking: req.Thinking})
+		if thinking.Type == "disabled" {
+			responsesReq.Reasoning = &responsesAPIReasoning{
+				Effort: "none",
+			}
+		} else if responsesReq.Reasoning == nil {
+			responsesReq.Reasoning = &responsesAPIReasoning{
+				Summary: "auto",
+			}
+		}
 	}
 
 	// Responses API supports tools

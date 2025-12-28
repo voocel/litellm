@@ -18,6 +18,7 @@ type (
 	ResponseFormat         = providers.ResponseFormat
 	JSONSchema             = providers.JSONSchema
 	OpenAIResponsesRequest = providers.OpenAIResponsesRequest
+	ThinkingConfig         = providers.ThinkingConfig
 
 	Request       = providers.Request
 	Response      = providers.Response
@@ -47,6 +48,12 @@ const (
 	ResponseFormatText       = "text"
 	ResponseFormatJSONObject = "json_object"
 	ResponseFormatJSONSchema = "json_schema"
+)
+
+// Thinking type constants.
+const (
+	ThinkingEnabled  = "enabled"
+	ThinkingDisabled = "disabled"
 )
 
 // NewTextMessage creates a message with a role and plain text content.
@@ -116,4 +123,18 @@ func NewCacheControl(cacheType string, ttlSeconds ...int) *CacheControl {
 		cache.TTL = &ttlSeconds[0]
 	}
 	return cache
+}
+
+// NewThinkingEnabled enables thinking with an optional budget.
+func NewThinkingEnabled(budgetTokens int) *ThinkingConfig {
+	cfg := &ThinkingConfig{Type: ThinkingEnabled}
+	if budgetTokens > 0 {
+		cfg.BudgetTokens = &budgetTokens
+	}
+	return cfg
+}
+
+// NewThinkingDisabled disables thinking output.
+func NewThinkingDisabled() *ThinkingConfig {
+	return &ThinkingConfig{Type: ThinkingDisabled}
 }

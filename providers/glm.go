@@ -32,29 +32,7 @@ func NewGLM(config ProviderConfig) *GLMProvider {
 }
 
 func (p *GLMProvider) validateExtra(req *Request) error {
-	if err := p.BaseProvider.ValidateExtra(req.Extra, []string{"enable_thinking", "thinking"}); err != nil {
-		return err
-	}
-	if req.Extra == nil {
-		return nil
-	}
-	if value, ok := req.Extra["enable_thinking"]; ok {
-		if _, ok := value.(bool); !ok {
-			return fmt.Errorf("glm: extra parameter 'enable_thinking' must be a bool")
-		}
-	}
-	if value, ok := req.Extra["thinking"]; ok {
-		thinking, ok := value.(map[string]any)
-		if !ok {
-			return fmt.Errorf("glm: extra parameter 'thinking' must be an object")
-		}
-		if thinkingType, ok := thinking["type"]; ok {
-			if _, ok := thinkingType.(string); !ok {
-				return fmt.Errorf("glm: extra parameter 'thinking.type' must be a string")
-			}
-		}
-	}
-	return nil
+	return p.BaseProvider.ValidateExtra(req.Extra, nil)
 }
 
 func (p *GLMProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
@@ -112,7 +90,7 @@ func (p *GLMProvider) Chat(ctx context.Context, req *Request) (*Response, error)
 		}
 
 		// Handle reasoning content (GLM thinking mode)
-		if choice.Message.ReasoningContent != "" {
+		if !isThinkingDisabled(req) && choice.Message.ReasoningContent != "" {
 			response.Reasoning = &ReasoningData{
 				Content:    choice.Message.ReasoningContent,
 				Summary:    "GLM reasoning process",
@@ -142,9 +120,10 @@ func (p *GLMProvider) Stream(ctx context.Context, req *Request) (StreamReader, e
 	}
 
 	return &glmStreamReader{
-		resp:     resp,
-		scanner:  bufio.NewScanner(resp.Body),
-		provider: "glm",
+		resp:             resp,
+		scanner:          bufio.NewScanner(resp.Body),
+		provider:         "glm",
+		includeReasoning: !isThinkingDisabled(req),
 	}, nil
 }
 
@@ -199,18 +178,15 @@ func (p *GLMProvider) buildHTTPRequest(ctx context.Context, req *Request, stream
 		}
 	}
 
-	if req.Extra != nil {
-		if enableThinking, ok := req.Extra["enable_thinking"].(bool); ok && enableThinking {
-			glmReq["thinking"] = map[string]string{"type": "enabled"}
-		}
-		if thinking, exists := req.Extra["thinking"]; exists {
-			if thinkingMap, ok := thinking.(map[string]any); ok {
-				if thinkingType, ok := thinkingMap["type"].(string); ok {
-					glmReq["thinking"] = map[string]string{"type": thinkingType}
-				}
-			}
-		}
+	thinking := normalizeThinking(req)
+	if thinking.Type != "enabled" && thinking.Type != "disabled" {
+		return nil, fmt.Errorf("glm: thinking type must be enabled or disabled")
 	}
+	thinkingConfig := map[string]any{"type": thinking.Type}
+	if thinking.BudgetTokens != nil {
+		thinkingConfig["budget_tokens"] = *thinking.BudgetTokens
+	}
+	glmReq["thinking"] = thinkingConfig
 
 	body, err := json.Marshal(glmReq)
 	if err != nil {
@@ -273,10 +249,11 @@ type glmUsage struct {
 
 // glmStreamReader implements streaming for GLM
 type glmStreamReader struct {
-	resp     *http.Response
-	scanner  *bufio.Scanner
-	provider string
-	done     bool
+	resp             *http.Response
+	scanner          *bufio.Scanner
+	provider         string
+	includeReasoning bool
+	done             bool
 }
 
 func (r *glmStreamReader) Next() (*StreamChunk, error) {
@@ -322,7 +299,7 @@ func (r *glmStreamReader) Next() (*StreamChunk, error) {
 				}
 
 				// Handle reasoning content
-				if choice.Delta.ReasoningContent != "" {
+				if choice.Delta.ReasoningContent != "" && r.includeReasoning {
 					chunk.Type = "reasoning"
 					chunk.Reasoning = &ReasoningChunk{
 						Content: choice.Delta.ReasoningContent,

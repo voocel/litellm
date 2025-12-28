@@ -76,6 +76,9 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 				response.Content += content.Text
 			}
 		case "thinking":
+			if isThinkingDisabled(req) {
+				continue
+			}
 			if content.Thinking != "" {
 				if response.Reasoning == nil {
 					response.Reasoning = &ReasoningData{}
@@ -123,9 +126,10 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 	}
 
 	return &anthropicStreamReader{
-		resp:     resp,
-		scanner:  bufio.NewScanner(resp.Body),
-		provider: "anthropic",
+		resp:             resp,
+		scanner:          bufio.NewScanner(resp.Body),
+		provider:         "anthropic",
+		includeReasoning: !isThinkingDisabled(req),
 	}, nil
 }
 
@@ -153,6 +157,19 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 		StopSequences: req.Stop,
 		ToolChoice:    req.ToolChoice,
 	}
+
+	thinking := normalizeThinking(req)
+	if thinking.Type != "enabled" && thinking.Type != "disabled" {
+		return nil, fmt.Errorf("anthropic: thinking type must be enabled or disabled")
+	}
+	if thinking.Type == "enabled" && thinking.BudgetTokens == nil {
+		defaultBudget := 1024
+		if maxTokens > 0 && maxTokens < defaultBudget {
+			defaultBudget = maxTokens
+		}
+		thinking.BudgetTokens = &defaultBudget
+	}
+	anthropicReq.Thinking = thinking
 
 	if len(req.Tools) > 0 {
 		anthropicReq.Tools = make([]anthropicTool, 0, len(req.Tools))
@@ -304,10 +321,11 @@ func (p *AnthropicProvider) addStructuredOutputInstructions(content string, form
 
 // anthropicStreamReader implements streaming for Anthropic
 type anthropicStreamReader struct {
-	resp     *http.Response
-	scanner  *bufio.Scanner
-	provider string
-	done     bool
+	resp             *http.Response
+	scanner          *bufio.Scanner
+	provider         string
+	includeReasoning bool
+	done             bool
 }
 
 func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
@@ -345,6 +363,9 @@ func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
 
 		// Handle thinking block start
 		if chunk.Type == "content_block_start" && chunk.ContentBlock != nil && chunk.ContentBlock.Type == "thinking" {
+			if !r.includeReasoning {
+				continue
+			}
 			return &StreamChunk{
 				Type:      "reasoning",
 				Provider:  r.provider,
@@ -354,6 +375,9 @@ func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
 
 		// Handle thinking content deltas (extended thinking)
 		if chunk.Type == "content_block_delta" && chunk.Delta.Type == "thinking_delta" {
+			if !r.includeReasoning {
+				continue
+			}
 			return &StreamChunk{
 				Type:      "reasoning",
 				Content:   "", // Keep content empty for reasoning chunks
@@ -421,6 +445,7 @@ type anthropicRequest struct {
 	Tools         []anthropicTool    `json:"tools,omitempty"`
 	ToolChoice    any                `json:"tool_choice,omitempty"`    // How the model should use the provided tools
 	StopSequences []string           `json:"stop_sequences,omitempty"` // Custom text sequences that will cause the model to stop generating
+	Thinking      *ThinkingConfig    `json:"thinking,omitempty"`
 }
 
 type anthropicMessage struct {

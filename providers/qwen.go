@@ -87,7 +87,7 @@ func (p *QwenProvider) Chat(ctx context.Context, req *Request) (*Response, error
 			}
 
 			// Handle reasoning content
-			if choice.Message.ReasoningContent != "" {
+			if !isThinkingDisabled(req) && choice.Message.ReasoningContent != "" {
 				response.Reasoning = &ReasoningData{
 					Content:    choice.Message.ReasoningContent,
 					Summary:    "Qwen reasoning process",
@@ -118,9 +118,10 @@ func (p *QwenProvider) Stream(ctx context.Context, req *Request) (StreamReader, 
 	}
 
 	return &qwenStreamReader{
-		resp:     resp,
-		scanner:  bufio.NewScanner(resp.Body),
-		provider: "qwen",
+		resp:             resp,
+		scanner:          bufio.NewScanner(resp.Body),
+		provider:         "qwen",
+		includeReasoning: !isThinkingDisabled(req),
 	}, nil
 }
 
@@ -215,11 +216,12 @@ type qwenUsage struct {
 
 // qwenStreamReader implements streaming for Qwen
 type qwenStreamReader struct {
-	resp        *http.Response
-	scanner     *bufio.Scanner
-	provider    string
-	done        bool
-	lastContent string
+	resp             *http.Response
+	scanner          *bufio.Scanner
+	provider         string
+	includeReasoning bool
+	done             bool
+	lastContent      string
 }
 
 func (r *qwenStreamReader) Next() (*StreamChunk, error) {
@@ -273,7 +275,7 @@ func (r *qwenStreamReader) Next() (*StreamChunk, error) {
 				}
 
 				// Handle reasoning content
-				if choice.Message.ReasoningContent != "" {
+				if choice.Message.ReasoningContent != "" && r.includeReasoning {
 					chunk.Type = "reasoning"
 					chunk.Reasoning = &ReasoningChunk{
 						Content: choice.Message.ReasoningContent,

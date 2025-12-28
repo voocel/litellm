@@ -85,6 +85,9 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req *Request) (*Response, err
 			return nil, err
 		}
 	} else {
+		if err := validateThinking(req.Thinking); err != nil {
+			return nil, fmt.Errorf("openai: %w", err)
+		}
 		// For reasoning models, only validate model and messages
 		if req.Model == "" {
 			return nil, fmt.Errorf("openai: model is required")
@@ -196,7 +199,7 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 		response.FinishReason = choice.FinishReason
 
 		// Extract reasoning content (OpenAI format only)
-		if choice.ReasoningSummary != nil && choice.ReasoningSummary.Text != "" {
+		if !isThinkingDisabled(req) && choice.ReasoningSummary != nil && choice.ReasoningSummary.Text != "" {
 			response.Reasoning = &ReasoningData{
 				Summary:    choice.ReasoningSummary.Text,
 				TokensUsed: response.Usage.ReasoningTokens,
@@ -228,6 +231,9 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	}
 	if err := p.BaseProvider.ValidateExtra(req.Extra, nil); err != nil {
 		return nil, err
+	}
+	if err := validateThinking(req.Thinking); err != nil {
+		return nil, fmt.Errorf("openai: %w", err)
 	}
 
 	modelName := req.Model
@@ -304,9 +310,10 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	scanner.Buffer(buf, 1024*1024)
 
 	return &openaiStreamReader{
-		resp:     resp,
-		scanner:  scanner,
-		provider: "openai",
+		resp:             resp,
+		scanner:          scanner,
+		provider:         "openai",
+		includeReasoning: !isThinkingDisabled(req),
 	}, nil
 }
 
@@ -328,10 +335,11 @@ func (p *OpenAIProvider) setHeaders(req *http.Request) {
 
 // openaiStreamReader implements streaming for OpenAI
 type openaiStreamReader struct {
-	resp     *http.Response
-	scanner  *bufio.Scanner
-	provider string
-	done     bool
+	resp             *http.Response
+	scanner          *bufio.Scanner
+	provider         string
+	includeReasoning bool
+	done             bool
 }
 
 func (r *openaiStreamReader) Next() (*StreamChunk, error) {
@@ -388,7 +396,7 @@ func (r *openaiStreamReader) Next() (*StreamChunk, error) {
 			}
 
 			// Handle reasoning streaming (OpenAI format only)
-			if choice.Delta.ReasoningSummary != nil && choice.Delta.ReasoningSummary.Text != "" {
+			if r.includeReasoning && choice.Delta.ReasoningSummary != nil && choice.Delta.ReasoningSummary.Text != "" {
 				streamChunk.Type = "reasoning"
 				streamChunk.Reasoning = &ReasoningChunk{
 					Summary: choice.Delta.ReasoningSummary.Text,

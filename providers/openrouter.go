@@ -102,7 +102,7 @@ func (p *OpenRouterProvider) Chat(ctx context.Context, req *Request) (*Response,
 			}
 		}
 
-		if choice.Message.Reasoning != "" {
+		if !isThinkingDisabled(req) && choice.Message.Reasoning != "" {
 			response.Reasoning = &ReasoningData{
 				Content:    choice.Message.Reasoning,
 				Summary:    "OpenRouter reasoning process",
@@ -132,9 +132,10 @@ func (p *OpenRouterProvider) Stream(ctx context.Context, req *Request) (StreamRe
 	}
 
 	return &openRouterStreamReader{
-		resp:     resp,
-		scanner:  bufio.NewScanner(resp.Body),
-		provider: "openrouter",
+		resp:             resp,
+		scanner:          bufio.NewScanner(resp.Body),
+		provider:         "openrouter",
+		includeReasoning: !isThinkingDisabled(req),
 	}, nil
 }
 
@@ -334,10 +335,11 @@ type openRouterCompletionTokensDetails struct {
 
 // openRouterStreamReader implements streaming for OpenRouter
 type openRouterStreamReader struct {
-	resp     *http.Response
-	scanner  *bufio.Scanner
-	provider string
-	done     bool
+	resp             *http.Response
+	scanner          *bufio.Scanner
+	provider         string
+	includeReasoning bool
+	done             bool
 }
 
 func (r *openRouterStreamReader) Next() (*StreamChunk, error) {
@@ -381,7 +383,7 @@ func (r *openRouterStreamReader) Next() (*StreamChunk, error) {
 					chunk.Content = choice.Delta.Content
 				}
 
-				if choice.Delta.Reasoning != "" {
+				if choice.Delta.Reasoning != "" && r.includeReasoning {
 					chunk.Type = "reasoning"
 					chunk.Reasoning = &ReasoningChunk{
 						Content: choice.Delta.Reasoning,

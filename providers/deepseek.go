@@ -93,7 +93,7 @@ func (p *DeepSeekProvider) Chat(ctx context.Context, req *Request) (*Response, e
 		}
 
 		// Check for reasoning content (DeepSeek reasoner model)
-		if strings.Contains(req.Model, "reasoner") && choice.Message.ReasoningContent != "" {
+		if !isThinkingDisabled(req) && strings.Contains(req.Model, "reasoner") && choice.Message.ReasoningContent != "" {
 			reasoningTokens := 0
 			if deepseekResp.Usage != nil && deepseekResp.Usage.CompletionTokensDetails != nil {
 				reasoningTokens = deepseekResp.Usage.CompletionTokensDetails.ReasoningTokens
@@ -128,9 +128,10 @@ func (p *DeepSeekProvider) Stream(ctx context.Context, req *Request) (StreamRead
 	}
 
 	return &deepseekStreamReader{
-		resp:     resp,
-		scanner:  bufio.NewScanner(resp.Body),
-		provider: "deepseek",
+		resp:             resp,
+		scanner:          bufio.NewScanner(resp.Body),
+		provider:         "deepseek",
+		includeReasoning: !isThinkingDisabled(req),
 	}, nil
 }
 
@@ -226,10 +227,11 @@ type deepseekCompletionTokensDetails struct {
 
 // deepseekStreamReader implements streaming for DeepSeek
 type deepseekStreamReader struct {
-	resp     *http.Response
-	scanner  *bufio.Scanner
-	provider string
-	done     bool
+	resp             *http.Response
+	scanner          *bufio.Scanner
+	provider         string
+	includeReasoning bool
+	done             bool
 }
 
 func (r *deepseekStreamReader) Next() (*StreamChunk, error) {
@@ -267,7 +269,7 @@ func (r *deepseekStreamReader) Next() (*StreamChunk, error) {
 				chunk.Content = choice.Delta.Content
 			}
 
-			if choice.Delta.ReasoningContent != "" {
+			if choice.Delta.ReasoningContent != "" && r.includeReasoning {
 				chunk.Type = "reasoning"
 				chunk.Reasoning = &ReasoningChunk{
 					Content: choice.Delta.ReasoningContent,
