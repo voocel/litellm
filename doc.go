@@ -46,6 +46,26 @@ Create a client explicitly:
 	    fmt.Print(chunk.Content)
 	}
 
+Or collect the full response:
+
+	resp, err := litellm.CollectStream(stream)
+	if err != nil {
+	    log.Fatal(err)
+	}
+	fmt.Print(resp.Content)
+
+Or stream while aggregating:
+
+	resp, err := litellm.CollectStreamWithHandler(stream, func(chunk *litellm.StreamChunk) {
+	    if chunk.Type == litellm.ChunkTypeContent && chunk.Content != "" {
+	        fmt.Print(chunk.Content)
+	    }
+	})
+	if err != nil {
+	    log.Fatal(err)
+	}
+	fmt.Print(resp.Content)
+
 # OpenAI Responses API
 
 Use a dedicated request type for Responses API:

@@ -92,7 +92,7 @@ func NewHTTPError(provider string, statusCode int, message string) *LiteLLMError
 	return &LiteLLMError{
 		Type:       errorType,
 		Provider:   provider,
-		Message:    message,
+		Message:    normalizeHTTPMessage(statusCode, message),
 		StatusCode: statusCode,
 		Retryable:  isRetryableByType(errorType),
 	}
@@ -270,4 +270,50 @@ func extractHTTPStatus(msgLower string) int {
 		}
 	}
 	return 0
+}
+
+func normalizeHTTPMessage(statusCode int, message string) string {
+	label := httpStatusLabel(statusCode)
+	trimmed := strings.TrimSpace(message)
+
+	if trimmed == "" {
+		if label == "" {
+			return fmt.Sprintf("http %d", statusCode)
+		}
+		return fmt.Sprintf("%s (HTTP %d)", label, statusCode)
+	}
+
+	lower := strings.ToLower(trimmed)
+	if strings.Contains(lower, "http") && strings.Contains(lower, strconv.Itoa(statusCode)) {
+		return trimmed
+	}
+
+	if label == "" {
+		return fmt.Sprintf("http %d: %s", statusCode, trimmed)
+	}
+	return fmt.Sprintf("%s (HTTP %d): %s", label, statusCode, trimmed)
+}
+
+func httpStatusLabel(statusCode int) string {
+	switch statusCode {
+	case http.StatusBadRequest:
+		return "bad request"
+	case http.StatusUnauthorized:
+		return "unauthorized"
+	case http.StatusForbidden:
+		return "forbidden"
+	case http.StatusPaymentRequired:
+		return "quota exceeded"
+	case http.StatusNotFound:
+		return "not found"
+	case http.StatusRequestTimeout:
+		return "request timeout"
+	case http.StatusTooManyRequests:
+		return "rate limited"
+	default:
+		if statusCode >= 500 {
+			return "provider error"
+		}
+	}
+	return "request failed"
 }

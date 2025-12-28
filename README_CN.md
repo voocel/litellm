@@ -18,13 +18,16 @@ go get github.com/voocel/litellm
 export OPENAI_API_KEY="your-key"
 ```
 
-### 2) 创建 Client（显式 Provider）
+### 2) 最小可运行示例
+
+#### 文本对话
 
 ```go
 package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 
@@ -39,13 +42,117 @@ func main() {
 		log.Fatal(err)
 	}
 
-	_, _ = client.Chat(context.Background(), &litellm.Request{
-		Model: "gpt-4o-mini",
-		Messages: []litellm.Message{
-			{Role: "user", Content: "用一句话解释 AI。"},
-		},
+	resp, err := client.Chat(context.Background(), &litellm.Request{
+		Model:    "gpt-4o-mini",
+		Messages: []litellm.Message{litellm.NewUserMessage("用一句话解释 AI。")},
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(resp.Content)
 }
+```
+
+#### 工具调用
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+
+	"github.com/voocel/litellm"
+)
+
+func main() {
+	client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
+		APIKey: os.Getenv("OPENAI_API_KEY"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	tools := []litellm.Tool{
+		litellm.NewTool("get_weather", "Get weather for a city.", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"city": map[string]any{"type": "string"},
+			},
+			"required": []string{"city"},
+		}),
+	}
+
+	resp, err := client.Chat(context.Background(), &litellm.Request{
+		Model:      "gpt-4o-mini",
+		Messages:   []litellm.Message{litellm.NewUserMessage("东京天气怎么样？")},
+		Tools:      tools,
+		ToolChoice: "auto",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(resp.Content)
+}
+```
+
+#### 流式（收集）
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+
+	"github.com/voocel/litellm"
+)
+
+func main() {
+	client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
+		APIKey: os.Getenv("OPENAI_API_KEY"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	stream, err := client.Stream(context.Background(), &litellm.Request{
+		Model:    "gpt-4o-mini",
+		Messages: []litellm.Message{litellm.NewUserMessage("讲个笑话")},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer stream.Close()
+
+resp, err := litellm.CollectStream(stream)
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Println(resp.Content)
+}
+```
+
+如果你需要实时打印并最终得到聚合结果：
+
+```go
+resp, err := litellm.CollectStreamWithHandler(stream, func(chunk *litellm.StreamChunk) {
+	if chunk.Type == litellm.ChunkTypeContent && chunk.Content != "" {
+		fmt.Print(chunk.Content)
+	}
+	if chunk.Reasoning != nil && chunk.Reasoning.Done {
+		fmt.Print("\n[reasoning done]")
+	}
+})
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Println("\n---")
+fmt.Println(resp.Content)
 ```
 
 > 说明
@@ -59,6 +166,9 @@ func main() {
 - `Request` 是跨平台统一的：必填 `Model` 与 `Messages`，可选 `MaxTokens`、`Temperature`、`TopP`、`Stop` 等控制项。
 - `Chat(ctx, req)` 返回统一的 `Response`。
 - `Stream(ctx, req)` 返回 `StreamReader`（不支持多 goroutine 并发读），务必 `defer stream.Close()`。
+- `CollectStream(stream)` 将流式结果收集为统一的 `Response`。
+- `CollectStreamWithHandler(stream, onChunk)` 收集时也会处理每个 chunk。
+- `CollectStreamWithCallbacks(stream, callbacks)` 提供内容/思考/工具回调。
 
 ### 流式（最小示例）
 
@@ -74,13 +184,11 @@ if err != nil {
 }
 defer stream.Close()
 
-for {
-	chunk, err := stream.Next()
-	if err != nil || chunk.Done {
-		break
-	}
-	fmt.Print(chunk.Content)
+resp, err := litellm.CollectStream(stream)
+if err != nil {
+	log.Fatal(err)
 }
+fmt.Print(resp.Content)
 ```
 
 ## 高级能力（可选）

@@ -577,6 +577,8 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 	// - response.output_item.added, response.output_item.done
 	// - response.content_part.added, response.content_part.done
 	// - response.output_text.delta, response.output_text.done
+	// - response.reasoning_text.delta, response.reasoning_text.done
+	// - response.reasoning_summary_text.delta, response.reasoning_summary_text.done
 	// - response.refusal.delta, response.refusal.done
 	//
 	// Tool events:
@@ -646,6 +648,52 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 		case "response.refusal.done":
 			// Refusal complete, continue to wait for response.completed
 			continue
+
+		// === Reasoning Events ===
+		case "response.reasoning_text.delta":
+			var delta struct {
+				Delta          string `json:"delta"`
+				ItemID         string `json:"item_id"`
+				OutputIndex    *int   `json:"output_index,omitempty"`
+				ContentIndex   *int   `json:"content_index,omitempty"`
+				SequenceNumber int    `json:"sequence_number,omitempty"`
+			}
+			if err := json.Unmarshal([]byte(data), &delta); err != nil {
+				return nil, fmt.Errorf("openai: parse reasoning delta: %w", err)
+			}
+			streamChunk.Type = "reasoning"
+			streamChunk.Reasoning = &ReasoningChunk{Content: delta.Delta}
+			streamChunk.ItemID = delta.ItemID
+			streamChunk.OutputIndex = delta.OutputIndex
+			streamChunk.ContentIndex = delta.ContentIndex
+			return streamChunk, nil
+
+		case "response.reasoning_text.done":
+			streamChunk.Type = "reasoning_done"
+			streamChunk.Reasoning = &ReasoningChunk{Done: true}
+			return streamChunk, nil
+
+		case "response.reasoning_summary_text.delta":
+			var delta struct {
+				Delta          string `json:"delta"`
+				ItemID         string `json:"item_id"`
+				OutputIndex    *int   `json:"output_index,omitempty"`
+				SummaryIndex   *int   `json:"summary_index,omitempty"`
+				SequenceNumber int    `json:"sequence_number,omitempty"`
+			}
+			if err := json.Unmarshal([]byte(data), &delta); err != nil {
+				return nil, fmt.Errorf("openai: parse reasoning summary delta: %w", err)
+			}
+			streamChunk.Type = "reasoning"
+			streamChunk.Reasoning = &ReasoningChunk{Summary: delta.Delta}
+			streamChunk.ItemID = delta.ItemID
+			streamChunk.OutputIndex = delta.OutputIndex
+			return streamChunk, nil
+
+		case "response.reasoning_summary_text.done":
+			streamChunk.Type = "reasoning_summary_done"
+			streamChunk.Reasoning = &ReasoningChunk{Done: true}
+			return streamChunk, nil
 
 		// === Tool Call Events ===
 		case "response.function_call_arguments.delta":

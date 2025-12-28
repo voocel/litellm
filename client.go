@@ -16,6 +16,7 @@ type Client struct {
 type DefaultConfig struct {
 	MaxTokens   int     `json:"max_tokens"`
 	Temperature float64 `json:"temperature"`
+	TopP        float64 `json:"top_p"`
 }
 
 // ClientOption configures the Client.
@@ -29,7 +30,7 @@ func New(provider Provider, opts ...ClientOption) (*Client, error) {
 
 	client := &Client{
 		provider: provider,
-		defaults: DefaultConfig{MaxTokens: 4096, Temperature: 0.7},
+		defaults: DefaultConfig{MaxTokens: 4096, Temperature: 1, TopP: 1.0},
 	}
 
 	for _, opt := range opts {
@@ -88,7 +89,7 @@ func validateProviderConfig(name string, config ProviderConfig) error {
 }
 
 // WithDefaults sets request-level defaults (applies only when fields are unset).
-func WithDefaults(maxTokens int, temperature float64) ClientOption {
+func WithDefaults(maxTokens int, temperature float64, topP float64) ClientOption {
 	return func(c *Client) error {
 		if maxTokens <= 0 {
 			return fmt.Errorf("maxTokens must be positive")
@@ -96,8 +97,12 @@ func WithDefaults(maxTokens int, temperature float64) ClientOption {
 		if temperature < 0 || temperature > 2 {
 			return fmt.Errorf("temperature must be between 0 and 2")
 		}
+		if topP < 0 || topP > 1 {
+			return fmt.Errorf("topP must be between 0 and 1")
+		}
 		c.defaults.MaxTokens = maxTokens
 		c.defaults.Temperature = temperature
+		c.defaults.TopP = topP
 		return nil
 	}
 }
@@ -204,6 +209,10 @@ func (c *Client) applyDefaults(req *Request) {
 		temperature := c.defaults.Temperature
 		req.Temperature = &temperature
 	}
+	if req.TopP == nil {
+		topP := c.defaults.TopP
+		req.TopP = &topP
+	}
 }
 
 func (c *Client) applyResponsesDefaults(req *OpenAIResponsesRequest) {
@@ -216,7 +225,7 @@ func (c *Client) applyResponsesDefaults(req *OpenAIResponsesRequest) {
 		req.Temperature = &temperature
 	}
 	if req.TopP == nil {
-		topP := 1.0
+		topP := c.defaults.TopP
 		req.TopP = &topP
 	}
 }

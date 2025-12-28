@@ -136,6 +136,7 @@ type ToolCallDelta struct {
 type ReasoningChunk struct {
 	Summary string `json:"summary,omitempty"`
 	Content string `json:"content,omitempty"`
+	Done    bool   `json:"done,omitempty"`
 }
 
 type StreamReader interface {
