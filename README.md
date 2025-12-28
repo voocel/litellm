@@ -169,6 +169,7 @@ fmt.Println(resp.Content)
 - `CollectStream(stream)` collects a stream into a unified `Response`.
 - `CollectStreamWithHandler(stream, onChunk)` collects and also handles each chunk.
 - `CollectStreamWithCallbacks(stream, callbacks)` adds content/reasoning/tool callbacks.
+- `Request.Thinking` controls thinking output (default enabled; set to disabled to turn off).
 
 ### Streaming (minimal)
 
@@ -243,6 +244,28 @@ resp, err := client.Chat(ctx, &litellm.Request{
 _ = resp
 ```
 
+### Thinking output (default enabled)
+
+```go
+resp, err := client.Chat(ctx, &litellm.Request{
+	Model:    "claude-haiku-4-5-20251001",
+	Messages: []litellm.Message{litellm.NewUserMessage("Explain the tradeoffs.")},
+	Thinking: litellm.NewThinkingEnabled(1024),
+})
+_ = resp
+```
+
+To disable:
+
+```go
+req := &litellm.Request{
+	Model:    "claude-haiku-4-5-20251001",
+	Messages: []litellm.Message{litellm.NewUserMessage("Explain the tradeoffs.")},
+	Thinking: litellm.NewThinkingDisabled(),
+}
+_ = req
+```
+
 ### OpenAI Responses API
 
 ```go
@@ -251,6 +274,7 @@ resp, err := client.Responses(ctx, &litellm.OpenAIResponsesRequest{
 	Messages: []litellm.Message{{Role: "user", Content: "Solve 15*8 step by step."}},
 	ReasoningEffort:  "medium",
 	ReasoningSummary: "auto",
+	Thinking:         litellm.NewThinkingEnabled(0),
 	MaxOutputTokens:  litellm.IntPtr(800),
 })
 _ = resp

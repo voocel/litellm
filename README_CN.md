@@ -169,6 +169,7 @@ fmt.Println(resp.Content)
 - `CollectStream(stream)` 将流式结果收集为统一的 `Response`。
 - `CollectStreamWithHandler(stream, onChunk)` 收集时也会处理每个 chunk。
 - `CollectStreamWithCallbacks(stream, callbacks)` 提供内容/思考/工具回调。
+- `Request.Thinking` 控制思考输出（默认开启，显式禁用才关闭）。
 
 ### 流式（最小示例）
 
@@ -243,6 +244,28 @@ resp, err := client.Chat(ctx, &litellm.Request{
 _ = resp
 ```
 
+### 思考输出（默认开启）
+
+```go
+resp, err := client.Chat(ctx, &litellm.Request{
+	Model:    "claude-haiku-4-5-20251001",
+	Messages: []litellm.Message{litellm.NewUserMessage("说一句笑话。")},
+	Thinking: litellm.NewThinkingEnabled(1024),
+})
+_ = resp
+```
+
+如需关闭：
+
+```go
+req := &litellm.Request{
+	Model:    "claude-haiku-4-5-20251001",
+	Messages: []litellm.Message{litellm.NewUserMessage("说一句笑话。")},
+	Thinking: litellm.NewThinkingDisabled(),
+}
+_ = req
+```
+
 ### OpenAI Responses API
 
 ```go
@@ -251,6 +274,7 @@ resp, err := client.Responses(ctx, &litellm.OpenAIResponsesRequest{
 	Messages: []litellm.Message{{Role: "user", Content: "逐步算 15*8"}},
 	ReasoningEffort:  "medium",
 	ReasoningSummary: "auto",
+	Thinking:         litellm.NewThinkingEnabled(0),
 	MaxOutputTokens:  litellm.IntPtr(800),
 })
 _ = resp
