@@ -101,7 +101,6 @@ func (p *DeepSeekProvider) Chat(ctx context.Context, req *Request) (*Response, e
 
 			response.Reasoning = &ReasoningData{
 				Content:    choice.Message.ReasoningContent,
-				Summary:    "DeepSeek reasoning process",
 				TokensUsed: reasoningTokens,
 			}
 		}
@@ -273,7 +272,6 @@ func (r *deepseekStreamReader) Next() (*StreamChunk, error) {
 				chunk.Type = "reasoning"
 				chunk.Reasoning = &ReasoningChunk{
 					Content: choice.Delta.ReasoningContent,
-					Summary: "DeepSeek reasoning process",
 				}
 			}
 

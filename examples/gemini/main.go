@@ -71,7 +71,6 @@ func basicChat(client *litellm.Client) {
 	// Display reasoning content if available
 	if response.Reasoning != nil && response.Reasoning.Content != "" {
 		fmt.Printf("Reasoning Content: %s\n", response.Reasoning.Content)
-		fmt.Printf("Reasoning Summary: %s\n", response.Reasoning.Summary)
 		fmt.Printf("Reasoning Tokens: %d\n", response.Reasoning.TokensUsed)
 		fmt.Println("---")
 	}
@@ -88,7 +87,7 @@ func streamingChat(client *litellm.Client) {
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
-				Content: "Write a haiku about artificial intelligence",
+				Content: "你是谁",
 			},
 		},
 		MaxTokens:   litellm.IntPtr(2000),
@@ -104,27 +103,34 @@ func streamingChat(client *litellm.Client) {
 	defer stream.Close()
 
 	fmt.Print("Streaming response: ")
-	for {
-		chunk, err := stream.Next()
-		if err != nil {
-			log.Printf("Stream error: %v", err)
-			break
+	printPrefix := func(label string, printed *bool) {
+		if *printed {
+			return
 		}
+		fmt.Print("\n")
+		fmt.Print(label)
+		*printed = true
+	}
 
-		if chunk.Done {
-			break
-		}
+	thinkingPrinted := false
+	outputPrinted := false
 
-		switch chunk.Type {
-		case "content":
-			if chunk.Content != "" {
-				fmt.Print(chunk.Content)
+	_, err = litellm.CollectStreamWithCallbacks(stream, litellm.StreamCallbacks{
+		OnContent: func(text string) {
+			if text != "" {
+				printPrefix("[output]: ", &outputPrinted)
+				fmt.Print(text)
 			}
-		case "reasoning":
-			if chunk.Reasoning != nil && chunk.Reasoning.Content != "" {
-				fmt.Printf("\n[Thinking: %s]\n", chunk.Reasoning.Content)
+		},
+		OnReasoning: func(r *litellm.ReasoningChunk) {
+			if r.Content != "" {
+				printPrefix("[think]: ", &thinkingPrinted)
+				fmt.Print(r.Content)
 			}
-		}
+		},
+	})
+	if err != nil {
+		log.Printf("Stream error: %v", err)
 	}
 	fmt.Println()
 }

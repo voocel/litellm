@@ -304,7 +304,6 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 		if !isThinkingDisabled(req) && thinkingContent != "" {
 			response.Reasoning = &ReasoningData{
 				Content:    thinkingContent,
-				Summary:    "Gemini thinking process",
 				TokensUsed: geminiResp.UsageMetadata.ThoughtsTokenCount,
 			}
 		}
@@ -603,7 +602,6 @@ func (r *geminiStreamReader) processResponse(streamResp geminiStreamResponse) (*
 				streamChunk.Type = "reasoning"
 				streamChunk.Reasoning = &ReasoningChunk{
 					Content: part.Text,
-					Summary: "Gemini thinking process",
 				}
 				return streamChunk, nil
 			} else if part.Text != "" {

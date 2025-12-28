@@ -93,7 +93,6 @@ func (p *GLMProvider) Chat(ctx context.Context, req *Request) (*Response, error)
 		if !isThinkingDisabled(req) && choice.Message.ReasoningContent != "" {
 			response.Reasoning = &ReasoningData{
 				Content:    choice.Message.ReasoningContent,
-				Summary:    "GLM reasoning process",
 				TokensUsed: 0, // GLM doesn't separate reasoning tokens
 			}
 		}
@@ -303,7 +302,6 @@ func (r *glmStreamReader) Next() (*StreamChunk, error) {
 					chunk.Type = "reasoning"
 					chunk.Reasoning = &ReasoningChunk{
 						Content: choice.Delta.ReasoningContent,
-						Summary: "GLM reasoning process",
 					}
 				}
 

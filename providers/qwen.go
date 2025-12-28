@@ -90,7 +90,6 @@ func (p *QwenProvider) Chat(ctx context.Context, req *Request) (*Response, error
 			if !isThinkingDisabled(req) && choice.Message.ReasoningContent != "" {
 				response.Reasoning = &ReasoningData{
 					Content:    choice.Message.ReasoningContent,
-					Summary:    "Qwen reasoning process",
 					TokensUsed: 0, // Qwen doesn't separate reasoning tokens
 				}
 			}
@@ -279,7 +278,6 @@ func (r *qwenStreamReader) Next() (*StreamChunk, error) {
 					chunk.Type = "reasoning"
 					chunk.Reasoning = &ReasoningChunk{
 						Content: choice.Message.ReasoningContent,
-						Summary: "Qwen reasoning process",
 					}
 				}
 

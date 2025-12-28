@@ -94,11 +94,7 @@ func thinkingMode(client *litellm.Client) {
 		},
 		MaxTokens:   litellm.IntPtr(10000),
 		Temperature: litellm.Float64Ptr(0.7),
-		Extra: map[string]interface{}{
-			"thinking": map[string]interface{}{
-				"type": "enabled", // Enable GLM thinking mode
-			},
-		},
+		Thinking:    litellm.NewThinkingEnabled(1024),
 	}
 
 	ctx := context.Background()
@@ -108,13 +104,11 @@ func thinkingMode(client *litellm.Client) {
 		return
 	}
 
-	// Display thinking process if available
 	if response.Reasoning != nil && response.Reasoning.Content != "" {
-		fmt.Printf("Thinking Process:\n%s\n", response.Reasoning.Content)
-		fmt.Println("---")
+		fmt.Printf("think: %s\n", response.Reasoning.Content)
 	}
 
-	fmt.Printf("Final Answer: %s\n", response.Content)
+	fmt.Printf("output: %s\n", response.Content)
 	fmt.Printf("Usage: %d tokens\n", response.Usage.TotalTokens)
 }
 
@@ -190,24 +184,34 @@ func streamingChat(client *litellm.Client) {
 	defer stream.Close()
 
 	fmt.Print("Streaming response: ")
-	for {
-		chunk, err := stream.Next()
-		if err != nil {
-			log.Printf("Stream error: %v", err)
-			break
+	printPrefix := func(label string, printed *bool) {
+		if *printed {
+			return
 		}
+		fmt.Print("\n")
+		fmt.Print(label)
+		*printed = true
+	}
 
-		if chunk.Done {
-			break
-		}
+	thinkingPrinted := false
+	outputPrinted := false
 
-		if chunk.Type == "content" && chunk.Content != "" {
-			fmt.Print(chunk.Content)
-		}
-
-		if chunk.Type == "reasoning" && chunk.Reasoning != nil {
-			fmt.Printf("\n[Thinking: %s]\n", chunk.Reasoning.Content)
-		}
+	_, err = litellm.CollectStreamWithCallbacks(stream, litellm.StreamCallbacks{
+		OnContent: func(text string) {
+			if text != "" {
+				printPrefix("[output]: ", &outputPrinted)
+				fmt.Print(text)
+			}
+		},
+		OnReasoning: func(r *litellm.ReasoningChunk) {
+			if r.Content != "" {
+				printPrefix("[think]: ", &thinkingPrinted)
+				fmt.Print(r.Content)
+			}
+		},
+	})
+	if err != nil {
+		log.Printf("Stream error: %v", err)
 	}
 	fmt.Println()
 }

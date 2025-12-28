@@ -77,18 +77,46 @@ func testOpenAI(client *litellm.Client) {
 	}
 
 	ctx := context.Background()
-	response, err := client.Chat(ctx, request)
+	stream, err := client.Stream(ctx, request)
+	if err != nil {
+		log.Printf("GPT-4o via OpenRouter failed: %v", err)
+		return
+	}
+	defer stream.Close()
+
+	fmt.Print("Streaming response: ")
+	printPrefix := func(label string, printed *bool) {
+		if *printed {
+			return
+		}
+		fmt.Print("\n")
+		fmt.Print(label)
+		*printed = true
+	}
+
+	thinkingPrinted := false
+	outputPrinted := false
+
+	response, err := litellm.CollectStreamWithCallbacks(stream, litellm.StreamCallbacks{
+		OnContent: func(text string) {
+			if text != "" {
+				printPrefix("[output]: ", &outputPrinted)
+				fmt.Print(text)
+			}
+		},
+		OnReasoning: func(r *litellm.ReasoningChunk) {
+			if r.Content != "" {
+				printPrefix("[think]: ", &thinkingPrinted)
+				fmt.Print(r.Content)
+			}
+		},
+	})
 	if err != nil {
 		log.Printf("GPT-4o via OpenRouter failed: %v", err)
 		return
 	}
 
-	if response.Reasoning != nil && response.Reasoning.Content != "" {
-		fmt.Printf("Thinking Process:\n%s\n", response.Reasoning.Content)
-		fmt.Println("---")
-	}
-
-	fmt.Printf("Response: %s\n", response.Content)
+	fmt.Println()
 	fmt.Printf("Model Used: %s\n", response.Model)
 	fmt.Printf("Usage: %d prompt + %d completion = %d total tokens\n",
 		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.TotalTokens)

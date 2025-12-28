@@ -105,7 +105,6 @@ func (p *OpenRouterProvider) Chat(ctx context.Context, req *Request) (*Response,
 		if !isThinkingDisabled(req) && choice.Message.Reasoning != "" {
 			response.Reasoning = &ReasoningData{
 				Content:    choice.Message.Reasoning,
-				Summary:    "OpenRouter reasoning process",
 				TokensUsed: response.Usage.ReasoningTokens,
 			}
 		}
@@ -387,7 +386,6 @@ func (r *openRouterStreamReader) Next() (*StreamChunk, error) {
 					chunk.Type = "reasoning"
 					chunk.Reasoning = &ReasoningChunk{
 						Content: choice.Delta.Reasoning,
-						Summary: "OpenRouter reasoning process",
 					}
 				}
 

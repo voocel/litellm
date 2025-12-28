@@ -31,22 +31,17 @@ func main() {
 	fmt.Println("-------------------------------------")
 	basicChat(client)
 
-	// Example 2: Reasoning Mode
-	fmt.Println("\n2. Reasoning Mode Example (DeepSeek Reasoner)")
-	fmt.Println("--------------------------------------------")
-	reasoningChat(client)
+	// Example 2: Streaming and reasoner Chat
+	fmt.Println("\n4. Streaming Chat Example")
+	fmt.Println("-------------------------")
+	streamingChat(client)
 
 	// Example 3: Function Calling
 	fmt.Println("\n3. Function Calling Example")
 	fmt.Println("---------------------------")
 	functionCalling(client)
 
-	// Example 4: Streaming Chat
-	fmt.Println("\n4. Streaming Chat Example")
-	fmt.Println("-------------------------")
-	streamingChat(client)
-
-	// Example 5: JSON Response Format
+	// Example 4: JSON Response Format
 	fmt.Println("\n5. JSON Response Format Example")
 	fmt.Println("-------------------------------")
 	jsonResponseFormat(client)
@@ -82,42 +77,59 @@ func basicChat(client *litellm.Client) {
 		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.TotalTokens)
 }
 
-// Example 2: Reasoning Mode with DeepSeek Reasoner
-func reasoningChat(client *litellm.Client) {
+// Example 2: Streaming Chat
+func streamingChat(client *litellm.Client) {
 	request := &litellm.Request{
 		Model: "deepseek-reasoner",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
-				Content: "A farmer has 17 sheep, and all but 9 die. How many sheep are left? Think through this step by step.",
+				Content: "Write a short story about artificial intelligence in 3 paragraphs",
 			},
 		},
-		MaxTokens:   litellm.IntPtr(2000),
-		Temperature: litellm.Float64Ptr(0.3),
+		MaxTokens:   litellm.IntPtr(400),
+		Temperature: litellm.Float64Ptr(0.8),
 	}
 
 	ctx := context.Background()
-	response, err := client.Chat(ctx, request)
+	stream, err := client.Stream(ctx, request)
 	if err != nil {
-		log.Printf("Reasoning chat failed: %v", err)
+		log.Printf("Streaming failed: %v", err)
 		return
 	}
+	defer stream.Close()
 
-	// Display reasoning if available
-	if response.Reasoning != nil && response.Reasoning.Content != "" {
-		fmt.Printf("Reasoning Process:\n%s\n", response.Reasoning.Content)
-		fmt.Printf("Reasoning Tokens: %d\n", response.Reasoning.TokensUsed)
-		fmt.Println("---")
-	} else {
-		fmt.Println("DEBUG: No reasoning content found in response")
-		fmt.Printf("DEBUG: Response object - Reasoning field: %v\n", response.Reasoning)
-		fmt.Printf("DEBUG: Usage - ReasoningTokens: %d, CompletionTokens: %d\n",
-			response.Usage.ReasoningTokens, response.Usage.CompletionTokens)
+	fmt.Print("Streaming response: ")
+	printPrefix := func(label string, printed *bool) {
+		if *printed {
+			return
+		}
+		fmt.Print("\n")
+		fmt.Print(label)
+		*printed = true
 	}
 
-	fmt.Printf("Final Answer: %s\n", response.Content)
-	fmt.Printf("Usage: %d prompt + %d completion + %d reasoning = %d total tokens\n",
-		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.ReasoningTokens, response.Usage.TotalTokens)
+	thinkingPrinted := false
+	outputPrinted := false
+
+	_, err = litellm.CollectStreamWithCallbacks(stream, litellm.StreamCallbacks{
+		OnContent: func(text string) {
+			if text != "" {
+				printPrefix("[output]: ", &outputPrinted)
+				fmt.Print(text)
+			}
+		},
+		OnReasoning: func(r *litellm.ReasoningChunk) {
+			if r.Content != "" {
+				printPrefix("[think]: ", &thinkingPrinted)
+				fmt.Print(r.Content)
+			}
+		},
+	})
+	if err != nil {
+		log.Printf("Stream error: %v", err)
+	}
+	fmt.Println()
 }
 
 // Example 3: Function Calling
@@ -174,55 +186,7 @@ func functionCalling(client *litellm.Client) {
 	}
 }
 
-// Example 4: Streaming Chat
-func streamingChat(client *litellm.Client) {
-	request := &litellm.Request{
-		Model: "deepseek-reasoner",
-		Messages: []litellm.Message{
-			{
-				Role:    "user",
-				Content: "Write a short story about artificial intelligence in 3 paragraphs",
-			},
-		},
-		MaxTokens:   litellm.IntPtr(400),
-		Temperature: litellm.Float64Ptr(0.8),
-	}
-
-	ctx := context.Background()
-	stream, err := client.Stream(ctx, request)
-	if err != nil {
-		log.Printf("Streaming failed: %v", err)
-		return
-	}
-	defer stream.Close()
-
-	fmt.Print("Streaming response: ")
-	for {
-		chunk, err := stream.Next()
-		if err != nil {
-			log.Printf("Stream error: %v", err)
-			break
-		}
-
-		if chunk.Done {
-			break
-		}
-
-		switch chunk.Type {
-		case "content":
-			if chunk.Content != "" {
-				fmt.Print(chunk.Content)
-			}
-		case "reasoning":
-			if chunk.Reasoning != nil && chunk.Reasoning.Content != "" {
-				fmt.Printf("\n[Thinking: %s]\n", chunk.Reasoning.Content)
-			}
-		}
-	}
-	fmt.Println()
-}
-
-// Example 5: JSON Response Format
+// Example 4: JSON Response Format
 func jsonResponseFormat(client *litellm.Client) {
 	request := &litellm.Request{
 		Model: "deepseek-chat",

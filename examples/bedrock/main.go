@@ -83,17 +83,34 @@ func main() {
 	defer stream.Close()
 
 	fmt.Print("Streaming: ")
-	for {
-		chunk, err := stream.Next()
-		if err != nil {
-			log.Fatalf("Stream read failed: %v", err)
+	printPrefix := func(label string, printed *bool) {
+		if *printed {
+			return
 		}
-		if chunk.Done {
-			break
-		}
-		if chunk.Content != "" {
-			fmt.Print(chunk.Content)
-		}
+		fmt.Print("\n")
+		fmt.Print(label)
+		*printed = true
+	}
+
+	thinkingPrinted := false
+	outputPrinted := false
+
+	_, err = litellm.CollectStreamWithCallbacks(stream, litellm.StreamCallbacks{
+		OnContent: func(text string) {
+			if text != "" {
+				printPrefix("[output]: ", &outputPrinted)
+				fmt.Print(text)
+			}
+		},
+		OnReasoning: func(r *litellm.ReasoningChunk) {
+			if r.Content != "" {
+				printPrefix("[think]: ", &thinkingPrinted)
+				fmt.Print(r.Content)
+			}
+		},
+	})
+	if err != nil {
+		log.Fatalf("Stream read failed: %v", err)
 	}
 	fmt.Println()
 

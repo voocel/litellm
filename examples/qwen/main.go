@@ -22,18 +22,18 @@ func main() {
 		log.Fatalf("Failed to create client: %v", err)
 	}
 
-	//fmt.Println("Qwen Examples - Alibaba Cloud AI")
-	//fmt.Println("==========================================")
-	//
-	//// Example 1: Basic Chat
-	//fmt.Println("\n1. Basic Chat Example (Qwen-Turbo)")
-	//fmt.Println("----------------------------------")
-	//basicChat(client)
-	//
-	//// Example 2: Function Calling
-	//fmt.Println("\n2. Function Calling Example")
-	//fmt.Println("---------------------------")
-	//functionCalling(client)
+	fmt.Println("Qwen Examples - Alibaba Cloud AI")
+	fmt.Println("==========================================")
+
+	// Example 1: Basic Chat
+	fmt.Println("\n1. Basic Chat Example (Qwen-Turbo)")
+	fmt.Println("----------------------------------")
+	basicChat(client)
+
+	// Example 2: Function Calling
+	fmt.Println("\n2. Function Calling Example")
+	fmt.Println("---------------------------")
+	functionCalling(client)
 
 	// Example 3: Streaming Chat
 	fmt.Println("\n3. Streaming Chat Example")
@@ -149,24 +149,34 @@ func streamingChat(client *litellm.Client) {
 	defer stream.Close()
 
 	fmt.Print("Streaming response: ")
-	for {
-		chunk, err := stream.Next()
-		if err != nil {
-			log.Printf("Stream error: %v", err)
-			break
+	printPrefix := func(label string, printed *bool) {
+		if *printed {
+			return
 		}
+		fmt.Print("\n")
+		fmt.Print(label)
+		*printed = true
+	}
 
-		if chunk.Done {
-			break
-		}
+	thinkingPrinted := false
+	outputPrinted := false
 
-		if chunk.Type == "content" && chunk.Content != "" {
-			fmt.Print(chunk.Content)
-		}
-
-		if chunk.Type == "reasoning" && chunk.Reasoning != nil {
-			fmt.Printf("\n[reasoning: %s]\n", chunk.Reasoning.Content)
-		}
+	_, err = litellm.CollectStreamWithCallbacks(stream, litellm.StreamCallbacks{
+		OnContent: func(text string) {
+			if text != "" {
+				printPrefix("[output]: ", &outputPrinted)
+				fmt.Print(text)
+			}
+		},
+		OnReasoning: func(r *litellm.ReasoningChunk) {
+			if r.Content != "" {
+				printPrefix("[think]: ", &thinkingPrinted)
+				fmt.Print(r.Content)
+			}
+		},
+	})
+	if err != nil {
+		log.Printf("Stream error: %v", err)
 	}
 	fmt.Println()
 }
