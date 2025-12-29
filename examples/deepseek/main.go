@@ -79,17 +79,10 @@ func basicChat(client *litellm.Client) {
 
 // Example 2: Streaming Chat
 func streamingChat(client *litellm.Client) {
-	request := &litellm.Request{
-		Model: "deepseek-reasoner",
-		Messages: []litellm.Message{
-			{
-				Role:    "user",
-				Content: "Write a short story about artificial intelligence in 3 paragraphs",
-			},
-		},
-		MaxTokens:   litellm.IntPtr(400),
-		Temperature: litellm.Float64Ptr(0.8),
-	}
+	request := litellm.NewRequest("deepseek-reasoner", "Write a short story about artificial intelligence in 3 paragraphs",
+		litellm.WithMaxTokens(400),
+		litellm.WithTemperature(0.8),
+	)
 
 	ctx := context.Background()
 	stream, err := client.Stream(ctx, request)

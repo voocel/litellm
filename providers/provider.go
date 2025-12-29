@@ -22,7 +22,8 @@ type MessageContent struct {
 }
 
 type MessageImageURL struct {
-	URL string `json:"url"`
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"` // "auto", "low", or "high"
 }
 
 // CacheControl defines prompt caching behavior for providers

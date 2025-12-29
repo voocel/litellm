@@ -85,17 +85,10 @@ func responsesAPI(client *litellm.Client) {
 
 // Example 1: Basic Chat
 func basicChat(client *litellm.Client) {
-	request := &litellm.Request{
-		Model: "gpt-4o-mini",
-		Messages: []litellm.Message{
-			{
-				Role:    "user",
-				Content: "Who are you?",
-			},
-		},
-		MaxTokens:   litellm.IntPtr(500),
-		Temperature: litellm.Float64Ptr(0.7),
-	}
+	request := litellm.NewRequest("gpt-4o-mini", "Who are you?",
+		litellm.WithMaxTokens(500),
+		litellm.WithTemperature(0.7),
+	)
 
 	ctx := context.Background()
 	response, err := client.Chat(ctx, request)
@@ -111,16 +104,9 @@ func basicChat(client *litellm.Client) {
 
 // Example 2: Streaming Chat with Reasoning Models (gpt-5, o1, o3, o4)
 func streamingChat(client *litellm.Client) {
-	request := &litellm.Request{
-		Model: "gpt-5",
-		Messages: []litellm.Message{
-			{
-				Role:    "user",
-				Content: "who are you?",
-			},
-		},
-		MaxTokens: litellm.IntPtr(10000),
-	}
+	request := litellm.NewRequest("gpt-5", "who are you?",
+		litellm.WithMaxTokens(10000),
+	)
 
 	stream, err := client.Stream(context.Background(), request)
 	if err != nil {
