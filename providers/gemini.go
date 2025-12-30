@@ -408,6 +408,58 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	}, nil
 }
 
+// ListModels returns available models for Gemini.
+func (p *GeminiProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+
+	baseURL := strings.TrimSuffix(p.Config().BaseURL, "/")
+	if baseURL == "" {
+		baseURL = "https://generativelanguage.googleapis.com"
+	}
+	url := fmt.Sprintf("%s/v1beta/models?key=%s", baseURL, p.Config().APIKey)
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("gemini: create models request: %w", err)
+	}
+
+	resp, err := p.HTTPClient().Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, NewHTTPError("gemini", resp.StatusCode, string(body))
+	}
+
+	var payload geminiModelList
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("gemini: decode models response: %w", err)
+	}
+
+	models := make([]ModelInfo, 0, len(payload.Models))
+	for _, item := range payload.Models {
+		id := strings.TrimPrefix(item.Name, "models/")
+		name := item.DisplayName
+		if name == "" {
+			name = id
+		}
+		models = append(models, ModelInfo{
+			ID:               id,
+			Name:             name,
+			Provider:         "gemini",
+			Description:      item.Description,
+			InputTokenLimit:  item.InputTokenLimit,
+			OutputTokenLimit: item.OutputTokenLimit,
+		})
+	}
+
+	return models, nil
+}
+
 // convertRole converts standard roles to Gemini roles
 func (p *GeminiProvider) convertRole(role string) string {
 	switch role {
@@ -498,14 +550,6 @@ func (p *GeminiProvider) convertToolChoice(toolChoice any) *geminiToolConfig {
 	}
 
 	return nil
-}
-
-func boolPtr(b bool) *bool {
-	return &b
-}
-
-func intPtr(i int) *int {
-	return &i
 }
 
 // geminiStreamReader implements streaming for Gemini
@@ -741,6 +785,18 @@ type geminiFunctionCallingConfig struct {
 type geminiResponse struct {
 	Candidates    []geminiCandidate    `json:"candidates"`
 	UsageMetadata *geminiUsageMetadata `json:"usageMetadata,omitempty"`
+}
+
+type geminiModelList struct {
+	Models []geminiModelInfo `json:"models"`
+}
+
+type geminiModelInfo struct {
+	Name             string `json:"name"`
+	DisplayName      string `json:"displayName,omitempty"`
+	Description      string `json:"description,omitempty"`
+	InputTokenLimit  int    `json:"inputTokenLimit,omitempty"`
+	OutputTokenLimit int    `json:"outputTokenLimit,omitempty"`
 }
 
 type geminiCandidate struct {

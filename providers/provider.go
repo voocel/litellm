@@ -146,6 +146,20 @@ type ReasoningChunk struct {
 	Done    bool   `json:"done,omitempty"`
 }
 
+// ModelInfo provides a minimal, provider-agnostic model descriptor.
+// Fields are best-effort and may be empty if a provider does not supply them.
+type ModelInfo struct {
+	ID               string `json:"id"`
+	Name             string `json:"name,omitempty"`
+	Provider         string `json:"provider,omitempty"`
+	Description      string `json:"description,omitempty"`
+	ContextLength    int    `json:"context_length,omitempty"`
+	InputTokenLimit  int    `json:"input_token_limit,omitempty"`
+	OutputTokenLimit int    `json:"output_token_limit,omitempty"`
+	Created          int64  `json:"created,omitempty"`
+	OwnedBy          string `json:"owned_by,omitempty"`
+}
+
 type StreamReader interface {
 	Next() (*StreamChunk, error)
 	Close() error
@@ -157,4 +171,9 @@ type Provider interface {
 	Validate() error
 	Chat(ctx context.Context, req *Request) (*Response, error)
 	Stream(ctx context.Context, req *Request) (StreamReader, error)
+}
+
+// ModelLister is an optional interface implemented by providers that support listing models.
+type ModelLister interface {
+	ListModels(ctx context.Context) ([]ModelInfo, error)
 }

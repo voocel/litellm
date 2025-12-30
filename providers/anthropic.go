@@ -133,6 +133,50 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 	}, nil
 }
 
+// ListModels returns available models for Anthropic.
+func (p *AnthropicProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", p.buildURL("/v1/models"), nil)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic: create models request: %w", err)
+	}
+	p.setModelHeaders(httpReq)
+
+	resp, err := p.HTTPClient().Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, NewHTTPError("anthropic", resp.StatusCode, string(body))
+	}
+
+	var payload anthropicModelList
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("anthropic: decode models response: %w", err)
+	}
+
+	models := make([]ModelInfo, 0, len(payload.Data))
+	for _, item := range payload.Data {
+		name := item.DisplayName
+		if name == "" {
+			name = item.ID
+		}
+		models = append(models, ModelInfo{
+			ID:       item.ID,
+			Name:     name,
+			Provider: "anthropic",
+		})
+	}
+
+	return models, nil
+}
+
 func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, stream bool) (*http.Request, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
@@ -300,6 +344,12 @@ func (p *AnthropicProvider) setHeaders(req *http.Request) {
 	req.Header.Set("anthropic-version", "2023-06-01") // Latest stable version
 	// Add beta headers for prompt caching and extended thinking support
 	req.Header.Set("anthropic-beta", "prompt-caching-2024-07-31,extended-thinking-2025-01-01")
+}
+
+func (p *AnthropicProvider) setModelHeaders(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", p.Config().APIKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
 }
 
 // addStructuredOutputInstructions adds JSON formatting instructions for structured output
@@ -479,6 +529,15 @@ type anthropicResponse struct {
 	Content []anthropicContent `json:"content"`
 	Usage   anthropicUsage     `json:"usage"`
 	Model   string             `json:"model"`
+}
+
+type anthropicModelList struct {
+	Data []anthropicModelInfo `json:"data"`
+}
+
+type anthropicModelInfo struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 type anthropicUsage struct {

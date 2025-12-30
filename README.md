@@ -170,6 +170,7 @@ fmt.Println(resp.Content)
 - `CollectStreamWithHandler(stream, onChunk)` collects and also handles each chunk.
 - `CollectStreamWithCallbacks(stream, callbacks)` adds content/reasoning/tool callbacks.
 - `Request.Thinking` controls thinking output (default enabled; set to disabled to turn off).
+- `ListModels(ctx)` lists available models for the current provider (only some providers; fields are best‑effort).
 
 ### Streaming (minimal)
 
@@ -195,6 +196,24 @@ fmt.Print(resp.Content)
 ## Advanced Features (optional)
 
 Each feature below works across providers. Longer runnable examples live in `examples/`.
+
+### Model listing (some providers)
+
+> Notes
+> - Supported today: OpenAI / Anthropic / Gemini / OpenRouter / DeepSeek / Bedrock
+> - Returned fields vary by provider; `ModelInfo` is best‑effort
+> - Gemini model IDs are normalized (the `models/` prefix is removed)
+> - Bedrock control plane can be overridden via `ProviderConfig.Extra["control_plane_base_url"]`
+
+```go
+models, err := client.ListModels(ctx)
+if err != nil {
+	log.Fatal(err)
+}
+for _, m := range models {
+	fmt.Println(m.ID, m.Name)
+}
+```
 
 ### Structured outputs
 

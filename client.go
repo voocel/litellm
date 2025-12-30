@@ -151,6 +151,26 @@ func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error)
 	return stream, nil
 }
 
+// ListModels returns the list of available models for the bound provider (if supported).
+func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	if c == nil || c.provider == nil {
+		return nil, NewError(ErrorTypeValidation, "client provider cannot be nil")
+	}
+
+	lister, ok := c.provider.(interface {
+		ListModels(context.Context) ([]ModelInfo, error)
+	})
+	if !ok {
+		return nil, NewError(ErrorTypeValidation, fmt.Sprintf("%s provider does not support model listing", c.provider.Name()))
+	}
+
+	models, err := lister.ListModels(ctx)
+	if err != nil {
+		return nil, WrapError(err, c.provider.Name())
+	}
+	return models, nil
+}
+
 // Responses executes an OpenAI Responses API request on an OpenAI provider.
 func (c *Client) Responses(ctx context.Context, req *OpenAIResponsesRequest) (*Response, error) {
 	if req == nil {

@@ -164,6 +164,18 @@ type bedrockResponse struct {
 	} `json:"metrics"`
 }
 
+type bedrockModelList struct {
+	ModelSummaries []bedrockModelSummary `json:"modelSummaries"`
+}
+
+type bedrockModelSummary struct {
+	ModelId          string `json:"modelId"`
+	ModelName        string `json:"modelName,omitempty"`
+	ProviderName     string `json:"providerName,omitempty"`
+	InputTokenLimit  int    `json:"inputTokenLimit,omitempty"`
+	OutputTokenLimit int    `json:"outputTokenLimit,omitempty"`
+}
+
 func (p *BedrockProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
@@ -255,6 +267,71 @@ func (p *BedrockProvider) Stream(ctx context.Context, req *Request) (StreamReade
 		response: resp,
 		model:    req.Model,
 	}, nil
+}
+
+// ListModels returns available foundation models for Bedrock.
+func (p *BedrockProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+
+	baseURL := ""
+	if p.Config().Extra != nil {
+		if controlPlane, ok := p.Config().Extra["control_plane_base_url"].(string); ok && controlPlane != "" {
+			baseURL = strings.TrimSuffix(controlPlane, "/")
+		}
+	}
+	if baseURL == "" {
+		baseURL = strings.TrimSuffix(p.Config().BaseURL, "/")
+		if baseURL == "" {
+			baseURL = fmt.Sprintf("https://bedrock.%s.amazonaws.com", p.region)
+		} else if strings.Contains(baseURL, "bedrock-runtime.") {
+			baseURL = strings.Replace(baseURL, "bedrock-runtime.", "bedrock.", 1)
+		}
+	}
+	url := fmt.Sprintf("%s/foundation-models", baseURL)
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("bedrock: create models request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	if err := p.signRequest(httpReq, nil); err != nil {
+		return nil, fmt.Errorf("bedrock: sign request: %w", err)
+	}
+
+	resp, err := p.HTTPClient().Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, NewHTTPError("bedrock", resp.StatusCode, string(body))
+	}
+
+	var payload bedrockModelList
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("bedrock: decode models response: %w", err)
+	}
+
+	models := make([]ModelInfo, 0, len(payload.ModelSummaries))
+	for _, item := range payload.ModelSummaries {
+		name := item.ModelName
+		if name == "" {
+			name = item.ModelId
+		}
+		models = append(models, ModelInfo{
+			ID:               item.ModelId,
+			Name:             name,
+			Provider:         item.ProviderName,
+			InputTokenLimit:  item.InputTokenLimit,
+			OutputTokenLimit: item.OutputTokenLimit,
+		})
+	}
+
+	return models, nil
 }
 
 func (p *BedrockProvider) buildRequest(req *Request) *bedrockRequest {

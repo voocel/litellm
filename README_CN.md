@@ -170,6 +170,7 @@ fmt.Println(resp.Content)
 - `CollectStreamWithHandler(stream, onChunk)` 收集时也会处理每个 chunk。
 - `CollectStreamWithCallbacks(stream, callbacks)` 提供内容/思考/工具回调。
 - `Request.Thinking` 控制思考输出（默认开启，显式禁用才关闭）。
+- `ListModels(ctx)` 列出当前 Provider 可用模型（仅部分 Provider 支持，字段为 best-effort）。
 
 ### 流式（最小示例）
 
@@ -195,6 +196,24 @@ fmt.Print(resp.Content)
 ## 高级能力（可选）
 
 下面能力都可跨平台使用，更完整的可运行示例在 `examples/` 目录。
+
+### 模型列表（部分 Provider 支持）
+
+> 说明
+> - 目前已支持：OpenAI / Anthropic / Gemini / OpenRouter / DeepSeek / Bedrock
+> - 返回字段因平台差异而不同，`ModelInfo` 为 best-effort（可能为空）
+> - Gemini 返回的模型名会自动去掉 `models/` 前缀，便于直接传给 `Request.Model`
+> - Bedrock 可通过 `ProviderConfig.Extra["control_plane_base_url"]` 指定控制平面域名（默认从 `BaseURL` 推导）
+
+```go
+models, err := client.ListModels(ctx)
+if err != nil {
+	log.Fatal(err)
+}
+for _, m := range models {
+	fmt.Println(m.ID, m.Name)
+}
+```
 
 ### 结构化输出
 

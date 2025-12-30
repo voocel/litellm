@@ -317,6 +317,48 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	}, nil
 }
 
+// ListModels returns available models for OpenAI.
+func (p *OpenAIProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", p.buildURL("/models"), nil)
+	if err != nil {
+		return nil, fmt.Errorf("openai: create models request: %w", err)
+	}
+	p.setHeaders(httpReq)
+
+	resp, err := p.HTTPClient().Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, NewHTTPError("openai", resp.StatusCode, string(body))
+	}
+
+	var payload openaiModelList
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("openai: decode models response: %w", err)
+	}
+
+	models := make([]ModelInfo, 0, len(payload.Data))
+	for _, item := range payload.Data {
+		models = append(models, ModelInfo{
+			ID:       item.ID,
+			Name:     item.ID,
+			Provider: "openai",
+			Created:  item.Created,
+			OwnedBy:  item.OwnedBy,
+		})
+	}
+
+	return models, nil
+}
+
 func (p *OpenAIProvider) buildURL(endpoint string) string {
 	baseURL := strings.TrimSuffix(p.Config().BaseURL, "/")
 	if baseURL == "" {
@@ -620,6 +662,16 @@ type openaiStreamChunk struct {
 	Model   string         `json:"model"`
 	Choices []openaiChoice `json:"choices"`
 	Usage   *openaiUsage   `json:"usage,omitempty"`
+}
+
+type openaiModelList struct {
+	Data []openaiModelInfo `json:"data"`
+}
+
+type openaiModelInfo struct {
+	ID      string `json:"id"`
+	Created int64  `json:"created,omitempty"`
+	OwnedBy string `json:"owned_by,omitempty"`
 }
 
 // convertResponseFormat converts response format and ensures OpenAI compatibility

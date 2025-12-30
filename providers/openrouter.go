@@ -138,6 +138,61 @@ func (p *OpenRouterProvider) Stream(ctx context.Context, req *Request) (StreamRe
 	}, nil
 }
 
+// ListModels returns available models for OpenRouter.
+func (p *OpenRouterProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+
+	baseURL := strings.TrimSuffix(p.Config().BaseURL, "/")
+	if baseURL == "" {
+		baseURL = "https://openrouter.ai/api/v1"
+	}
+	url := fmt.Sprintf("%s/models", baseURL)
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("openrouter: create models request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
+	httpReq.Header.Set("HTTP-Referer", "https://github.com/voocel/litellm")
+	httpReq.Header.Set("X-Title", "litellm")
+
+	resp, err := p.HTTPClient().Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, NewHTTPError("openrouter", resp.StatusCode, string(body))
+	}
+
+	var payload openRouterModelList
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("openrouter: decode models response: %w", err)
+	}
+
+	models := make([]ModelInfo, 0, len(payload.Data))
+	for _, item := range payload.Data {
+		name := item.Name
+		if name == "" {
+			name = item.ID
+		}
+		models = append(models, ModelInfo{
+			ID:            item.ID,
+			Name:          name,
+			Provider:      "openrouter",
+			Description:   item.Description,
+			ContextLength: item.ContextLength,
+		})
+	}
+
+	return models, nil
+}
+
 func (p *OpenRouterProvider) buildHTTPRequest(ctx context.Context, req *Request, stream bool) (*http.Request, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
@@ -313,6 +368,17 @@ type openRouterResponse struct {
 	Model   string             `json:"model"`
 	Choices []openRouterChoice `json:"choices"`
 	Usage   *openRouterUsage   `json:"usage,omitempty"`
+}
+
+type openRouterModelList struct {
+	Data []openRouterModelInfo `json:"data"`
+}
+
+type openRouterModelInfo struct {
+	ID            string `json:"id"`
+	Name          string `json:"name,omitempty"`
+	Description   string `json:"description,omitempty"`
+	ContextLength int    `json:"context_length,omitempty"`
 }
 
 type openRouterChoice struct {

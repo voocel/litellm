@@ -31,6 +31,8 @@ type (
 
 	Provider       = providers.Provider
 	ProviderConfig = providers.ProviderConfig
+	ModelInfo      = providers.ModelInfo
+	ModelLister    = providers.ModelLister
 )
 
 // ProviderFactory is used to register custom providers.

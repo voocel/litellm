@@ -134,6 +134,54 @@ func (p *DeepSeekProvider) Stream(ctx context.Context, req *Request) (StreamRead
 	}, nil
 }
 
+// ListModels returns available models for DeepSeek.
+func (p *DeepSeekProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+
+	baseURL := strings.TrimSuffix(p.Config().BaseURL, "/")
+	if baseURL == "" {
+		baseURL = "https://api.deepseek.com"
+	}
+	url := fmt.Sprintf("%s/models", baseURL)
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("deepseek: create models request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
+
+	resp, err := p.HTTPClient().Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, NewHTTPError("deepseek", resp.StatusCode, string(body))
+	}
+
+	var payload deepseekModelList
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("deepseek: decode models response: %w", err)
+	}
+
+	models := make([]ModelInfo, 0, len(payload.Data))
+	for _, item := range payload.Data {
+		models = append(models, ModelInfo{
+			ID:       item.ID,
+			Name:     item.ID,
+			Provider: "deepseek",
+			OwnedBy:  item.OwnedBy,
+		})
+	}
+
+	return models, nil
+}
+
 func (p *DeepSeekProvider) buildHTTPRequest(ctx context.Context, req *Request, stream bool) (*http.Request, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
@@ -196,6 +244,15 @@ type deepseekResponse struct {
 	Model   string           `json:"model"`
 	Choices []deepseekChoice `json:"choices"`
 	Usage   *deepseekUsage   `json:"usage,omitempty"`
+}
+
+type deepseekModelList struct {
+	Data []deepseekModelInfo `json:"data"`
+}
+
+type deepseekModelInfo struct {
+	ID      string `json:"id"`
+	OwnedBy string `json:"owned_by,omitempty"`
 }
 
 type deepseekChoice struct {
