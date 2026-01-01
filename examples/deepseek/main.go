@@ -75,6 +75,13 @@ func basicChat(client *litellm.Client) {
 	fmt.Printf("Response: %s\n", response.Content)
 	fmt.Printf("Usage: %d prompt + %d completion = %d total tokens\n",
 		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.TotalTokens)
+
+	// Calculate cost (lazy loads pricing data on first call)
+	if cost, err := litellm.CalculateCostForResponse(response); err == nil {
+		fmt.Printf("Cost: $%.6f (input: $%.6f, output: $%.6f)\n", cost.TotalCost, cost.InputCost, cost.OutputCost)
+	} else {
+		fmt.Printf("Cost calculation: %v\n", err)
+	}
 }
 
 // Example 2: Streaming Chat

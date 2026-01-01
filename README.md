@@ -322,6 +322,32 @@ Supported keys:
 - Gemini: `tool_name` (string) for tool response naming
 - GLM: `enable_thinking` (bool) or `thinking` (object with `type` string)
 
+### Cost calculation
+
+Calculate request costs based on token usage. Pricing data is fetched from [BerriAI/litellm](https://github.com/BerriAI/litellm) and loaded automatically on first use.
+
+```go
+resp, err := client.Chat(ctx, req)
+if err != nil {
+	log.Fatal(err)
+}
+
+// Calculate cost (pricing data loads automatically)
+if cost, err := litellm.CalculateCostForResponse(resp); err == nil {
+	fmt.Printf("Cost: $%.6f (input: $%.6f, output: $%.6f)\n",
+		cost.TotalCost, cost.InputCost, cost.OutputCost)
+}
+
+// Or use the standalone function
+cost, err := litellm.CalculateCost(resp.Model, resp.Usage)
+
+// Set custom pricing for unlisted models
+litellm.SetModelPricing("my-model", litellm.ModelPricing{
+	InputCostPerToken:  0.000001,
+	OutputCostPerToken: 0.000002,
+})
+```
+
 ## Custom Providers
 
 Implement `litellm.Provider` and register it:

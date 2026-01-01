@@ -322,6 +322,32 @@ _ = client
 - Gemini：`tool_name`（string），用于 tool response 命名
 - GLM：`enable_thinking`（bool）或 `thinking`（包含 `type` 的对象）
 
+### 费用计算
+
+根据 token 使用量计算请求费用。定价数据来自 [BerriAI/litellm](https://github.com/BerriAI/litellm)，首次使用时自动加载。
+
+```go
+resp, err := client.Chat(ctx, req)
+if err != nil {
+	log.Fatal(err)
+}
+
+// 计算费用（定价数据自动加载）
+if cost, err := litellm.CalculateCostForResponse(resp); err == nil {
+	fmt.Printf("费用: $%.6f (输入: $%.6f, 输出: $%.6f)\n",
+		cost.TotalCost, cost.InputCost, cost.OutputCost)
+}
+
+// 或使用独立函数
+cost, err := litellm.CalculateCost(resp.Model, resp.Usage)
+
+// 为未收录的模型设置自定义定价
+litellm.SetModelPricing("my-model", litellm.ModelPricing{
+	InputCostPerToken:  0.000001,
+	OutputCostPerToken: 0.000002,
+})
+```
+
 ## 自定义 Provider
 
 实现 `litellm.Provider` 并注册即可扩展平台：
