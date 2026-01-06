@@ -3,13 +3,18 @@ package litellm
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"strings"
+	"time"
 )
 
 // Client is a minimal, predictable client bound to a single Provider.
 type Client struct {
 	provider Provider
 	defaults DefaultConfig
+	debug    bool
+	debugOut io.Writer
 }
 
 // DefaultConfig holds request-level defaults.
@@ -107,6 +112,32 @@ func WithDefaults(maxTokens int, temperature float64, topP float64) ClientOption
 	}
 }
 
+// WithDebug enables debug logging to stderr.
+func WithDebug(enabled bool) ClientOption {
+	return func(c *Client) error {
+		c.debug = enabled
+		if enabled && c.debugOut == nil {
+			c.debugOut = os.Stderr
+		}
+		return nil
+	}
+}
+
+// WithDebugOutput enables debug logging to a custom writer.
+// If w is nil, debug logging is disabled.
+func WithDebugOutput(w io.Writer) ClientOption {
+	return func(c *Client) error {
+		if w == nil {
+			c.debug = false
+			c.debugOut = nil
+			return nil
+		}
+		c.debug = true
+		c.debugOut = w
+		return nil
+	}
+}
+
 // Chat executes a non-streaming request.
 func (c *Client) Chat(ctx context.Context, req *Request) (*Response, error) {
 	if req == nil {
@@ -122,7 +153,13 @@ func (c *Client) Chat(ctx context.Context, req *Request) (*Response, error) {
 	reqCopy := *req
 	c.applyDefaults(&reqCopy)
 
+	c.debugRequest(&reqCopy, false)
+	start := time.Now()
+
 	resp, err := c.provider.Chat(ctx, &reqCopy)
+
+	c.debugResponse(resp, err, time.Since(start))
+
 	if err != nil {
 		return nil, WrapError(err, c.provider.Name())
 	}
@@ -144,10 +181,16 @@ func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error)
 	reqCopy := *req
 	c.applyDefaults(&reqCopy)
 
+	c.debugRequest(&reqCopy, true)
+	start := time.Now()
+
 	stream, err := c.provider.Stream(ctx, &reqCopy)
 	if err != nil {
+		c.debugStreamError(err, time.Since(start))
 		return nil, WrapError(err, c.provider.Name())
 	}
+
+	c.debugStreamReady(time.Since(start))
 	return stream, nil
 }
 
@@ -186,13 +229,21 @@ func (c *Client) Responses(ctx context.Context, req *OpenAIResponsesRequest) (*R
 	reqCopy := *req
 	c.applyResponsesDefaults(&reqCopy)
 
+	c.debugResponsesRequest(&reqCopy)
+	start := time.Now()
+
 	provider, ok := c.provider.(interface {
 		Responses(context.Context, *OpenAIResponsesRequest) (*Response, error)
 	})
 	if !ok {
 		return nil, NewError(ErrorTypeValidation, "responses API is only supported by the OpenAI provider")
 	}
-	return provider.Responses(ctx, &reqCopy)
+
+	resp, err := provider.Responses(ctx, &reqCopy)
+
+	c.debugResponse(resp, err, time.Since(start))
+
+	return resp, err
 }
 
 // ResponsesStream executes a streaming OpenAI Responses API request.
@@ -210,13 +261,24 @@ func (c *Client) ResponsesStream(ctx context.Context, req *OpenAIResponsesReques
 	reqCopy := *req
 	c.applyResponsesDefaults(&reqCopy)
 
+	c.debugResponsesRequest(&reqCopy)
+	start := time.Now()
+
 	provider, ok := c.provider.(interface {
 		ResponsesStream(context.Context, *OpenAIResponsesRequest) (StreamReader, error)
 	})
 	if !ok {
 		return nil, NewError(ErrorTypeValidation, "responses API is only supported by the OpenAI provider")
 	}
-	return provider.ResponsesStream(ctx, &reqCopy)
+
+	stream, err := provider.ResponsesStream(ctx, &reqCopy)
+	if err != nil {
+		c.debugStreamError(err, time.Since(start))
+		return nil, err
+	}
+
+	c.debugStreamReady(time.Since(start))
+	return stream, nil
 }
 
 // applyDefaults applies defaults when request fields are unset.
@@ -247,5 +309,91 @@ func (c *Client) applyResponsesDefaults(req *OpenAIResponsesRequest) {
 	if req.TopP == nil {
 		topP := c.defaults.TopP
 		req.TopP = &topP
+	}
+}
+
+// debugLog writes a debug message if debug mode is enabled.
+func (c *Client) debugLog(format string, args ...any) {
+	if !c.debug || c.debugOut == nil {
+		return
+	}
+	fmt.Fprintf(c.debugOut, "[litellm:%s] "+format+"\n", append([]any{c.provider.Name()}, args...)...)
+}
+
+// debugRequest logs request details.
+func (c *Client) debugRequest(req *Request, stream bool) {
+	if !c.debug {
+		return
+	}
+	mode := "chat"
+	if stream {
+		mode = "stream"
+	}
+	c.debugLog("→ %s model=%s messages=%d", mode, req.Model, len(req.Messages))
+	if req.MaxTokens != nil {
+		c.debugLog("  max_tokens=%d", *req.MaxTokens)
+	}
+	if req.Temperature != nil {
+		c.debugLog("  temperature=%.2f", *req.Temperature)
+	}
+	if len(req.Tools) > 0 {
+		toolNames := make([]string, len(req.Tools))
+		for i, t := range req.Tools {
+			toolNames[i] = t.Function.Name
+		}
+		c.debugLog("  tools=[%s]", strings.Join(toolNames, ", "))
+	}
+}
+
+// debugResponse logs response details.
+func (c *Client) debugResponse(resp *Response, err error, duration time.Duration) {
+	if !c.debug {
+		return
+	}
+	if err != nil {
+		c.debugLog("← error (%v): %v", duration.Round(time.Millisecond), err)
+		return
+	}
+	c.debugLog("← ok (%v) tokens=%d (prompt=%d, completion=%d)",
+		duration.Round(time.Millisecond),
+		resp.Usage.TotalTokens,
+		resp.Usage.PromptTokens,
+		resp.Usage.CompletionTokens,
+	)
+	if resp.FinishReason != "" {
+		c.debugLog("  finish_reason=%s", resp.FinishReason)
+	}
+	if len(resp.ToolCalls) > 0 {
+		c.debugLog("  tool_calls=%d", len(resp.ToolCalls))
+	}
+}
+
+// debugStreamError logs stream error.
+func (c *Client) debugStreamError(err error, duration time.Duration) {
+	if !c.debug {
+		return
+	}
+	c.debugLog("← stream error (%v): %v", duration.Round(time.Millisecond), err)
+}
+
+// debugStreamReady logs stream ready.
+func (c *Client) debugStreamReady(duration time.Duration) {
+	if !c.debug {
+		return
+	}
+	c.debugLog("← stream ready (%v)", duration.Round(time.Millisecond))
+}
+
+// debugResponsesRequest logs OpenAI Responses API request details.
+func (c *Client) debugResponsesRequest(req *OpenAIResponsesRequest) {
+	if !c.debug {
+		return
+	}
+	c.debugLog("→ responses model=%s messages=%d", req.Model, len(req.Messages))
+	if req.MaxOutputTokens != nil {
+		c.debugLog("  max_output_tokens=%d", *req.MaxOutputTokens)
+	}
+	if req.ReasoningEffort != "" {
+		c.debugLog("  reasoning_effort=%s", req.ReasoningEffort)
 	}
 }
