@@ -1,6 +1,7 @@
 package litellm
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,9 +33,14 @@ var (
 )
 
 // LoadPricing fetches pricing data from BerriAI/litellm GitHub.
-func LoadPricing() error {
+func LoadPricing(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", PricingURL, nil)
+	if err != nil {
+		return fmt.Errorf("create pricing request: %w", err)
+	}
+
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(PricingURL)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("fetch pricing: %w", err)
 	}
@@ -111,7 +117,7 @@ func SetModelPricing(model string, pricing ModelPricing) {
 // Pricing data is loaded automatically on first call.
 func CalculateCost(model string, usage Usage) (*CostResult, error) {
 	if !IsPricingLoaded() {
-		if err := LoadPricing(); err != nil {
+		if err := LoadPricing(context.Background()); err != nil {
 			return nil, err
 		}
 	}
