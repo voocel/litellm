@@ -560,6 +560,15 @@ type bedrockStreamReader struct {
 	response *http.Response
 	model    string
 	done     bool
+
+	// Tool call state for streaming
+	pendingToolCalls map[int]*bedrockStreamToolCall
+}
+
+type bedrockStreamToolCall struct {
+	ToolUseID string
+	Name      string
+	Input     strings.Builder
 }
 
 func (s *bedrockStreamReader) Next() (*StreamChunk, error) {
@@ -567,10 +576,10 @@ func (s *bedrockStreamReader) Next() (*StreamChunk, error) {
 		return &StreamChunk{Done: true, Provider: "bedrock", Model: s.model}, nil
 	}
 
-	// Read event stream format
-	// AWS uses binary event stream encoding, simplified parsing here
+	// AWS Event Stream binary format parsing
+	// See: https://docs.aws.amazon.com/AmazonS3/latest/API/RESTSelectObjectAppendix.html
 	for {
-		line, err := s.reader.ReadBytes('\n')
+		payload, err := s.readEventStreamMessage()
 		if err != nil {
 			if err == io.EOF {
 				s.done = true
@@ -579,30 +588,40 @@ func (s *bedrockStreamReader) Next() (*StreamChunk, error) {
 			return nil, fmt.Errorf("bedrock: read stream: %w", err)
 		}
 
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
+		if len(payload) == 0 {
 			continue
 		}
 
 		var event map[string]json.RawMessage
-		if err := json.Unmarshal(line, &event); err != nil {
+		if err := json.Unmarshal(payload, &event); err != nil {
 			continue
 		}
 
+		// Handle contentBlockStart - contains tool name for tool calls
+		if data, ok := event["contentBlockStart"]; ok {
+			chunk := s.handleContentBlockStart(data)
+			if chunk != nil {
+				return chunk, nil
+			}
+			continue
+		}
+
+		// Handle contentBlockDelta - contains text or tool input delta
 		if data, ok := event["contentBlockDelta"]; ok {
-			var delta struct {
-				Delta struct {
-					Text string `json:"text"`
-				} `json:"delta"`
+			chunk := s.handleContentBlockDelta(data)
+			if chunk != nil {
+				return chunk, nil
 			}
-			if err := json.Unmarshal(data, &delta); err == nil && delta.Delta.Text != "" {
-				return &StreamChunk{
-					Type:     "content",
-					Content:  delta.Delta.Text,
-					Provider: "bedrock",
-					Model:    s.model,
-				}, nil
+			continue
+		}
+
+		// Handle contentBlockStop - finalize tool calls
+		if data, ok := event["contentBlockStop"]; ok {
+			chunk := s.handleContentBlockStop(data)
+			if chunk != nil {
+				return chunk, nil
 			}
+			continue
 		}
 
 		if data, ok := event["messageStop"]; ok {
@@ -641,6 +660,178 @@ func (s *bedrockStreamReader) Next() (*StreamChunk, error) {
 			}
 		}
 	}
+}
+
+// readEventStreamMessage reads a single AWS Event Stream message and returns the payload
+func (s *bedrockStreamReader) readEventStreamMessage() ([]byte, error) {
+	// AWS Event Stream format:
+	// [4 bytes] total_length (big endian)
+	// [4 bytes] headers_length (big endian)
+	// [4 bytes] prelude_crc
+	// [headers_length bytes] headers
+	// [payload_length bytes] payload (total_length - headers_length - 16)
+	// [4 bytes] message_crc
+
+	// Read prelude (12 bytes)
+	prelude := make([]byte, 12)
+	if _, err := io.ReadFull(s.reader, prelude); err != nil {
+		return nil, err
+	}
+
+	totalLength := bedrockReadBigEndianUint32(prelude[0:4])
+	headersLength := bedrockReadBigEndianUint32(prelude[4:8])
+
+	// Validate message structure
+	// Minimum: 12 (prelude) + 4 (message CRC) = 16 bytes
+	if totalLength < 16 || totalLength > 16*1024*1024 {
+		return nil, fmt.Errorf("invalid message length: %d", totalLength)
+	}
+
+	// Headers + payload + message CRC must fit in remaining bytes
+	if headersLength > totalLength-16 {
+		return nil, fmt.Errorf("invalid headers length: %d > %d", headersLength, totalLength-16)
+	}
+
+	// Read the rest of the message (after prelude)
+	remaining := make([]byte, totalLength-12)
+	if _, err := io.ReadFull(s.reader, remaining); err != nil {
+		return nil, err
+	}
+
+	// Calculate payload bounds
+	// remaining = [headers_length bytes headers] + [payload] + [4 bytes message_crc]
+	payloadLength := totalLength - headersLength - 16
+	if payloadLength == 0 {
+		return nil, nil
+	}
+
+	payloadStart := int(headersLength)
+	payloadEnd := payloadStart + int(payloadLength)
+
+	// Bounds check: payload must end before message CRC (last 4 bytes)
+	if payloadEnd > len(remaining)-4 || payloadStart > payloadEnd {
+		return nil, fmt.Errorf("invalid payload bounds: start=%d, end=%d, remaining=%d",
+			payloadStart, payloadEnd, len(remaining))
+	}
+
+	return remaining[payloadStart:payloadEnd], nil
+}
+
+func bedrockReadBigEndianUint32(b []byte) uint32 {
+	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+}
+
+func (s *bedrockStreamReader) handleContentBlockStart(data json.RawMessage) *StreamChunk {
+	var start struct {
+		ContentBlockIndex int `json:"contentBlockIndex"`
+		Start             struct {
+			ToolUse *struct {
+				ToolUseID string `json:"toolUseId"`
+				Name      string `json:"name"`
+			} `json:"toolUse"`
+		} `json:"start"`
+	}
+	if err := json.Unmarshal(data, &start); err != nil {
+		return nil
+	}
+
+	// Track tool call start
+	if start.Start.ToolUse != nil {
+		if s.pendingToolCalls == nil {
+			s.pendingToolCalls = make(map[int]*bedrockStreamToolCall)
+		}
+		s.pendingToolCalls[start.ContentBlockIndex] = &bedrockStreamToolCall{
+			ToolUseID: start.Start.ToolUse.ToolUseID,
+			Name:      start.Start.ToolUse.Name,
+		}
+		// Return a chunk indicating tool call started
+		return &StreamChunk{
+			Type:     "tool_call_start",
+			Provider: "bedrock",
+			Model:    s.model,
+			ToolCallDelta: &ToolCallDelta{
+				Index:        start.ContentBlockIndex,
+				ID:           start.Start.ToolUse.ToolUseID,
+				Type:         "function",
+				FunctionName: start.Start.ToolUse.Name,
+			},
+		}
+	}
+	return nil
+}
+
+func (s *bedrockStreamReader) handleContentBlockDelta(data json.RawMessage) *StreamChunk {
+	var delta struct {
+		ContentBlockIndex int `json:"contentBlockIndex"`
+		Delta             struct {
+			Text    string `json:"text"`
+			ToolUse *struct {
+				Input string `json:"input"`
+			} `json:"toolUse"`
+		} `json:"delta"`
+	}
+	if err := json.Unmarshal(data, &delta); err != nil {
+		return nil
+	}
+
+	// Text content
+	if delta.Delta.Text != "" {
+		return &StreamChunk{
+			Type:     "content",
+			Content:  delta.Delta.Text,
+			Provider: "bedrock",
+			Model:    s.model,
+		}
+	}
+
+	// Tool use input delta
+	if delta.Delta.ToolUse != nil && delta.Delta.ToolUse.Input != "" {
+		if tc, ok := s.pendingToolCalls[delta.ContentBlockIndex]; ok {
+			tc.Input.WriteString(delta.Delta.ToolUse.Input)
+			return &StreamChunk{
+				Type:     "tool_call_delta",
+				Provider: "bedrock",
+				Model:    s.model,
+				ToolCallDelta: &ToolCallDelta{
+					Index:          delta.ContentBlockIndex,
+					ID:             tc.ToolUseID,
+					Type:           "function",
+					FunctionName:   tc.Name,
+					ArgumentsDelta: delta.Delta.ToolUse.Input,
+				},
+			}
+		}
+	}
+
+	return nil
+}
+
+func (s *bedrockStreamReader) handleContentBlockStop(data json.RawMessage) *StreamChunk {
+	var stop struct {
+		ContentBlockIndex int `json:"contentBlockIndex"`
+	}
+	if err := json.Unmarshal(data, &stop); err != nil {
+		return nil
+	}
+
+	// Finalize tool call
+	if tc, ok := s.pendingToolCalls[stop.ContentBlockIndex]; ok {
+		delete(s.pendingToolCalls, stop.ContentBlockIndex)
+		return &StreamChunk{
+			Type:     "tool_call_done",
+			Provider: "bedrock",
+			Model:    s.model,
+			ToolCallDelta: &ToolCallDelta{
+				Index:          stop.ContentBlockIndex,
+				ID:             tc.ToolUseID,
+				Type:           "function",
+				FunctionName:   tc.Name,
+				ArgumentsDelta: tc.Input.String(),
+			},
+		}
+	}
+
+	return nil
 }
 
 func (s *bedrockStreamReader) Close() error {
