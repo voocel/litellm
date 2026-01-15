@@ -45,6 +45,14 @@ func DefaultResilienceConfig() ResilienceConfig {
 	}
 }
 
+// ResolveResilienceConfig applies defaults when config is empty.
+func ResolveResilienceConfig(config ResilienceConfig) ResilienceConfig {
+	if config == (ResilienceConfig{}) {
+		return DefaultResilienceConfig()
+	}
+	return config
+}
+
 // BaseProvider provides common functionality for all providers
 type BaseProvider struct {
 	name             string
@@ -59,10 +67,7 @@ func NewBaseProvider(name string, config ProviderConfig) *BaseProvider {
 		config.BaseURL = getDefaultBaseURL(name)
 	}
 
-	resilienceConfig := config.Resilience
-	if resilienceConfig == (ResilienceConfig{}) {
-		resilienceConfig = DefaultResilienceConfig()
-	}
+	resilienceConfig := ResolveResilienceConfig(config.Resilience)
 
 	if config.HTTPClient == nil {
 		config.HTTPClient = &http.Client{
