@@ -2,6 +2,7 @@ package litellm
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -47,6 +48,9 @@ func CollectStreamWithHandler(stream StreamReader, onChunk func(*StreamChunk)) (
 
 	var (
 		contentBuilder        strings.Builder
+		refusalBuilder        strings.Builder
+		contentByOutputIndex  = map[int]*strings.Builder{}
+		refusalByOutputIndex  = map[int]*strings.Builder{}
 		reasoningSummary      strings.Builder
 		reasoningContent      strings.Builder
 		toolCallOrder         []string
@@ -77,8 +81,31 @@ func CollectStreamWithHandler(stream StreamReader, onChunk func(*StreamChunk)) (
 			resp.FinishReason = chunk.FinishReason
 		}
 
-		if chunk.Type == ChunkTypeContent && chunk.Content != "" {
-			contentBuilder.WriteString(chunk.Content)
+		if chunk.Content != "" {
+			switch chunk.Type {
+			case ChunkTypeContent:
+				if chunk.OutputIndex != nil {
+					builder := contentByOutputIndex[*chunk.OutputIndex]
+					if builder == nil {
+						builder = &strings.Builder{}
+						contentByOutputIndex[*chunk.OutputIndex] = builder
+					}
+					builder.WriteString(chunk.Content)
+				} else {
+					contentBuilder.WriteString(chunk.Content)
+				}
+			case "refusal":
+				if chunk.OutputIndex != nil {
+					builder := refusalByOutputIndex[*chunk.OutputIndex]
+					if builder == nil {
+						builder = &strings.Builder{}
+						refusalByOutputIndex[*chunk.OutputIndex] = builder
+					}
+					builder.WriteString(chunk.Content)
+				} else {
+					refusalBuilder.WriteString(chunk.Content)
+				}
+			}
 		}
 
 		if chunk.Reasoning != nil {
@@ -135,7 +162,38 @@ func CollectStreamWithHandler(stream StreamReader, onChunk func(*StreamChunk)) (
 		}
 	}
 
-	resp.Content = contentBuilder.String()
+	if len(contentByOutputIndex) > 0 || len(refusalByOutputIndex) > 0 {
+		indices := make([]int, 0, len(contentByOutputIndex)+len(refusalByOutputIndex))
+		for index := range contentByOutputIndex {
+			indices = append(indices, index)
+		}
+		for index := range refusalByOutputIndex {
+			indices = append(indices, index)
+		}
+		sort.Ints(indices)
+		var merged strings.Builder
+		seen := map[int]bool{}
+		for _, index := range indices {
+			if seen[index] {
+				continue
+			}
+			seen[index] = true
+			if builder := contentByOutputIndex[index]; builder != nil && builder.Len() > 0 {
+				merged.WriteString(builder.String())
+				continue
+			}
+			if builder := refusalByOutputIndex[index]; builder != nil {
+				merged.WriteString(builder.String())
+			}
+		}
+		merged.WriteString(contentBuilder.String())
+		resp.Content = merged.String()
+	} else {
+		resp.Content = contentBuilder.String()
+	}
+	if resp.Content == "" && refusalBuilder.Len() > 0 {
+		resp.Content = refusalBuilder.String()
+	}
 
 	if reasoningSummary.Len() > 0 || reasoningContent.Len() > 0 {
 		resp.Reasoning = &ReasoningData{

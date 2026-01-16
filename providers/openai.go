@@ -262,6 +262,7 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		openaiReq.MaxTokens = req.MaxTokens
 		openaiReq.Temperature = req.Temperature
 	}
+	openaiReq.TopP = req.TopP
 
 	// Set stop sequences (up to 4 sequences)
 	if len(req.Stop) > 0 {
@@ -381,12 +382,18 @@ type openaiStreamReader struct {
 	scanner          *bufio.Scanner
 	provider         string
 	includeReasoning bool
+	pendingChunks    []*StreamChunk
 	done             bool
 }
 
 func (r *openaiStreamReader) Next() (*StreamChunk, error) {
 	if r.done {
 		return &StreamChunk{Done: true, Provider: r.provider}, nil
+	}
+	if len(r.pendingChunks) > 0 {
+		chunk := r.pendingChunks[0]
+		r.pendingChunks = r.pendingChunks[1:]
+		return chunk, nil
 	}
 
 	for r.scanner.Scan() {
@@ -427,54 +434,64 @@ func (r *openaiStreamReader) Next() (*StreamChunk, error) {
 
 		if len(chunk.Choices) > 0 {
 			choice := chunk.Choices[0]
-			streamChunk := &StreamChunk{
-				Provider: r.provider,
-				Model:    chunk.Model,
-			}
+			pending := make([]*StreamChunk, 0, 4)
 
 			if choice.Delta.Content != "" {
-				streamChunk.Type = "content"
-				streamChunk.Content = choice.Delta.Content
+				pending = append(pending, &StreamChunk{
+					Provider: r.provider,
+					Model:    chunk.Model,
+					Type:     "content",
+					Content:  choice.Delta.Content,
+				})
 			}
 
 			// Handle reasoning streaming (OpenAI format only)
 			if r.includeReasoning && choice.Delta.ReasoningSummary != nil && choice.Delta.ReasoningSummary.Text != "" {
-				streamChunk.Type = "reasoning"
-				streamChunk.Reasoning = &ReasoningChunk{
-					Summary: choice.Delta.ReasoningSummary.Text,
-				}
+				pending = append(pending, &StreamChunk{
+					Provider: r.provider,
+					Model:    chunk.Model,
+					Type:     "reasoning",
+					Reasoning: &ReasoningChunk{
+						Summary: choice.Delta.ReasoningSummary.Text,
+					},
+				})
 			}
 
 			// Handle tool call deltas
 			if len(choice.Delta.ToolCalls) > 0 {
 				for _, toolCallDelta := range choice.Delta.ToolCalls {
-					streamChunk.Type = "tool_call_delta"
-					streamChunk.ToolCallDelta = &ToolCallDelta{
-						Index: toolCallDelta.Index,
-						ID:    toolCallDelta.ID,
-						Type:  toolCallDelta.Type,
+					chunk := &StreamChunk{
+						Provider: r.provider,
+						Model:    chunk.Model,
+						Type:     "tool_call_delta",
+						ToolCallDelta: &ToolCallDelta{
+							Index: toolCallDelta.Index,
+							ID:    toolCallDelta.ID,
+							Type:  toolCallDelta.Type,
+						},
 					}
 
 					if toolCallDelta.Function != nil {
-						streamChunk.ToolCallDelta.FunctionName = toolCallDelta.Function.Name
-						streamChunk.ToolCallDelta.ArgumentsDelta = toolCallDelta.Function.Arguments
+						chunk.ToolCallDelta.FunctionName = toolCallDelta.Function.Name
+						chunk.ToolCallDelta.ArgumentsDelta = toolCallDelta.Function.Arguments
 					}
 
-					// Return immediately for each tool call delta
-					return streamChunk, nil
+					pending = append(pending, chunk)
 				}
 			}
 
 			// Check if stream is finished (usage chunk will come separately after this)
 			if choice.FinishReason != "" {
-				streamChunk.FinishReason = choice.FinishReason
-				// Don't mark as done yet, wait for usage chunk
-				return streamChunk, nil
+				pending = append(pending, &StreamChunk{
+					Provider:     r.provider,
+					Model:        chunk.Model,
+					FinishReason: choice.FinishReason,
+				})
 			}
 
-			// Only return if we have content or reasoning
-			if streamChunk.Type != "" {
-				return streamChunk, nil
+			if len(pending) > 0 {
+				r.pendingChunks = append(r.pendingChunks, pending[1:]...)
+				return pending[0], nil
 			}
 		}
 	}
@@ -581,7 +598,8 @@ type openaiContentPart struct {
 }
 
 type openaiImageURL struct {
-	URL string `json:"url"`
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
 }
 
 type openaiTool struct {
@@ -869,7 +887,8 @@ func buildOpenAIContentParts(msg Message) []openaiContentPart {
 			parts = append(parts, openaiContentPart{
 				Type: "image_url",
 				ImageURL: &openaiImageURL{
-					URL: content.ImageURL.URL,
+					URL:    content.ImageURL.URL,
+					Detail: content.ImageURL.Detail,
 				},
 			})
 		default:
@@ -914,14 +933,17 @@ func convertOpenAIContentToMessageContents(content interface{}) []MessageContent
 			case "image_url":
 				if imageData, ok := partMap["image_url"].(map[string]interface{}); ok {
 					if urlValue, _ := imageData["url"].(string); urlValue != "" {
+						detailValue, _ := imageData["detail"].(string)
 						result = append(result, MessageContent{
 							Type: "image_url",
 							ImageURL: &MessageImageURL{
-								URL: urlValue,
+								URL:    urlValue,
+								Detail: detailValue,
 							},
 						})
 					}
 				}
+
 			default:
 				textValue, _ := partMap["text"].(string)
 				if textValue == "" {

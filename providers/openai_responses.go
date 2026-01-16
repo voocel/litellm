@@ -188,7 +188,8 @@ type responsesAPIContentItem struct {
 
 // responsesAPIImageURL represents an image URL in Responses API
 type responsesAPIImageURL struct {
-	URL string `json:"url"`
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // responsesAPISummaryItem represents a reasoning summary item
@@ -221,6 +222,7 @@ type responsesAPICompletedEvent struct {
 		Model string            `json:"model"`
 		Usage responsesAPIUsage `json:"usage"`
 	} `json:"response"`
+	SequenceNumber int `json:"sequence_number,omitempty"`
 }
 
 // responsesAPIErrorEvent represents the response.error streaming event
@@ -275,7 +277,11 @@ func (p *OpenAIProvider) buildResponsesAPIRequest(req *OpenAIResponsesRequest) r
 		Model: req.Model,
 	}
 
-	if inputItems := convertMessagesToResponsesInput(req.Messages); len(inputItems) > 0 {
+	instructions, filteredMessages := extractResponsesInstructions(req.Messages)
+	if instructions != "" {
+		responsesReq.Instructions = instructions
+	}
+	if inputItems := convertMessagesToResponsesInput(filteredMessages); len(inputItems) > 0 {
 		responsesReq.Input = inputItems
 	}
 
@@ -559,10 +565,11 @@ func (p *OpenAIProvider) streamWithResponsesAPI(ctx context.Context, req *OpenAI
 	scanner.Buffer(buf, 1024*1024)
 
 	return &responsesAPIStreamReader{
-		resp:     resp,
-		scanner:  scanner,
-		provider: "openai",
-		model:    req.Model,
+		resp:            resp,
+		scanner:         scanner,
+		provider:        "openai",
+		model:           req.Model,
+		toolCallSeenMap: make(map[string]bool),
 	}, nil
 }
 
@@ -570,11 +577,13 @@ func (p *OpenAIProvider) streamWithResponsesAPI(ctx context.Context, req *OpenAI
 
 // responsesAPIStreamReader implements streaming for OpenAI /responses endpoint
 type responsesAPIStreamReader struct {
-	resp     *http.Response
-	scanner  *bufio.Scanner
-	provider string
-	model    string
-	done     bool
+	resp            *http.Response
+	scanner         *bufio.Scanner
+	provider        string
+	model           string
+	toolCallSeenMap map[string]bool
+	lastSequence    int
+	done            bool
 }
 
 func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
@@ -634,6 +643,9 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 			if err := json.Unmarshal([]byte(data), &delta); err != nil {
 				return nil, fmt.Errorf("openai: parse output delta: %w", err)
 			}
+			if !r.shouldEmit(&delta.SequenceNumber) {
+				continue
+			}
 			streamChunk.Type = "content"
 			streamChunk.Content = delta.Delta
 			streamChunk.ItemID = delta.ItemID
@@ -653,6 +665,9 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 			if err := json.Unmarshal([]byte(data), &delta); err != nil {
 				return nil, fmt.Errorf("openai: parse refusal delta: %w", err)
 			}
+			if !r.shouldEmit(&delta.SequenceNumber) {
+				continue
+			}
 			streamChunk.Type = "refusal"
 			streamChunk.Content = delta.Delta
 			streamChunk.ItemID = delta.ItemID
@@ -661,8 +676,28 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 			return streamChunk, nil
 
 		case "response.refusal.done":
-			// Refusal complete, continue to wait for response.completed
-			continue
+			var done struct {
+				Refusal        string `json:"refusal"`
+				ItemID         string `json:"item_id"`
+				OutputIndex    *int   `json:"output_index,omitempty"`
+				ContentIndex   *int   `json:"content_index,omitempty"`
+				SequenceNumber int    `json:"sequence_number,omitempty"`
+			}
+			if err := json.Unmarshal([]byte(data), &done); err != nil {
+				return nil, fmt.Errorf("openai: parse refusal done: %w", err)
+			}
+			if done.Refusal == "" {
+				continue
+			}
+			if !r.shouldEmit(&done.SequenceNumber) {
+				continue
+			}
+			streamChunk.Type = "refusal"
+			streamChunk.Content = done.Refusal
+			streamChunk.ItemID = done.ItemID
+			streamChunk.OutputIndex = done.OutputIndex
+			streamChunk.ContentIndex = done.ContentIndex
+			return streamChunk, nil
 
 		// === Reasoning Events ===
 		case "response.reasoning_text.delta":
@@ -675,6 +710,9 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 			}
 			if err := json.Unmarshal([]byte(data), &delta); err != nil {
 				return nil, fmt.Errorf("openai: parse reasoning delta: %w", err)
+			}
+			if !r.shouldEmit(&delta.SequenceNumber) {
+				continue
 			}
 			streamChunk.Type = "reasoning"
 			streamChunk.Reasoning = &ReasoningChunk{Content: delta.Delta}
@@ -699,6 +737,9 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 			if err := json.Unmarshal([]byte(data), &delta); err != nil {
 				return nil, fmt.Errorf("openai: parse reasoning summary delta: %w", err)
 			}
+			if !r.shouldEmit(&delta.SequenceNumber) {
+				continue
+			}
 			streamChunk.Type = "reasoning"
 			streamChunk.Reasoning = &ReasoningChunk{Summary: delta.Delta}
 			streamChunk.ItemID = delta.ItemID
@@ -713,7 +754,6 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 		// === Tool Call Events ===
 		case "response.function_call_arguments.delta":
 			var delta struct {
-				CallID         string `json:"call_id"`
 				Delta          string `json:"delta"`
 				ItemID         string `json:"item_id"`
 				OutputIndex    *int   `json:"output_index,omitempty"`
@@ -722,9 +762,12 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 			if err := json.Unmarshal([]byte(data), &delta); err != nil {
 				return nil, fmt.Errorf("openai: parse tool delta: %w", err)
 			}
+			if !r.shouldEmit(&delta.SequenceNumber) {
+				continue
+			}
 			streamChunk.Type = "tool_call_delta"
 			streamChunk.ToolCallDelta = &ToolCallDelta{
-				ID:             delta.CallID,
+				ID:             delta.ItemID,
 				Type:           "function",
 				ArgumentsDelta: delta.Delta,
 				OutputIndex:    delta.OutputIndex,
@@ -732,30 +775,44 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 			}
 			streamChunk.ItemID = delta.ItemID
 			streamChunk.OutputIndex = delta.OutputIndex
+			if delta.ItemID != "" {
+				r.toolCallSeenMap[delta.ItemID] = true
+			}
 			return streamChunk, nil
 
 		case "response.function_call_arguments.done":
 			var done struct {
-				CallID      string `json:"call_id"`
-				Name        string `json:"name"`
-				Arguments   string `json:"arguments"`
-				ItemID      string `json:"item_id"`
-				OutputIndex *int   `json:"output_index,omitempty"`
+				Name           string `json:"name"`
+				Arguments      string `json:"arguments"`
+				ItemID         string `json:"item_id"`
+				OutputIndex    *int   `json:"output_index,omitempty"`
+				SequenceNumber int    `json:"sequence_number,omitempty"`
 			}
 			if err := json.Unmarshal([]byte(data), &done); err != nil {
 				return nil, fmt.Errorf("openai: parse tool done: %w", err)
 			}
-			streamChunk.Type = "tool_call_done"
+			if !r.shouldEmit(&done.SequenceNumber) {
+				continue
+			}
+			seenDelta := done.ItemID != "" && r.toolCallSeenMap[done.ItemID]
 			streamChunk.ToolCallDelta = &ToolCallDelta{
-				ID:             done.CallID,
-				Type:           "function",
-				FunctionName:   done.Name,
-				ArgumentsDelta: done.Arguments,
-				OutputIndex:    done.OutputIndex,
-				ItemID:         done.ItemID,
+				ID:           done.ItemID,
+				Type:         "function",
+				FunctionName: done.Name,
+				OutputIndex:  done.OutputIndex,
+				ItemID:       done.ItemID,
+			}
+			if !seenDelta {
+				streamChunk.Type = "tool_call_delta"
+				streamChunk.ToolCallDelta.ArgumentsDelta = done.Arguments
+			} else {
+				streamChunk.Type = "tool_call_done"
 			}
 			streamChunk.ItemID = done.ItemID
 			streamChunk.OutputIndex = done.OutputIndex
+			if done.ItemID != "" {
+				r.toolCallSeenMap[done.ItemID] = true
+			}
 			return streamChunk, nil
 
 		// === Output Item Events ===
@@ -772,6 +829,9 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 			}
 			if err := json.Unmarshal([]byte(data), &item); err != nil {
 				return nil, fmt.Errorf("openai: parse output item added: %w", err)
+			}
+			if !r.shouldEmit(&item.SequenceNumber) {
+				continue
 			}
 			streamChunk.Type = "output_item_added"
 			streamChunk.ItemID = item.Item.ID
@@ -792,6 +852,9 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 			if err := json.Unmarshal([]byte(data), &completed); err != nil {
 				return nil, fmt.Errorf("openai: parse responses completed: %w", err)
 			}
+			if !r.shouldEmit(&completed.SequenceNumber) {
+				continue
+			}
 			if completed.Response.Model != "" {
 				r.model = completed.Response.Model
 				streamChunk.Model = completed.Response.Model
@@ -811,9 +874,13 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 						Message string `json:"message"`
 					} `json:"error"`
 				} `json:"response"`
+				SequenceNumber int `json:"sequence_number,omitempty"`
 			}
 			if err := json.Unmarshal([]byte(data), &failed); err != nil {
 				return nil, fmt.Errorf("openai: parse responses failed: %w", err)
+			}
+			if !r.shouldEmit(&failed.SequenceNumber) {
+				continue
 			}
 			return nil, fmt.Errorf("openai: response failed: [%s] %s", failed.Response.Error.Code, failed.Response.Error.Message)
 
@@ -846,12 +913,16 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 
 		case "response.code_interpreter_call.code.delta":
 			var delta struct {
-				Delta       string `json:"delta"`
-				ItemID      string `json:"item_id"`
-				OutputIndex *int   `json:"output_index,omitempty"`
+				Delta          string `json:"delta"`
+				ItemID         string `json:"item_id"`
+				OutputIndex    *int   `json:"output_index,omitempty"`
+				SequenceNumber int    `json:"sequence_number,omitempty"`
 			}
 			if err := json.Unmarshal([]byte(data), &delta); err != nil {
 				return nil, fmt.Errorf("openai: parse code interpreter delta: %w", err)
+			}
+			if !r.shouldEmit(&delta.SequenceNumber) {
+				continue
 			}
 			streamChunk.Type = "code_interpreter_delta"
 			streamChunk.Content = delta.Delta
@@ -877,7 +948,45 @@ func (r *responsesAPIStreamReader) Close() error {
 	return r.resp.Body.Close()
 }
 
+func (r *responsesAPIStreamReader) shouldEmit(sequenceNumber *int) bool {
+	if sequenceNumber == nil || *sequenceNumber == 0 {
+		return true
+	}
+	if *sequenceNumber <= r.lastSequence {
+		return false
+	}
+	r.lastSequence = *sequenceNumber
+	return true
+}
+
 // ==================== Responses API Conversion ====================
+
+// extractResponsesInstructions extracts system/developer messages into instructions and returns remaining messages.
+func extractResponsesInstructions(messages []Message) (string, []Message) {
+	if len(messages) == 0 {
+		return "", messages
+	}
+
+	var instructionParts []string
+	filtered := make([]Message, 0, len(messages))
+	for _, msg := range messages {
+		role := strings.ToLower(strings.TrimSpace(msg.Role))
+		if role == "system" || role == "developer" {
+			text := msg.Content
+			if text == "" {
+				text = joinMessageContentsText(normalizeMessageContents(msg))
+			}
+			if strings.TrimSpace(text) != "" {
+				instructionParts = append(instructionParts, text)
+			}
+			continue
+		}
+		filtered = append(filtered, msg)
+	}
+
+	instructions := strings.TrimSpace(strings.Join(instructionParts, "\n"))
+	return instructions, filtered
+}
 
 // convertMessagesToResponsesInput converts messages to Responses API input format
 func convertMessagesToResponsesInput(messages []Message) []responsesAPIInputItem {
@@ -923,8 +1032,11 @@ func convertMessageContentsToResponsesContent(msg Message) []responsesAPIContent
 				continue
 			}
 			result = append(result, responsesAPIContentItem{
-				Type:     "input_image",
-				ImageURL: &responsesAPIImageURL{URL: content.ImageURL.URL},
+				Type: "input_image",
+				ImageURL: &responsesAPIImageURL{
+					URL:    content.ImageURL.URL,
+					Detail: content.ImageURL.Detail,
+				},
 			})
 		default:
 			if content.Text != "" {
@@ -952,8 +1064,11 @@ func convertResponsesContentToMessageContents(items []responsesAPIContentItem) [
 				continue
 			}
 			result = append(result, MessageContent{
-				Type:     "image_url",
-				ImageURL: &MessageImageURL{URL: item.ImageURL.URL},
+				Type: "image_url",
+				ImageURL: &MessageImageURL{
+					URL:    item.ImageURL.URL,
+					Detail: item.ImageURL.Detail,
+				},
 			})
 		default:
 			if item.Text == "" {
