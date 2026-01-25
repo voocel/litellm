@@ -959,6 +959,25 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 		case "response.code_interpreter_call.code.done":
 			// Code interpreter code complete
 			continue
+
+		// === Web Search Events ===
+		case "response.web_search_call.in_progress", "response.web_search_call.searching", "response.web_search_call.completed":
+			continue
+
+		// === Image Generation Events ===
+		case "response.image_generation_call.in_progress", "response.image_generation_call.generating",
+			"response.image_generation_call.partial_image", "response.image_generation_call.completed":
+			continue
+
+		// === MCP (Model Context Protocol) Events ===
+		case "response.mcp_call.in_progress", "response.mcp_call.completed", "response.mcp_call.failed",
+			"response.mcp_call_arguments.delta", "response.mcp_call_arguments.done",
+			"response.mcp_list_tools.in_progress", "response.mcp_list_tools.completed", "response.mcp_list_tools.failed":
+			continue
+
+		// === Reasoning Summary Part Events ===
+		case "response.reasoning_summary_part.added", "response.reasoning_summary_part.done":
+			continue
 		}
 	}
 
