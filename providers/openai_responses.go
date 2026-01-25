@@ -219,8 +219,13 @@ type responsesAPIOutputTokensDetails struct {
 // responsesAPICompletedEvent represents the response.completed streaming event
 type responsesAPICompletedEvent struct {
 	Response struct {
-		Model string            `json:"model"`
-		Usage responsesAPIUsage `json:"usage"`
+		ID                string                   `json:"id,omitempty"`
+		Object            string                   `json:"object,omitempty"`
+		Status            string                   `json:"status,omitempty"`
+		Model             string                   `json:"model"`
+		Usage             responsesAPIUsage        `json:"usage"`
+		IncompleteDetails *responsesAPIIncomplete  `json:"incomplete_details,omitempty"`
+		Output            []responsesAPIOutputItem `json:"output,omitempty"`
 	} `json:"response"`
 	SequenceNumber int `json:"sequence_number,omitempty"`
 }
@@ -861,6 +866,27 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 			}
 			streamChunk.Done = true
 			if usage := convertResponsesUsage(completed.Response.Usage); usage != nil {
+				streamChunk.Usage = usage
+			}
+			r.done = true
+			return streamChunk, nil
+
+		case "response.incomplete":
+			// Handle truncated output (e.g., max_output_tokens reached)
+			var incomplete responsesAPICompletedEvent
+			if err := json.Unmarshal([]byte(data), &incomplete); err != nil {
+				return nil, fmt.Errorf("openai: parse responses incomplete: %w", err)
+			}
+			if !r.shouldEmit(&incomplete.SequenceNumber) {
+				continue
+			}
+			if incomplete.Response.Model != "" {
+				r.model = incomplete.Response.Model
+				streamChunk.Model = incomplete.Response.Model
+			}
+			streamChunk.Done = true
+			streamChunk.FinishReason = "length"
+			if usage := convertResponsesUsage(incomplete.Response.Usage); usage != nil {
 				streamChunk.Usage = usage
 			}
 			r.done = true

@@ -111,11 +111,16 @@ func basicChat(client *litellm.Client) {
 
 // Example 2: Streaming Chat with Reasoning Models (gpt-5, o1, o3, o4)
 func streamingChat(client *litellm.Client) {
-	request := litellm.NewRequest("gpt-5", "who are you?",
-		litellm.WithMaxTokens(10000),
-	)
+	request := &litellm.OpenAIResponsesRequest{
+		Model: "gpt-5-nano",
+		Messages: []litellm.Message{
+			{Role: "user", Content: "hi"},
+		},
+		MaxOutputTokens: litellm.IntPtr(2200),
+		//ReasoningSummary: "auto", // Uncomment after org verification
+	}
 
-	stream, err := client.Stream(context.Background(), request)
+	stream, err := client.ResponsesStream(context.Background(), request)
 	if err != nil {
 		log.Printf("Streaming failed: %v", err)
 		return
@@ -165,7 +170,7 @@ func streamingChat(client *litellm.Client) {
 		fmt.Printf("  Prompt Tokens:     %d\n", response.Usage.PromptTokens)
 		fmt.Printf("  Completion Tokens: %d\n", response.Usage.CompletionTokens)
 		if response.Usage.ReasoningTokens > 0 {
-			fmt.Printf("  Reasoning Tokens:  %d (hidden internal reasoning)\n", response.Usage.ReasoningTokens)
+			fmt.Printf("  Reasoning Tokens:  %d\n", response.Usage.ReasoningTokens)
 		}
 		fmt.Printf("  Total Tokens:      %d\n", response.Usage.TotalTokens)
 	}

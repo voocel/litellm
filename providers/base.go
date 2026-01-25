@@ -40,7 +40,7 @@ func DefaultResilienceConfig() ResilienceConfig {
 		MaxDelay:       30 * time.Second,
 		Multiplier:     2.0,
 		Jitter:         true,
-		RequestTimeout: 30 * time.Second,
+		RequestTimeout: 5 * time.Minute,
 		ConnectTimeout: 10 * time.Second,
 	}
 }
