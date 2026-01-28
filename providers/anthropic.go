@@ -374,110 +374,185 @@ type anthropicStreamReader struct {
 	resp             *http.Response
 	scanner          *bufio.Scanner
 	provider         string
+	model            string
 	includeReasoning bool
 	done             bool
+	usage            *Usage // Accumulate usage from message_start and message_delta
 }
 
 func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
 	if r.done {
-		return &StreamChunk{Done: true, Provider: r.provider}, nil
+		return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 	}
 
 	for r.scanner.Scan() {
 		line := r.scanner.Text()
+
+		// Handle event type line
+		if strings.HasPrefix(line, "event: ") {
+			continue
+		}
+
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
 
 		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			r.done = true
-			return &StreamChunk{Done: true, Provider: r.provider}, nil
-		}
 
 		var chunk anthropicStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			// Return error instead of silently ignoring malformed chunks
 			return nil, fmt.Errorf("anthropic: failed to parse stream chunk: %w", err)
 		}
 
-		// Handle text content deltas
-		if chunk.Type == "content_block_delta" && chunk.Delta.Type == "text_delta" {
-			return &StreamChunk{
-				Type:     "content",
-				Content:  chunk.Delta.Text,
-				Done:     false,
-				Provider: r.provider,
-			}, nil
-		}
+		switch chunk.Type {
+		// === Message Lifecycle Events ===
+		case "message_start":
+			// Initialize usage from message_start (may be nil in extended thinking mode)
+			if chunk.Message != nil {
+				r.model = chunk.Message.Model
+				if chunk.Message.Usage != nil {
+					r.usage = &Usage{
+						PromptTokens:             chunk.Message.Usage.InputTokens,
+						CompletionTokens:         chunk.Message.Usage.OutputTokens,
+						TotalTokens:              chunk.Message.Usage.InputTokens + chunk.Message.Usage.OutputTokens,
+						CacheCreationInputTokens: chunk.Message.Usage.CacheCreationInputTokens,
+						CacheReadInputTokens:     chunk.Message.Usage.CacheReadInputTokens,
+					}
+				}
+			}
+			continue
 
-		// Handle thinking block start
-		if chunk.Type == "content_block_start" && chunk.ContentBlock != nil && chunk.ContentBlock.Type == "thinking" {
-			if !r.includeReasoning {
+		case "message_delta":
+			// Update usage (cumulative) - may contain full usage info
+			if chunk.Usage != nil {
+				if r.usage == nil {
+					r.usage = &Usage{}
+				}
+				// message_delta usage is cumulative, so update all available fields
+				if chunk.Usage.InputTokens > 0 {
+					r.usage.PromptTokens = chunk.Usage.InputTokens
+				}
+				if chunk.Usage.OutputTokens > 0 {
+					r.usage.CompletionTokens = chunk.Usage.OutputTokens
+				}
+				if chunk.Usage.CacheCreationInputTokens > 0 {
+					r.usage.CacheCreationInputTokens = chunk.Usage.CacheCreationInputTokens
+				}
+				if chunk.Usage.CacheReadInputTokens > 0 {
+					r.usage.CacheReadInputTokens = chunk.Usage.CacheReadInputTokens
+				}
+				r.usage.TotalTokens = r.usage.PromptTokens + r.usage.CompletionTokens
+			}
+			// Return finish reason
+			if chunk.Delta != nil && chunk.Delta.StopReason != "" {
+				return &StreamChunk{
+					FinishReason: chunk.Delta.StopReason,
+					Provider:     r.provider,
+					Model:        r.model,
+				}, nil
+			}
+			continue
+
+		case "message_stop":
+			r.done = true
+			return &StreamChunk{
+				Done:     true,
+				Provider: r.provider,
+				Model:    r.model,
+				Usage:    r.usage,
+			}, nil
+
+		// === Content Block Events ===
+		case "content_block_start":
+			if chunk.ContentBlock == nil {
 				continue
 			}
-			return &StreamChunk{
-				Type:      "reasoning",
-				Provider:  r.provider,
-				Reasoning: &ReasoningChunk{Content: ""},
-			}, nil
-		}
+			switch chunk.ContentBlock.Type {
+			case "thinking":
+				if !r.includeReasoning {
+					continue
+				}
+				return &StreamChunk{
+					Type:      "reasoning",
+					Provider:  r.provider,
+					Model:     r.model,
+					Reasoning: &ReasoningChunk{Content: ""},
+				}, nil
+			case "tool_use":
+				return &StreamChunk{
+					Type:     "tool_call_delta",
+					Provider: r.provider,
+					Model:    r.model,
+					ToolCallDelta: &ToolCallDelta{
+						Index:        chunk.Index,
+						ID:           chunk.ContentBlock.ID,
+						Type:         "function",
+						FunctionName: chunk.ContentBlock.Name,
+					},
+				}, nil
+			}
+			continue
 
-		// Handle thinking content deltas (extended thinking)
-		if chunk.Type == "content_block_delta" && chunk.Delta.Type == "thinking_delta" {
-			if !r.includeReasoning {
+		case "content_block_delta":
+			if chunk.Delta == nil {
 				continue
 			}
-			return &StreamChunk{
-				Type:      "reasoning",
-				Content:   "", // Keep content empty for reasoning chunks
-				Reasoning: &ReasoningChunk{Content: chunk.Delta.Text},
-				Done:      false,
-				Provider:  r.provider,
-			}, nil
-		}
+			switch chunk.Delta.Type {
+			case "text_delta":
+				return &StreamChunk{
+					Type:     "content",
+					Content:  chunk.Delta.Text,
+					Provider: r.provider,
+					Model:    r.model,
+				}, nil
+			case "thinking_delta":
+				if !r.includeReasoning {
+					continue
+				}
+				return &StreamChunk{
+					Type:      "reasoning",
+					Reasoning: &ReasoningChunk{Content: chunk.Delta.Thinking},
+					Provider:  r.provider,
+					Model:     r.model,
+				}, nil
+			case "signature_delta":
+				// Signature for extended thinking verification, skip for now
+				continue
+			case "input_json_delta":
+				return &StreamChunk{
+					Type:     "tool_call_delta",
+					Provider: r.provider,
+					Model:    r.model,
+					ToolCallDelta: &ToolCallDelta{
+						Index:          chunk.Index,
+						ArgumentsDelta: chunk.Delta.PartialJSON,
+					},
+				}, nil
+			}
+			continue
 
-		// Handle tool use deltas
-		if chunk.Type == "content_block_delta" && chunk.Delta.Type == "input_json_delta" {
-			return &StreamChunk{
-				Type:     "tool_call_delta",
-				Provider: r.provider,
-				ToolCallDelta: &ToolCallDelta{
-					Index:          chunk.Index,
-					ArgumentsDelta: chunk.Delta.PartialJSON,
-				},
-			}, nil
-		}
+		case "content_block_stop":
+			// Content block finished, continue processing
+			continue
 
-		// Handle tool use start
-		if chunk.Type == "content_block_start" && chunk.ContentBlock != nil && chunk.ContentBlock.Type == "tool_use" {
-			return &StreamChunk{
-				Type:     "tool_call_delta",
-				Provider: r.provider,
-				ToolCallDelta: &ToolCallDelta{
-					Index:        chunk.Index,
-					ID:           chunk.ContentBlock.ID,
-					Type:         "function",
-					FunctionName: chunk.ContentBlock.Name,
-				},
-			}, nil
-		}
+		// === Other Events ===
+		case "ping":
+			continue
 
-		// Handle message completion
-		if chunk.Type == "message_delta" && chunk.Delta.StopReason != "" {
-			return &StreamChunk{
-				FinishReason: chunk.Delta.StopReason,
-				Provider:     r.provider,
-			}, nil
+		case "error":
+			if chunk.Error != nil {
+				return nil, fmt.Errorf("anthropic: stream error: [%s] %s", chunk.Error.Type, chunk.Error.Message)
+			}
+			return nil, fmt.Errorf("anthropic: unknown stream error")
 		}
 	}
 
 	if err := r.scanner.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("anthropic: stream read error: %w", err)
 	}
 
 	r.done = true
-	return &StreamChunk{Done: true, Provider: r.provider}, nil
+	return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 }
 
 func (r *anthropicStreamReader) Close() error {
@@ -548,10 +623,12 @@ type anthropicUsage struct {
 }
 
 type anthropicStreamChunk struct {
-	Type         string         `json:"type"`
-	Index        int            `json:"index,omitempty"`
-	Delta        anthropicDelta `json:"delta,omitempty"`
-	Usage        anthropicUsage `json:"usage,omitempty"`
+	Type         string                  `json:"type"`
+	Index        int                     `json:"index,omitempty"`
+	Delta        *anthropicDelta         `json:"delta,omitempty"`
+	Usage        *anthropicUsage         `json:"usage,omitempty"`
+	Message      *anthropicStreamMessage `json:"message,omitempty"`
+	Error        *anthropicStreamError   `json:"error,omitempty"`
 	ContentBlock *struct {
 		Type string `json:"type"`
 		ID   string `json:"id,omitempty"`
@@ -559,9 +636,22 @@ type anthropicStreamChunk struct {
 	} `json:"content_block,omitempty"`
 }
 
+type anthropicStreamMessage struct {
+	ID    string          `json:"id,omitempty"`
+	Model string          `json:"model,omitempty"`
+	Usage *anthropicUsage `json:"usage,omitempty"`
+}
+
+type anthropicStreamError struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
 type anthropicDelta struct {
 	Type        string `json:"type"`
 	Text        string `json:"text,omitempty"`
+	Thinking    string `json:"thinking,omitempty"`
+	Signature   string `json:"signature,omitempty"`
 	PartialJSON string `json:"partial_json,omitempty"`
 	Name        string `json:"name,omitempty"`
 	Input       string `json:"input,omitempty"`
