@@ -131,13 +131,6 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 			Parts: []geminiPart{},
 		}
 
-		// Add cache control if specified for this message
-		if msg.CacheControl != nil {
-			content.CacheControl = &geminiCacheControl{
-				Type: msg.CacheControl.Type,
-			}
-		}
-
 		if msg.Content != "" {
 			content.Parts = append(content.Parts, geminiPart{Text: msg.Content})
 		}
@@ -356,13 +349,6 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 				Parts: []geminiPart{{Text: msg.Content}},
 			}
 
-			// Add cache control if specified for this message
-			if msg.CacheControl != nil {
-				content.CacheControl = &geminiCacheControl{
-					Type: msg.CacheControl.Type,
-				}
-			}
-
 			geminiReq.Contents = append(geminiReq.Contents, content)
 		}
 	}
@@ -404,6 +390,7 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		resp:             resp,
 		scanner:          newStreamScanner(resp.Body),
 		provider:         "gemini",
+		model:            req.Model,
 		includeReasoning: includeThoughts,
 	}, nil
 }
@@ -461,16 +448,17 @@ func (p *GeminiProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 }
 
 // convertRole converts standard roles to Gemini roles
+// Gemini only supports "user" and "model" roles
+// Tool/function responses should use "user" role with functionResponse part
 func (p *GeminiProvider) convertRole(role string) string {
 	switch role {
 	case "assistant":
 		return "model"
-	case "user":
-		return "user"
 	case "tool":
-		return "function"
+		// Tool responses use "user" role in Gemini (with functionResponse part)
+		return "user"
 	default:
-		return "user" // Default to user
+		return "user"
 	}
 }
 
@@ -558,15 +546,17 @@ type geminiStreamReader struct {
 	resp             *http.Response
 	scanner          *bufio.Scanner
 	provider         string
+	model            string
 	includeReasoning bool
 	done             bool
 	pending          string
 	queue            []geminiStreamResponse
+	usage            *Usage // Accumulate usage from streaming response
 }
 
 func (r *geminiStreamReader) Next() (*StreamChunk, error) {
 	if r.done {
-		return &StreamChunk{Done: true, Provider: r.provider}, nil
+		return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 	}
 	if len(r.queue) > 0 {
 		next := r.queue[0]
@@ -580,15 +570,15 @@ func (r *geminiStreamReader) Next() (*StreamChunk, error) {
 		if line == "" {
 			continue
 		}
-		if strings.HasPrefix(line, "data:") {
-			line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data, found := strings.CutPrefix(line, "data:"); found {
+			line = strings.TrimSpace(data)
 			if line == "" {
 				continue
 			}
 		}
 		if line == "[DONE]" {
 			r.done = true
-			return &StreamChunk{Done: true, Provider: r.provider}, nil
+			return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 		}
 
 		r.pending += line
@@ -625,15 +615,26 @@ func (r *geminiStreamReader) Next() (*StreamChunk, error) {
 	}
 
 	r.done = true
-	return &StreamChunk{Done: true, Provider: r.provider}, nil
+	return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 }
 
 func (r *geminiStreamReader) processResponse(streamResp geminiStreamResponse) (*StreamChunk, error) {
+	// Update usage metadata if present (usually in the final chunk)
+	if streamResp.UsageMetadata != nil {
+		r.usage = &Usage{
+			PromptTokens:         streamResp.UsageMetadata.PromptTokenCount,
+			CompletionTokens:     streamResp.UsageMetadata.CandidatesTokenCount,
+			ReasoningTokens:      streamResp.UsageMetadata.ThoughtsTokenCount,
+			TotalTokens:          streamResp.UsageMetadata.TotalTokenCount,
+			CacheReadInputTokens: streamResp.UsageMetadata.CachedContentTokenCount,
+		}
+	}
 
 	if len(streamResp.Candidates) > 0 {
 		candidate := streamResp.Candidates[0]
 		streamChunk := &StreamChunk{
 			Provider: r.provider,
+			Model:    r.model,
 		}
 
 		// Extract text content and thinking content
@@ -672,6 +673,7 @@ func (r *geminiStreamReader) processResponse(streamResp geminiStreamResponse) (*
 		if candidate.FinishReason != "" {
 			streamChunk.FinishReason = candidate.FinishReason
 			streamChunk.Done = true
+			streamChunk.Usage = r.usage
 			r.done = true
 			return streamChunk, nil
 		}
@@ -711,14 +713,8 @@ type geminiRequest struct {
 }
 
 type geminiContent struct {
-	Role         string              `json:"role,omitempty"`
-	Parts        []geminiPart        `json:"parts"`
-	CacheControl *geminiCacheControl `json:"cache_control,omitempty"`
-}
-
-// geminiCacheControl represents Gemini's cache control structure
-type geminiCacheControl struct {
-	Type string `json:"type"`
+	Role  string       `json:"role,omitempty"`
+	Parts []geminiPart `json:"parts"`
 }
 
 type geminiPart struct {
@@ -757,8 +753,9 @@ type geminiResponseSchema struct {
 }
 
 type geminiThinkingConfig struct {
-	ThinkingBudget  *int  `json:"thinkingBudget,omitempty"`
-	IncludeThoughts *bool `json:"includeThoughts,omitempty"`
+	ThinkingLevel   string `json:"thinkingLevel,omitempty"`   // For Gemini 3: "minimal", "low", "medium", "high"
+	ThinkingBudget  *int   `json:"thinkingBudget,omitempty"`  // For Gemini 2.5: token budget
+	IncludeThoughts *bool  `json:"includeThoughts,omitempty"` // Enable thought summaries
 }
 
 type geminiTool struct {
