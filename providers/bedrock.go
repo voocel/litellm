@@ -379,7 +379,7 @@ func (p *BedrockProvider) buildRequest(req *Request) *bedrockRequest {
 		bedrockReq.Messages = append(bedrockReq.Messages, bedrockMsg)
 	}
 
-	if req.MaxTokens != nil || req.Temperature != nil || len(req.Stop) > 0 {
+	if req.MaxTokens != nil || req.Temperature != nil || req.TopP != nil || len(req.Stop) > 0 {
 		bedrockReq.InferenceConfig = &bedrockInferenceConfig{}
 		if req.MaxTokens != nil {
 			bedrockReq.InferenceConfig.MaxTokens = *req.MaxTokens

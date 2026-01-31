@@ -130,6 +130,7 @@ func (p *DeepSeekProvider) Stream(ctx context.Context, req *Request) (StreamRead
 		resp:             resp,
 		scanner:          bufio.NewScanner(resp.Body),
 		provider:         "deepseek",
+		model:            req.Model,
 		includeReasoning: !isThinkingDisabled(req),
 	}, nil
 }
@@ -199,12 +200,26 @@ func (p *DeepSeekProvider) buildHTTPRequest(ctx context.Context, req *Request, s
 	}
 	if stream {
 		deepseekReq["stream"] = true
+		// Enable usage reporting in streaming mode
+		deepseekReq["stream_options"] = map[string]any{
+			"include_usage": true,
+		}
 	}
 	if req.MaxTokens != nil {
 		deepseekReq["max_tokens"] = *req.MaxTokens
 	}
 	if req.Temperature != nil {
 		deepseekReq["temperature"] = *req.Temperature
+	}
+	if len(req.Stop) > 0 {
+		deepseekReq["stop"] = req.Stop
+	}
+	// Handle thinking parameter for deepseek-reasoner model
+	thinking := normalizeThinking(req)
+	if thinking.Type == "enabled" {
+		deepseekReq["thinking"] = map[string]string{"type": "enabled"}
+	} else if thinking.Type == "disabled" {
+		deepseekReq["thinking"] = map[string]string{"type": "disabled"}
 	}
 	if len(req.Tools) > 0 {
 		deepseekReq["tools"] = ConvertTools(req.Tools)
@@ -286,13 +301,15 @@ type deepseekStreamReader struct {
 	resp             *http.Response
 	scanner          *bufio.Scanner
 	provider         string
+	model            string
 	includeReasoning bool
 	done             bool
+	usage            *Usage
 }
 
 func (r *deepseekStreamReader) Next() (*StreamChunk, error) {
 	if r.done {
-		return &StreamChunk{Done: true, Provider: r.provider}, nil
+		return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 	}
 
 	// DeepSeek uses OpenAI-compatible SSE format
@@ -305,7 +322,7 @@ func (r *deepseekStreamReader) Next() (*StreamChunk, error) {
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
 			r.done = true
-			return &StreamChunk{Done: true, Provider: r.provider}, nil
+			return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 		}
 
 		var streamResp deepseekStreamResponse
@@ -314,10 +331,32 @@ func (r *deepseekStreamReader) Next() (*StreamChunk, error) {
 			return nil, fmt.Errorf("deepseek: failed to parse stream chunk: %w", err)
 		}
 
+		// Update model from response if available
+		if streamResp.Model != "" {
+			r.model = streamResp.Model
+		}
+
+		// Handle usage chunk (sent before [DONE] when stream_options.include_usage is true)
+		if streamResp.Usage != nil {
+			reasoningTokens := 0
+			if streamResp.Usage.CompletionTokensDetails != nil {
+				reasoningTokens = streamResp.Usage.CompletionTokensDetails.ReasoningTokens
+			}
+			r.usage = &Usage{
+				PromptTokens:             streamResp.Usage.PromptTokens,
+				CompletionTokens:         streamResp.Usage.CompletionTokens,
+				TotalTokens:              streamResp.Usage.TotalTokens,
+				ReasoningTokens:          reasoningTokens,
+				CacheReadInputTokens:     streamResp.Usage.PromptCacheHitTokens,
+				CacheCreationInputTokens: streamResp.Usage.PromptCacheMissTokens,
+			}
+		}
+
 		if len(streamResp.Choices) > 0 {
 			choice := streamResp.Choices[0]
 			chunk := &StreamChunk{
 				Provider: r.provider,
+				Model:    r.model,
 			}
 
 			if choice.Delta.Content != "" {
@@ -347,6 +386,7 @@ func (r *deepseekStreamReader) Next() (*StreamChunk, error) {
 			if choice.FinishReason != "" {
 				chunk.FinishReason = choice.FinishReason
 				chunk.Done = true
+				chunk.Usage = r.usage
 				r.done = true
 			}
 
@@ -363,7 +403,7 @@ func (r *deepseekStreamReader) Next() (*StreamChunk, error) {
 	}
 
 	r.done = true
-	return &StreamChunk{Done: true, Provider: r.provider}, nil
+	return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 }
 
 func (r *deepseekStreamReader) Close() error {
@@ -377,6 +417,7 @@ type deepseekStreamResponse struct {
 	Created int64                  `json:"created"`
 	Model   string                 `json:"model"`
 	Choices []deepseekStreamChoice `json:"choices"`
+	Usage   *deepseekUsage         `json:"usage,omitempty"` // Present when stream_options.include_usage is true
 }
 
 type deepseekStreamChoice struct {
