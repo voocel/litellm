@@ -122,6 +122,7 @@ func (p *GLMProvider) Stream(ctx context.Context, req *Request) (StreamReader, e
 		resp:             resp,
 		scanner:          bufio.NewScanner(resp.Body),
 		provider:         "glm",
+		model:            req.Model,
 		includeReasoning: !isThinkingDisabled(req),
 	}, nil
 }
@@ -164,6 +165,13 @@ func (p *GLMProvider) buildHTTPRequest(ctx context.Context, req *Request, stream
 	if req.Temperature != nil {
 		glmReq["temperature"] = *req.Temperature
 	}
+	if req.TopP != nil {
+		glmReq["top_p"] = *req.TopP
+	}
+	if len(req.Stop) > 0 {
+		// GLM supports up to 1 stop word
+		glmReq["stop"] = req.Stop[:1]
+	}
 	if len(req.Tools) > 0 {
 		glmReq["tools"] = ConvertTools(req.Tools)
 	}
@@ -177,15 +185,15 @@ func (p *GLMProvider) buildHTTPRequest(ctx context.Context, req *Request, stream
 		}
 	}
 
+	// Handle thinking/reasoning mode
+	// GLM thinking parameter supports: type (enabled/disabled), clear_thinking (boolean)
+	// Note: GLM does NOT support budget_tokens like Anthropic
 	thinking := normalizeThinking(req)
-	if thinking.Type != "enabled" && thinking.Type != "disabled" {
-		return nil, fmt.Errorf("glm: thinking type must be enabled or disabled")
+	if thinking.Type == "enabled" {
+		glmReq["thinking"] = map[string]any{"type": "enabled"}
+	} else if thinking.Type == "disabled" {
+		glmReq["thinking"] = map[string]any{"type": "disabled"}
 	}
-	thinkingConfig := map[string]any{"type": thinking.Type}
-	if thinking.BudgetTokens != nil {
-		thinkingConfig["budget_tokens"] = *thinking.BudgetTokens
-	}
-	glmReq["thinking"] = thinkingConfig
 
 	body, err := json.Marshal(glmReq)
 	if err != nil {
@@ -251,13 +259,15 @@ type glmStreamReader struct {
 	resp             *http.Response
 	scanner          *bufio.Scanner
 	provider         string
+	model            string
 	includeReasoning bool
 	done             bool
+	usage            *Usage
 }
 
 func (r *glmStreamReader) Next() (*StreamChunk, error) {
 	if r.done {
-		return &StreamChunk{Done: true, Provider: r.provider}, nil
+		return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 	}
 
 	for r.scanner.Scan() {
@@ -269,13 +279,11 @@ func (r *glmStreamReader) Next() (*StreamChunk, error) {
 		}
 
 		// Handle data lines
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
-
+		if data, found := strings.CutPrefix(line, "data: "); found {
 			// Check for end of stream
 			if data == "[DONE]" {
 				r.done = true
-				return &StreamChunk{Done: true, Provider: r.provider}, nil
+				return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 			}
 
 			// Parse JSON
@@ -285,11 +293,26 @@ func (r *glmStreamReader) Next() (*StreamChunk, error) {
 				return nil, fmt.Errorf("glm: failed to parse stream chunk: %w", err)
 			}
 
+			// Update model from response if available
+			if streamResp.Model != "" {
+				r.model = streamResp.Model
+			}
+
+			// Update usage if present
+			if streamResp.Usage != nil {
+				r.usage = &Usage{
+					PromptTokens:     streamResp.Usage.PromptTokens,
+					CompletionTokens: streamResp.Usage.CompletionTokens,
+					TotalTokens:      streamResp.Usage.TotalTokens,
+				}
+			}
+
 			// Convert to StreamChunk
 			if len(streamResp.Choices) > 0 {
 				choice := streamResp.Choices[0]
 				chunk := &StreamChunk{
 					Provider: r.provider,
+					Model:    r.model,
 				}
 
 				if choice.Delta.Content != "" {
@@ -320,10 +343,13 @@ func (r *glmStreamReader) Next() (*StreamChunk, error) {
 				if choice.FinishReason != "" {
 					chunk.FinishReason = choice.FinishReason
 					chunk.Done = true
+					chunk.Usage = r.usage
 					r.done = true
 				}
 
-				return chunk, nil
+				if chunk.Type != "" || chunk.Done {
+					return chunk, nil
+				}
 			}
 		}
 	}
@@ -334,7 +360,7 @@ func (r *glmStreamReader) Next() (*StreamChunk, error) {
 	}
 
 	r.done = true
-	return &StreamChunk{Done: true, Provider: r.provider}, nil
+	return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 }
 
 func (r *glmStreamReader) Close() error {
@@ -348,6 +374,7 @@ type glmStreamResponse struct {
 	Created int64             `json:"created"`
 	Model   string            `json:"model"`
 	Choices []glmStreamChoice `json:"choices"`
+	Usage   *glmUsage         `json:"usage,omitempty"`
 }
 
 type glmStreamChoice struct {
