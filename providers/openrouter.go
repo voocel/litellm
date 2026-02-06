@@ -134,6 +134,7 @@ func (p *OpenRouterProvider) Stream(ctx context.Context, req *Request) (StreamRe
 		resp:             resp,
 		scanner:          bufio.NewScanner(resp.Body),
 		provider:         "openrouter",
+		model:            req.Model,
 		includeReasoning: !isThinkingDisabled(req),
 	}, nil
 }
@@ -210,12 +211,21 @@ func (p *OpenRouterProvider) buildHTTPRequest(ctx context.Context, req *Request,
 	}
 	if stream {
 		openRouterReq["stream"] = true
+		openRouterReq["stream_options"] = map[string]any{
+			"include_usage": true,
+		}
 	}
 	if req.MaxTokens != nil {
 		openRouterReq["max_tokens"] = *req.MaxTokens
 	}
 	if req.Temperature != nil {
 		openRouterReq["temperature"] = *req.Temperature
+	}
+	if req.TopP != nil {
+		openRouterReq["top_p"] = *req.TopP
+	}
+	if len(req.Stop) > 0 {
+		openRouterReq["stop"] = req.Stop
 	}
 	if len(req.Tools) > 0 {
 		openRouterReq["tools"] = p.convertTools(req.Tools)
@@ -403,13 +413,15 @@ type openRouterStreamReader struct {
 	resp             *http.Response
 	scanner          *bufio.Scanner
 	provider         string
+	model            string
 	includeReasoning bool
 	done             bool
+	usage            *Usage
 }
 
 func (r *openRouterStreamReader) Next() (*StreamChunk, error) {
 	if r.done {
-		return &StreamChunk{Done: true, Provider: r.provider}, nil
+		return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 	}
 
 	for r.scanner.Scan() {
@@ -421,13 +433,11 @@ func (r *openRouterStreamReader) Next() (*StreamChunk, error) {
 		}
 
 		// Handle data lines
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
-
+		if data, found := strings.CutPrefix(line, "data: "); found {
 			// Check for end of stream
 			if data == "[DONE]" {
 				r.done = true
-				return &StreamChunk{Done: true, Provider: r.provider}, nil
+				return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 			}
 
 			var streamResp openRouterStreamResponse
@@ -436,11 +446,31 @@ func (r *openRouterStreamReader) Next() (*StreamChunk, error) {
 				return nil, fmt.Errorf("openrouter: failed to parse stream chunk: %w", err)
 			}
 
+			// Update model from response if available
+			if streamResp.Model != "" {
+				r.model = streamResp.Model
+			}
+
+			// Update usage if present (sent with stream_options.include_usage)
+			if streamResp.Usage != nil {
+				reasoningTokens := 0
+				if streamResp.Usage.CompletionTokensDetails != nil {
+					reasoningTokens = streamResp.Usage.CompletionTokensDetails.ReasoningTokens
+				}
+				r.usage = &Usage{
+					PromptTokens:     streamResp.Usage.PromptTokens,
+					CompletionTokens: streamResp.Usage.CompletionTokens,
+					TotalTokens:      streamResp.Usage.TotalTokens,
+					ReasoningTokens:  reasoningTokens,
+				}
+			}
+
 			// Convert to StreamChunk
 			if len(streamResp.Choices) > 0 {
 				choice := streamResp.Choices[0]
 				chunk := &StreamChunk{
 					Provider: r.provider,
+					Model:    r.model,
 				}
 
 				if choice.Delta.Content != "" {
@@ -470,10 +500,13 @@ func (r *openRouterStreamReader) Next() (*StreamChunk, error) {
 				if choice.FinishReason != "" {
 					chunk.FinishReason = choice.FinishReason
 					chunk.Done = true
+					chunk.Usage = r.usage
 					r.done = true
 				}
 
-				return chunk, nil
+				if chunk.Type != "" || chunk.Done {
+					return chunk, nil
+				}
 			}
 		}
 	}
@@ -483,7 +516,7 @@ func (r *openRouterStreamReader) Next() (*StreamChunk, error) {
 	}
 
 	r.done = true
-	return &StreamChunk{Done: true, Provider: r.provider}, nil
+	return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 }
 
 func (r *openRouterStreamReader) Close() error {
@@ -519,6 +552,7 @@ type openRouterStreamResponse struct {
 	Object  string                   `json:"object"`
 	Model   string                   `json:"model"`
 	Choices []openRouterStreamChoice `json:"choices"`
+	Usage   *openRouterUsage         `json:"usage,omitempty"`
 }
 
 type openRouterStreamChoice struct {
