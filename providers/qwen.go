@@ -120,6 +120,7 @@ func (p *QwenProvider) Stream(ctx context.Context, req *Request) (StreamReader, 
 		resp:             resp,
 		scanner:          bufio.NewScanner(resp.Body),
 		provider:         "qwen",
+		model:            req.Model,
 		includeReasoning: !isThinkingDisabled(req),
 	}, nil
 }
@@ -150,6 +151,11 @@ func (p *QwenProvider) buildHTTPRequest(ctx context.Context, req *Request, strea
 	}
 	if req.ResponseFormat != nil && req.ResponseFormat.Type == "json_object" {
 		params["result_format"] = "message"
+	}
+	// Handle thinking/reasoning mode
+	thinking := normalizeThinking(req)
+	if thinking.Type == "enabled" {
+		params["enable_thinking"] = true
 	}
 
 	qwenReq := map[string]any{
@@ -218,14 +224,16 @@ type qwenStreamReader struct {
 	resp             *http.Response
 	scanner          *bufio.Scanner
 	provider         string
+	model            string
 	includeReasoning bool
 	done             bool
 	lastContent      string
+	usage            *Usage
 }
 
 func (r *qwenStreamReader) Next() (*StreamChunk, error) {
 	if r.done {
-		return &StreamChunk{Done: true, Provider: r.provider}, nil
+		return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 	}
 
 	for r.scanner.Scan() {
@@ -237,11 +245,11 @@ func (r *qwenStreamReader) Next() (*StreamChunk, error) {
 		}
 
 		// Handle data lines
-		if strings.HasPrefix(line, "data:") {
-			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data, found := strings.CutPrefix(line, "data:"); found {
+			data = strings.TrimSpace(data)
 			if data == "[DONE]" {
 				r.done = true
-				return &StreamChunk{Done: true, Provider: r.provider}, nil
+				return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 			}
 
 			var streamResp qwenStreamResponse
@@ -250,11 +258,21 @@ func (r *qwenStreamReader) Next() (*StreamChunk, error) {
 				return nil, fmt.Errorf("qwen: failed to parse stream chunk: %w", err)
 			}
 
+			// Update usage if present
+			if streamResp.Usage != nil {
+				r.usage = &Usage{
+					PromptTokens:     streamResp.Usage.InputTokens,
+					CompletionTokens: streamResp.Usage.OutputTokens,
+					TotalTokens:      streamResp.Usage.TotalTokens,
+				}
+			}
+
 			// Convert to StreamChunk
 			if streamResp.Output != nil && len(streamResp.Output.Choices) > 0 {
 				choice := streamResp.Output.Choices[0]
 				chunk := &StreamChunk{
 					Provider: r.provider,
+					Model:    r.model,
 				}
 
 				currentContent := choice.Message.Content
@@ -296,6 +314,7 @@ func (r *qwenStreamReader) Next() (*StreamChunk, error) {
 				if choice.FinishReason != "" && choice.FinishReason != "null" {
 					chunk.FinishReason = choice.FinishReason
 					chunk.Done = true
+					chunk.Usage = r.usage
 					r.done = true
 				}
 
@@ -311,7 +330,7 @@ func (r *qwenStreamReader) Next() (*StreamChunk, error) {
 	}
 
 	r.done = true
-	return &StreamChunk{Done: true, Provider: r.provider}, nil
+	return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 }
 
 func (r *qwenStreamReader) Close() error {
