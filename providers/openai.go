@@ -132,6 +132,11 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 		openaiReq.Temperature = req.Temperature
 	}
 
+	// Set reasoning effort from ThinkingConfig.Level for reasoning models
+	if p.isReasoningModel(modelName) && req.Thinking != nil && req.Thinking.Level != "" {
+		openaiReq.ReasoningEffort = req.Thinking.Level
+	}
+
 	// Set stop sequences (up to 4 sequences)
 	if len(req.Stop) > 0 {
 		openaiReq.Stop = req.Stop
@@ -196,7 +201,7 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 		choice := openaiResp.Choices[0]
 		response.Contents = convertOpenAIContentToMessageContents(choice.Message.Content)
 		response.Content = joinMessageContentsText(response.Contents)
-		response.FinishReason = choice.FinishReason
+		response.FinishReason = NormalizeFinishReason(choice.FinishReason)
 
 		// Extract reasoning content (OpenAI format only)
 		if !isThinkingDisabled(req) && choice.ReasoningSummary != nil && choice.ReasoningSummary.Text != "" {
@@ -257,6 +262,10 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	if p.isReasoningModel(modelName) {
 		// Reasoning models always use max_completion_tokens
 		openaiReq.MaxCompletionTokens = req.MaxTokens
+		// Set reasoning effort from ThinkingConfig.Level
+		if req.Thinking != nil && req.Thinking.Level != "" {
+			openaiReq.ReasoningEffort = req.Thinking.Level
+		}
 	} else {
 		// Traditional models use max_tokens and temperature
 		openaiReq.MaxTokens = req.MaxTokens
@@ -485,7 +494,7 @@ func (r *openaiStreamReader) Next() (*StreamChunk, error) {
 				pending = append(pending, &StreamChunk{
 					Provider:     r.provider,
 					Model:        chunk.Model,
-					FinishReason: choice.FinishReason,
+					FinishReason: NormalizeFinishReason(choice.FinishReason),
 				})
 			}
 
@@ -557,6 +566,9 @@ type openaiRequest struct {
 
 	// Output modalities (for audio-capable models)
 	Modalities []string `json:"modalities,omitempty"` // ["text"] or ["text", "audio"]
+
+	// Reasoning effort for reasoning models (o-series, GPT-5)
+	ReasoningEffort string `json:"reasoning_effort,omitempty"` // "low", "medium", "high"
 
 	// Deprecated
 	Seed *int `json:"seed,omitempty"` // Deprecated: best-effort deterministic sampling

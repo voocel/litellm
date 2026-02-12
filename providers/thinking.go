@@ -12,14 +12,12 @@ func normalizeThinking(req *Request) *ThinkingConfig {
 
 	thinkingType := strings.TrimSpace(req.Thinking.Type)
 	if thinkingType == "" {
-		return &ThinkingConfig{
-			Type:         "enabled",
-			BudgetTokens: req.Thinking.BudgetTokens,
-		}
+		thinkingType = "enabled"
 	}
 
 	return &ThinkingConfig{
 		Type:         thinkingType,
+		Level:        req.Thinking.Level,
 		BudgetTokens: req.Thinking.BudgetTokens,
 	}
 }

@@ -420,7 +420,7 @@ func (p *BedrockProvider) parseResponse(resp *bedrockResponse, model string) *Re
 	response := &Response{
 		Model:        model,
 		Provider:     "bedrock",
-		FinishReason: mapStopReason(resp.StopReason),
+		FinishReason: NormalizeFinishReason(resp.StopReason),
 		Usage: Usage{
 			PromptTokens:     resp.Usage.InputTokens,
 			CompletionTokens: resp.Usage.OutputTokens,
@@ -448,20 +448,6 @@ func (p *BedrockProvider) parseResponse(resp *bedrockResponse, model string) *Re
 	return response
 }
 
-func mapStopReason(reason string) string {
-	switch reason {
-	case "end_turn":
-		return "stop"
-	case "tool_use":
-		return "tool_calls"
-	case "max_tokens":
-		return "length"
-	case "stop_sequence":
-		return "stop"
-	default:
-		return reason
-	}
-}
 
 // AWS Signature V4 implementation
 func (p *BedrockProvider) signRequest(req *http.Request, payload []byte) error {
@@ -632,7 +618,7 @@ func (s *bedrockStreamReader) Next() (*StreamChunk, error) {
 			s.done = true
 			return &StreamChunk{
 				Done:         true,
-				FinishReason: mapStopReason(stop.StopReason),
+				FinishReason: NormalizeFinishReason(stop.StopReason),
 				Provider:     "bedrock",
 				Model:        s.model,
 			}, nil

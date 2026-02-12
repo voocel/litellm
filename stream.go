@@ -6,6 +6,88 @@ import (
 	"strings"
 )
 
+// ---------------------------------------------------------------------------
+// ToolCallAccumulator — reusable tool call delta reconstruction
+// ---------------------------------------------------------------------------
+
+// ToolCallAccumulator reconstructs complete ToolCall objects from streaming deltas.
+// Safe for single-goroutine use only.
+type ToolCallAccumulator struct {
+	order []string
+	byKey map[string]*ToolCall
+}
+
+// NewToolCallAccumulator creates an empty accumulator.
+func NewToolCallAccumulator() *ToolCallAccumulator {
+	return &ToolCallAccumulator{
+		byKey: make(map[string]*ToolCall),
+	}
+}
+
+// Apply processes a single ToolCallDelta, creating or updating the corresponding ToolCall.
+func (a *ToolCallAccumulator) Apply(delta *ToolCallDelta) {
+	if delta == nil {
+		return
+	}
+
+	key := delta.ID
+	if key == "" {
+		key = fmt.Sprintf("index:%d", delta.Index)
+	}
+
+	tc := a.byKey[key]
+	if tc == nil {
+		tc = &ToolCall{
+			ID:   delta.ID,
+			Type: delta.Type,
+			Function: FunctionCall{
+				Name: delta.FunctionName,
+			},
+		}
+		if tc.Type == "" {
+			tc.Type = "function"
+		}
+		a.byKey[key] = tc
+		a.order = append(a.order, key)
+	}
+
+	if delta.FunctionName != "" {
+		tc.Function.Name = delta.FunctionName
+	}
+	if delta.ArgumentsDelta != "" {
+		tc.Function.Arguments += delta.ArgumentsDelta
+	}
+}
+
+// Build returns the completed ToolCall list in first-seen order.
+func (a *ToolCallAccumulator) Build() []ToolCall {
+	if len(a.order) == 0 {
+		return nil
+	}
+	result := make([]ToolCall, 0, len(a.order))
+	for _, key := range a.order {
+		if tc := a.byKey[key]; tc != nil {
+			result = append(result, *tc)
+		}
+	}
+	return result
+}
+
+// Started reports whether a delta with the given index has been received.
+func (a *ToolCallAccumulator) Started(index int) bool {
+	key := fmt.Sprintf("index:%d", index)
+	if _, ok := a.byKey[key]; ok {
+		return true
+	}
+	// Also check ID-keyed entries by scanning order
+	// (index-based key may not match if the delta had an ID)
+	return len(a.order) > index && index >= 0
+}
+
+// ---------------------------------------------------------------------------
+// StreamCallbacks & CollectStream
+// ---------------------------------------------------------------------------
+
 // StreamCallbacks provides optional per-chunk handlers during stream collection.
 type StreamCallbacks struct {
 	OnChunk     func(*StreamChunk)
@@ -47,15 +129,14 @@ func CollectStreamWithHandler(stream StreamReader, onChunk func(*StreamChunk)) (
 	}
 
 	var (
-		contentBuilder        strings.Builder
-		refusalBuilder        strings.Builder
-		contentByOutputIndex  = map[int]*strings.Builder{}
-		refusalByOutputIndex  = map[int]*strings.Builder{}
-		reasoningSummary      strings.Builder
-		reasoningContent      strings.Builder
-		toolCallOrder         []string
-		toolCallsByIdentifier = map[string]*ToolCall{}
-		resp                  Response
+		contentBuilder       strings.Builder
+		refusalBuilder       strings.Builder
+		contentByOutputIndex = map[int]*strings.Builder{}
+		refusalByOutputIndex = map[int]*strings.Builder{}
+		reasoningSummary     strings.Builder
+		reasoningContent     strings.Builder
+		toolAcc              = NewToolCallAccumulator()
+		resp                 Response
 	)
 
 	for {
@@ -124,33 +205,7 @@ func CollectStreamWithHandler(stream StreamReader, onChunk func(*StreamChunk)) (
 		}
 
 		if chunk.ToolCallDelta != nil {
-			key := chunk.ToolCallDelta.ID
-			if key == "" {
-				key = fmt.Sprintf("index:%d", chunk.ToolCallDelta.Index)
-			}
-
-			toolCall := toolCallsByIdentifier[key]
-			if toolCall == nil {
-				toolCall = &ToolCall{
-					ID:   chunk.ToolCallDelta.ID,
-					Type: chunk.ToolCallDelta.Type,
-					Function: FunctionCall{
-						Name: chunk.ToolCallDelta.FunctionName,
-					},
-				}
-				if toolCall.Type == "" {
-					toolCall.Type = "function"
-				}
-				toolCallsByIdentifier[key] = toolCall
-				toolCallOrder = append(toolCallOrder, key)
-			}
-
-			if chunk.ToolCallDelta.FunctionName != "" {
-				toolCall.Function.Name = chunk.ToolCallDelta.FunctionName
-			}
-			if chunk.ToolCallDelta.ArgumentsDelta != "" {
-				toolCall.Function.Arguments += chunk.ToolCallDelta.ArgumentsDelta
-			}
+			toolAcc.Apply(chunk.ToolCallDelta)
 		}
 
 		if chunk.Usage != nil {
@@ -202,14 +257,7 @@ func CollectStreamWithHandler(stream StreamReader, onChunk func(*StreamChunk)) (
 		}
 	}
 
-	if len(toolCallOrder) > 0 {
-		resp.ToolCalls = make([]ToolCall, 0, len(toolCallOrder))
-		for _, key := range toolCallOrder {
-			if toolCall := toolCallsByIdentifier[key]; toolCall != nil {
-				resp.ToolCalls = append(resp.ToolCalls, *toolCall)
-			}
-		}
-	}
+	resp.ToolCalls = toolAcc.Build()
 
 	return &resp, nil
 }

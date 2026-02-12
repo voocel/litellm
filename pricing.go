@@ -18,6 +18,16 @@ type ModelPricing struct {
 	OutputCostPerToken float64 `json:"output_cost_per_token"`
 }
 
+// ModelCapabilities contains capability and limit metadata for a model.
+type ModelCapabilities struct {
+	Provider          string `json:"litellm_provider"`
+	MaxInputTokens    int    `json:"max_input_tokens"`
+	MaxOutputTokens   int    `json:"max_output_tokens"`
+	SupportsTools     bool   `json:"supports_function_calling"`
+	SupportsVision    bool   `json:"supports_vision"`
+	SupportsReasoning bool   `json:"supports_reasoning"`
+}
+
 // CostResult contains the calculated cost for a request.
 type CostResult struct {
 	InputCost  float64 `json:"input_cost"`
@@ -26,13 +36,27 @@ type CostResult struct {
 	Currency   string  `json:"currency"`
 }
 
+// modelEntry is the full internal record parsed from the registry JSON.
+type modelEntry struct {
+	inputCostPerToken  float64
+	outputCostPerToken float64
+	hasInputPricing    bool
+	hasOutputPricing   bool
+	provider           string
+	maxInputTokens     int
+	maxOutputTokens    int
+	supportsTools      bool
+	supportsVision     bool
+	supportsReasoning  bool
+}
+
 var (
-	pricingData   = make(map[string]ModelPricing)
-	pricingMu     sync.RWMutex
-	pricingLoaded bool
+	registryData   = make(map[string]modelEntry)
+	registryMu     sync.RWMutex
+	registryLoaded bool
 )
 
-// LoadPricing fetches pricing data from BerriAI/litellm GitHub.
+// LoadPricing fetches model registry data from BerriAI/litellm GitHub.
 func LoadPricing(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", PricingURL, nil)
 	if err != nil {
@@ -53,68 +77,118 @@ func LoadPricing(ctx context.Context) error {
 	return LoadPricingFromReader(resp.Body)
 }
 
-// LoadPricingFromReader loads pricing data from any io.Reader.
+// LoadPricingFromReader loads model registry data from any io.Reader.
 func LoadPricingFromReader(r io.Reader) error {
 	var raw map[string]json.RawMessage
 	if err := json.NewDecoder(r).Decode(&raw); err != nil {
 		return fmt.Errorf("decode pricing: %w", err)
 	}
 
-	data := make(map[string]ModelPricing)
+	data := make(map[string]modelEntry, len(raw))
 	for model, rawData := range raw {
 		if model == "sample_spec" {
 			continue
 		}
 
-		var pricing struct {
+		var parsed struct {
 			InputCostPerToken  *float64 `json:"input_cost_per_token"`
 			OutputCostPerToken *float64 `json:"output_cost_per_token"`
+			Provider           string   `json:"litellm_provider"`
+			MaxInputTokens     int      `json:"max_input_tokens"`
+			MaxOutputTokens    int      `json:"max_output_tokens"`
+			SupportsTools      bool     `json:"supports_function_calling"`
+			SupportsVision     bool     `json:"supports_vision"`
+			SupportsReasoning  bool     `json:"supports_reasoning"`
 		}
-		if err := json.Unmarshal(rawData, &pricing); err != nil {
+		if err := json.Unmarshal(rawData, &parsed); err != nil {
 			continue
 		}
 
-		if pricing.InputCostPerToken != nil && pricing.OutputCostPerToken != nil {
-			data[model] = ModelPricing{
-				InputCostPerToken:  *pricing.InputCostPerToken,
-				OutputCostPerToken: *pricing.OutputCostPerToken,
-			}
+		entry := modelEntry{
+			provider:          parsed.Provider,
+			maxInputTokens:    parsed.MaxInputTokens,
+			maxOutputTokens:   parsed.MaxOutputTokens,
+			supportsTools:     parsed.SupportsTools,
+			supportsVision:    parsed.SupportsVision,
+			supportsReasoning: parsed.SupportsReasoning,
 		}
+		if parsed.InputCostPerToken != nil {
+			entry.inputCostPerToken = *parsed.InputCostPerToken
+			entry.hasInputPricing = true
+		}
+		if parsed.OutputCostPerToken != nil {
+			entry.outputCostPerToken = *parsed.OutputCostPerToken
+			entry.hasOutputPricing = true
+		}
+		data[model] = entry
 	}
 
-	pricingMu.Lock()
-	pricingData = data
-	pricingLoaded = true
-	pricingMu.Unlock()
+	registryMu.Lock()
+	registryData = data
+	registryLoaded = true
+	registryMu.Unlock()
 
 	return nil
 }
 
 // GetModelPricing returns the pricing for a model.
 func GetModelPricing(model string) (*ModelPricing, bool) {
-	pricingMu.RLock()
-	defer pricingMu.RUnlock()
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 
-	if !pricingLoaded {
+	if !registryLoaded {
 		return nil, false
 	}
-	pricing, ok := pricingData[model]
+	entry, ok := registryData[model]
 	if !ok {
 		return nil, false
 	}
-	return &pricing, true
+	if !entry.hasInputPricing || !entry.hasOutputPricing {
+		return nil, false
+	}
+	return &ModelPricing{
+		InputCostPerToken:  entry.inputCostPerToken,
+		OutputCostPerToken: entry.outputCostPerToken,
+	}, true
+}
+
+// GetModelCapabilities returns capability metadata for a model.
+func GetModelCapabilities(model string) (*ModelCapabilities, bool) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+
+	if !registryLoaded {
+		return nil, false
+	}
+	entry, ok := registryData[model]
+	if !ok {
+		return nil, false
+	}
+	return &ModelCapabilities{
+		Provider:          entry.provider,
+		MaxInputTokens:    entry.maxInputTokens,
+		MaxOutputTokens:   entry.maxOutputTokens,
+		SupportsTools:     entry.supportsTools,
+		SupportsVision:    entry.supportsVision,
+		SupportsReasoning: entry.supportsReasoning,
+	}, true
 }
 
 // SetModelPricing sets custom pricing for a model.
 func SetModelPricing(model string, pricing ModelPricing) {
-	pricingMu.Lock()
-	defer pricingMu.Unlock()
-	pricingData[model] = pricing
-	pricingLoaded = true
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	entry := registryData[model]
+	entry.inputCostPerToken = pricing.InputCostPerToken
+	entry.outputCostPerToken = pricing.OutputCostPerToken
+	entry.hasInputPricing = true
+	entry.hasOutputPricing = true
+	registryData[model] = entry
+	registryLoaded = true
 }
 
 // CalculateCost calculates the cost based on token usage.
-// Pricing data is loaded automatically on first call.
+// Registry data is loaded automatically on first call.
 func CalculateCost(model string, usage Usage) (*CostResult, error) {
 	if !IsPricingLoaded() {
 		if err := LoadPricing(context.Background()); err != nil {
@@ -146,9 +220,9 @@ func CalculateCostForResponse(resp *Response) (*CostResult, error) {
 	return CalculateCost(resp.Model, resp.Usage)
 }
 
-// IsPricingLoaded returns whether pricing data has been loaded.
+// IsPricingLoaded returns whether registry data has been loaded.
 func IsPricingLoaded() bool {
-	pricingMu.RLock()
-	defer pricingMu.RUnlock()
-	return pricingLoaded
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	return registryLoaded
 }

@@ -61,8 +61,9 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 			CacheCreationInputTokens: anthropicResp.Usage.CacheCreationInputTokens,
 			CacheReadInputTokens:     anthropicResp.Usage.CacheReadInputTokens,
 		},
-		Model:    anthropicResp.Model,
-		Provider: "anthropic",
+		Model:        anthropicResp.Model,
+		Provider:     "anthropic",
+		FinishReason: NormalizeFinishReason(anthropicResp.StopReason),
 	}
 
 	// Parse content and tool calls
@@ -446,7 +447,7 @@ func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
 			// Return finish reason
 			if chunk.Delta != nil && chunk.Delta.StopReason != "" {
 				return &StreamChunk{
-					FinishReason: chunk.Delta.StopReason,
+					FinishReason: NormalizeFinishReason(chunk.Delta.StopReason),
 					Provider:     r.provider,
 					Model:        r.model,
 				}, nil
@@ -601,9 +602,10 @@ type anthropicTool struct {
 }
 
 type anthropicResponse struct {
-	Content []anthropicContent `json:"content"`
-	Usage   anthropicUsage     `json:"usage"`
-	Model   string             `json:"model"`
+	Content    []anthropicContent `json:"content"`
+	Usage      anthropicUsage     `json:"usage"`
+	Model      string             `json:"model"`
+	StopReason string             `json:"stop_reason"`
 }
 
 type anthropicModelList struct {

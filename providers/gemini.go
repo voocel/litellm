@@ -81,6 +81,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 			MaxOutputTokens: req.MaxTokens,
 			StopSequences:   req.Stop, // Map Stop to stopSequences for Gemini
 			ThinkingConfig: &geminiThinkingConfig{
+				ThinkingLevel:   thinking.Level,
 				IncludeThoughts: &includeThoughts,
 				ThinkingBudget:  thinking.BudgetTokens,
 			},
@@ -266,7 +267,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 
 	if len(geminiResp.Candidates) > 0 {
 		candidate := geminiResp.Candidates[0]
-		response.FinishReason = candidate.FinishReason
+		response.FinishReason = NormalizeFinishReason(candidate.FinishReason)
 
 		// Extract content, thinking, and tool calls
 		var thinkingContent string
@@ -329,6 +330,7 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 			MaxOutputTokens: req.MaxTokens,
 			StopSequences:   req.Stop, // Map Stop to stopSequences for Gemini
 			ThinkingConfig: &geminiThinkingConfig{
+				ThinkingLevel:   thinking.Level,
 				IncludeThoughts: &includeThoughts,
 				ThinkingBudget:  thinking.BudgetTokens,
 			},
@@ -671,7 +673,7 @@ func (r *geminiStreamReader) processResponse(streamResp geminiStreamResponse) (*
 		}
 
 		if candidate.FinishReason != "" {
-			streamChunk.FinishReason = candidate.FinishReason
+			streamChunk.FinishReason = NormalizeFinishReason(candidate.FinishReason)
 			streamChunk.Done = true
 			streamChunk.Usage = r.usage
 			r.done = true

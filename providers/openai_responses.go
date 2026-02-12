@@ -402,7 +402,7 @@ func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Open
 		Model:        responsesResp.Model,
 		Provider:     "openai",
 		Reasoning:    reasoningData,
-		FinishReason: responsesResp.Status,
+		FinishReason: NormalizeFinishReason(responsesResp.Status),
 	}
 
 	if responsesResp.Usage.OutputTokensDetails != nil {

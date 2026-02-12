@@ -87,7 +87,7 @@ func (p *OpenRouterProvider) Chat(ctx context.Context, req *Request) (*Response,
 			}
 		}
 
-		response.FinishReason = choice.FinishReason
+		response.FinishReason = NormalizeFinishReason(choice.FinishReason)
 
 		if len(choice.Message.ToolCalls) > 0 {
 			for _, toolCall := range choice.Message.ToolCalls {
@@ -498,7 +498,7 @@ func (r *openRouterStreamReader) Next() (*StreamChunk, error) {
 				}
 
 				if choice.FinishReason != "" {
-					chunk.FinishReason = choice.FinishReason
+					chunk.FinishReason = NormalizeFinishReason(choice.FinishReason)
 					chunk.Done = true
 					chunk.Usage = r.usage
 					r.done = true

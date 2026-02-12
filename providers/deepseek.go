@@ -76,7 +76,7 @@ func (p *DeepSeekProvider) Chat(ctx context.Context, req *Request) (*Response, e
 	if len(deepseekResp.Choices) > 0 {
 		choice := deepseekResp.Choices[0]
 		response.Content = choice.Message.Content
-		response.FinishReason = choice.FinishReason
+		response.FinishReason = NormalizeFinishReason(choice.FinishReason)
 
 		// Handle tool calls
 		if len(choice.Message.ToolCalls) > 0 {
@@ -384,7 +384,7 @@ func (r *deepseekStreamReader) Next() (*StreamChunk, error) {
 			}
 
 			if choice.FinishReason != "" {
-				chunk.FinishReason = choice.FinishReason
+				chunk.FinishReason = NormalizeFinishReason(choice.FinishReason)
 				chunk.Done = true
 				chunk.Usage = r.usage
 				r.done = true

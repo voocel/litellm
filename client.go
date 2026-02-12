@@ -138,6 +138,14 @@ func WithDebugOutput(w io.Writer) ClientOption {
 	}
 }
 
+// ProviderName returns the name of the bound provider.
+func (c *Client) ProviderName() string {
+	if c.provider == nil {
+		return ""
+	}
+	return c.provider.Name()
+}
+
 // Chat executes a non-streaming request.
 func (c *Client) Chat(ctx context.Context, req *Request) (*Response, error) {
 	if req == nil {

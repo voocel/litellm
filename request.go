@@ -64,6 +64,20 @@ const (
 	ThinkingDisabled = "disabled"
 )
 
+// FinishReason constants — canonical values returned by all providers.
+const (
+	FinishReasonStop     = providers.FinishReasonStop
+	FinishReasonLength   = providers.FinishReasonLength
+	FinishReasonToolCall = providers.FinishReasonToolCall
+	FinishReasonError    = providers.FinishReasonError
+	FinishReasonSafety   = providers.FinishReasonSafety
+)
+
+// NormalizeFinishReason maps provider-specific stop reasons to canonical constants.
+func NormalizeFinishReason(raw string) string {
+	return providers.NormalizeFinishReason(raw)
+}
+
 // RequestOption configures a Request using the functional options pattern.
 type RequestOption func(*Request)
 
@@ -303,6 +317,12 @@ func NewThinkingEnabled(budgetTokens int) *ThinkingConfig {
 		cfg.BudgetTokens = &budgetTokens
 	}
 	return cfg
+}
+
+// NewThinkingWithLevel enables thinking with a reasoning level.
+// Level is provider-specific: "low", "medium", "high" etc.
+func NewThinkingWithLevel(level string) *ThinkingConfig {
+	return &ThinkingConfig{Type: ThinkingEnabled, Level: level}
 }
 
 // NewThinkingDisabled disables thinking output.

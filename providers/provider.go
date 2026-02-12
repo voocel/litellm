@@ -67,7 +67,8 @@ type JSONSchema struct {
 }
 
 type ThinkingConfig struct {
-	Type         string `json:"type"` // "enabled" or "disabled"
+	Type         string `json:"type"`            // "enabled" or "disabled"
+	Level        string `json:"level,omitempty"` // "low", "medium", "high" — provider translates to API-specific param
 	BudgetTokens *int   `json:"budget_tokens,omitempty"`
 }
 
@@ -158,6 +159,48 @@ type ModelInfo struct {
 	OutputTokenLimit int    `json:"output_token_limit,omitempty"`
 	Created          int64  `json:"created,omitempty"`
 	OwnedBy          string `json:"owned_by,omitempty"`
+
+	// Capability flags (best-effort, may be zero-valued for unknown models)
+	SupportsTools    bool `json:"supports_tools,omitempty"`
+	SupportsVision   bool `json:"supports_vision,omitempty"`
+	SupportsThinking bool `json:"supports_thinking,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// FinishReason constants — canonical values returned by all providers.
+// ---------------------------------------------------------------------------
+
+const (
+	FinishReasonStop     = "stop"
+	FinishReasonLength   = "length"
+	FinishReasonToolCall = "tool_calls"
+	FinishReasonError    = "error"
+	FinishReasonSafety   = "safety"
+)
+
+// NormalizeFinishReason maps provider-specific stop reasons to canonical constants.
+// Unknown values pass through unchanged.
+func NormalizeFinishReason(raw string) string {
+	switch raw {
+	case "stop", "end_turn", "STOP", "stop_sequence":
+		return FinishReasonStop
+	case "length", "max_tokens", "MAX_TOKENS":
+		return FinishReasonLength
+	case "tool_calls", "tool_use", "FUNCTION_CALLING":
+		return FinishReasonToolCall
+	case "content_filter", "SAFETY", "RECITATION":
+		return FinishReasonSafety
+	case "failed", "error", "cancelled", "canceled":
+		return FinishReasonError
+	case "completed":
+		return FinishReasonStop
+	case "incomplete":
+		return FinishReasonLength
+	case "":
+		return ""
+	default:
+		return raw
+	}
 }
 
 type StreamReader interface {

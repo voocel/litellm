@@ -73,7 +73,7 @@ func (p *GLMProvider) Chat(ctx context.Context, req *Request) (*Response, error)
 	if len(glmResp.Choices) > 0 {
 		choice := glmResp.Choices[0]
 		response.Content = choice.Message.Content
-		response.FinishReason = choice.FinishReason
+		response.FinishReason = NormalizeFinishReason(choice.FinishReason)
 
 		// Handle tool calls
 		if len(choice.Message.ToolCalls) > 0 {
@@ -341,7 +341,7 @@ func (r *glmStreamReader) Next() (*StreamChunk, error) {
 				}
 
 				if choice.FinishReason != "" {
-					chunk.FinishReason = choice.FinishReason
+					chunk.FinishReason = NormalizeFinishReason(choice.FinishReason)
 					chunk.Done = true
 					chunk.Usage = r.usage
 					r.done = true
