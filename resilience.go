@@ -63,17 +63,15 @@ func (c *ResilientHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	}
 
 	for attempt := 0; attempt <= c.config.MaxRetries; attempt++ {
-		// Restore request body for each attempt
-		if req.Body != nil {
-			if req.GetBody != nil {
-				body, err := req.GetBody()
-				if err != nil {
-					return nil, fmt.Errorf("failed to get request body: %w", err)
-				}
-				req.Body = body
-			} else if originalBody != nil {
-				req.Body = io.NopCloser(bytes.NewReader(originalBody))
+		// Restore request body for each retry attempt
+		if req.GetBody != nil {
+			body, err := req.GetBody()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get request body: %w", err)
 			}
+			req.Body = body
+		} else if originalBody != nil {
+			req.Body = io.NopCloser(bytes.NewReader(originalBody))
 		}
 
 		resp, err := c.client.Do(req)

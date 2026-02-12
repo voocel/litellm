@@ -7,7 +7,7 @@ import (
 
 func normalizeThinking(req *Request) *ThinkingConfig {
 	if req == nil || req.Thinking == nil {
-		return &ThinkingConfig{Type: "enabled"}
+		return nil
 	}
 
 	thinkingType := strings.TrimSpace(req.Thinking.Type)

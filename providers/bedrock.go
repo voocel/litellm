@@ -547,6 +547,9 @@ type bedrockStreamReader struct {
 	model    string
 	done     bool
 
+	// Finish reason from messageStop, held until metadata arrives
+	finishReason string
+
 	// Tool call state for streaming
 	pendingToolCalls map[int]*bedrockStreamToolCall
 }
@@ -615,13 +618,9 @@ func (s *bedrockStreamReader) Next() (*StreamChunk, error) {
 				StopReason string `json:"stopReason"`
 			}
 			_ = json.Unmarshal(data, &stop)
-			s.done = true
-			return &StreamChunk{
-				Done:         true,
-				FinishReason: NormalizeFinishReason(stop.StopReason),
-				Provider:     "bedrock",
-				Model:        s.model,
-			}, nil
+			// Don't return Done yet — metadata (with Usage) arrives after messageStop.
+			s.finishReason = NormalizeFinishReason(stop.StopReason)
+			continue
 		}
 
 		if data, ok := event["metadata"]; ok {
@@ -633,10 +632,12 @@ func (s *bedrockStreamReader) Next() (*StreamChunk, error) {
 				} `json:"usage"`
 			}
 			if err := json.Unmarshal(data, &meta); err == nil {
+				s.done = true
 				return &StreamChunk{
-					Type:     "metadata",
-					Provider: "bedrock",
-					Model:    s.model,
+					Done:         true,
+					FinishReason: s.finishReason,
+					Provider:     "bedrock",
+					Model:        s.model,
 					Usage: &Usage{
 						PromptTokens:     meta.Usage.InputTokens,
 						CompletionTokens: meta.Usage.OutputTokens,

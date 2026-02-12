@@ -251,7 +251,10 @@ func (c *Client) Responses(ctx context.Context, req *OpenAIResponsesRequest) (*R
 
 	c.debugResponse(resp, err, time.Since(start))
 
-	return resp, err
+	if err != nil {
+		return nil, WrapError(err, c.provider.Name())
+	}
+	return resp, nil
 }
 
 // ResponsesStream executes a streaming OpenAI Responses API request.
@@ -282,7 +285,7 @@ func (c *Client) ResponsesStream(ctx context.Context, req *OpenAIResponsesReques
 	stream, err := provider.ResponsesStream(ctx, &reqCopy)
 	if err != nil {
 		c.debugStreamError(err, time.Since(start))
-		return nil, err
+		return nil, WrapError(err, c.provider.Name())
 	}
 
 	c.debugStreamReady(time.Since(start))

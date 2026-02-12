@@ -203,18 +203,19 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 		ToolChoice:    req.ToolChoice,
 	}
 
-	thinking := normalizeThinking(req)
-	if thinking.Type != "enabled" && thinking.Type != "disabled" {
-		return nil, fmt.Errorf("anthropic: thinking type must be enabled or disabled")
-	}
-	if thinking.Type == "enabled" && thinking.BudgetTokens == nil {
-		defaultBudget := 1024
-		if maxTokens > 0 && maxTokens < defaultBudget {
-			defaultBudget = maxTokens
+	if thinking := normalizeThinking(req); thinking != nil {
+		if thinking.Type != "enabled" && thinking.Type != "disabled" {
+			return nil, fmt.Errorf("anthropic: thinking type must be enabled or disabled")
 		}
-		thinking.BudgetTokens = &defaultBudget
+		if thinking.Type == "enabled" && thinking.BudgetTokens == nil {
+			defaultBudget := 1024
+			if maxTokens > 0 && maxTokens < defaultBudget {
+				defaultBudget = maxTokens
+			}
+			thinking.BudgetTokens = &defaultBudget
+		}
+		anthropicReq.Thinking = thinking
 	}
-	anthropicReq.Thinking = thinking
 
 	if len(req.Tools) > 0 {
 		anthropicReq.Tools = make([]anthropicTool, 0, len(req.Tools))

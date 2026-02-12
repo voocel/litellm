@@ -153,8 +153,7 @@ func (p *QwenProvider) buildHTTPRequest(ctx context.Context, req *Request, strea
 		params["result_format"] = "message"
 	}
 	// Handle thinking/reasoning mode
-	thinking := normalizeThinking(req)
-	if thinking.Type == "enabled" {
+	if thinking := normalizeThinking(req); thinking != nil && thinking.Type == "enabled" {
 		params["enable_thinking"] = true
 	}
 

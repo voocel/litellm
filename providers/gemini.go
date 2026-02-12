@@ -69,10 +69,9 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 	}
 
 	thinking := normalizeThinking(req)
-	if thinking.Type != "enabled" && thinking.Type != "disabled" {
+	if thinking != nil && thinking.Type != "enabled" && thinking.Type != "disabled" {
 		return nil, fmt.Errorf("gemini: thinking type must be enabled or disabled")
 	}
-	includeThoughts := thinking.Type != "disabled"
 
 	// Set generation configuration
 	if req.Temperature != nil || req.MaxTokens != nil || req.ResponseFormat != nil || len(req.Stop) > 0 || thinking != nil {
@@ -80,11 +79,14 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 			Temperature:     req.Temperature,
 			MaxOutputTokens: req.MaxTokens,
 			StopSequences:   req.Stop, // Map Stop to stopSequences for Gemini
-			ThinkingConfig: &geminiThinkingConfig{
+		}
+		if thinking != nil {
+			includeThoughts := thinking.Type != "disabled"
+			geminiReq.GenerationConfig.ThinkingConfig = &geminiThinkingConfig{
 				ThinkingLevel:   thinking.Level,
 				IncludeThoughts: &includeThoughts,
 				ThinkingBudget:  thinking.BudgetTokens,
-			},
+			}
 		}
 
 		// Handle response format
@@ -319,21 +321,24 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	}
 
 	thinking := normalizeThinking(req)
-	if thinking.Type != "enabled" && thinking.Type != "disabled" {
+	if thinking != nil && thinking.Type != "enabled" && thinking.Type != "disabled" {
 		return nil, fmt.Errorf("gemini: thinking type must be enabled or disabled")
 	}
-	includeThoughts := thinking.Type != "disabled"
+	includeReasoning := !isThinkingDisabled(req)
 
 	if req.Temperature != nil || req.MaxTokens != nil || len(req.Stop) > 0 || thinking != nil {
 		geminiReq.GenerationConfig = &geminiGenerationConfig{
 			Temperature:     req.Temperature,
 			MaxOutputTokens: req.MaxTokens,
 			StopSequences:   req.Stop, // Map Stop to stopSequences for Gemini
-			ThinkingConfig: &geminiThinkingConfig{
+		}
+		if thinking != nil {
+			includeThoughts := thinking.Type != "disabled"
+			geminiReq.GenerationConfig.ThinkingConfig = &geminiThinkingConfig{
 				ThinkingLevel:   thinking.Level,
 				IncludeThoughts: &includeThoughts,
 				ThinkingBudget:  thinking.BudgetTokens,
-			},
+			}
 		}
 	}
 
@@ -393,7 +398,7 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		scanner:          newStreamScanner(resp.Body),
 		provider:         "gemini",
 		model:            req.Model,
-		includeReasoning: includeThoughts,
+		includeReasoning: includeReasoning,
 	}, nil
 }
 

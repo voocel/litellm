@@ -537,10 +537,11 @@ func (p *OpenRouterProvider) ensureStrictSchema(schema interface{}) interface{} 
 		}
 		return result
 	case []interface{}:
+		result := make([]interface{}, len(s))
 		for i, v := range s {
-			s[i] = p.ensureStrictSchema(v)
+			result[i] = p.ensureStrictSchema(v)
 		}
-		return s
+		return result
 	default:
 		return schema
 	}

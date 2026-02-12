@@ -215,11 +215,13 @@ func (p *DeepSeekProvider) buildHTTPRequest(ctx context.Context, req *Request, s
 		deepseekReq["stop"] = req.Stop
 	}
 	// Handle thinking parameter for deepseek-reasoner model
-	thinking := normalizeThinking(req)
-	if thinking.Type == "enabled" {
-		deepseekReq["thinking"] = map[string]string{"type": "enabled"}
-	} else if thinking.Type == "disabled" {
-		deepseekReq["thinking"] = map[string]string{"type": "disabled"}
+	if thinking := normalizeThinking(req); thinking != nil {
+		switch thinking.Type {
+		case "enabled":
+			deepseekReq["thinking"] = map[string]string{"type": "enabled"}
+		case "disabled":
+			deepseekReq["thinking"] = map[string]string{"type": "disabled"}
+		}
 	}
 	if len(req.Tools) > 0 {
 		deepseekReq["tools"] = ConvertTools(req.Tools)
@@ -390,8 +392,7 @@ func (r *deepseekStreamReader) Next() (*StreamChunk, error) {
 				r.done = true
 			}
 
-			// Only return chunk if it has content
-			if chunk.Type != "" {
+			if chunk.Type != "" || chunk.Done {
 				return chunk, nil
 			}
 		}

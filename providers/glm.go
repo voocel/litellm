@@ -188,11 +188,13 @@ func (p *GLMProvider) buildHTTPRequest(ctx context.Context, req *Request, stream
 	// Handle thinking/reasoning mode
 	// GLM thinking parameter supports: type (enabled/disabled), clear_thinking (boolean)
 	// Note: GLM does NOT support budget_tokens like Anthropic
-	thinking := normalizeThinking(req)
-	if thinking.Type == "enabled" {
-		glmReq["thinking"] = map[string]any{"type": "enabled"}
-	} else if thinking.Type == "disabled" {
-		glmReq["thinking"] = map[string]any{"type": "disabled"}
+	if thinking := normalizeThinking(req); thinking != nil {
+		switch thinking.Type {
+		case "enabled":
+			glmReq["thinking"] = map[string]any{"type": "enabled"}
+		case "disabled":
+			glmReq["thinking"] = map[string]any{"type": "disabled"}
+		}
 	}
 
 	body, err := json.Marshal(glmReq)
