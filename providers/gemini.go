@@ -227,7 +227,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 	}
 
 	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s",
-		p.Config().BaseURL, modelName, p.Config().APIKey)
+		p.Config().BaseURL, modelName, p.ResolveAPIKey(req))
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
@@ -372,7 +372,7 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	}
 
 	url := fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?alt=sse&key=%s",
-		p.Config().BaseURL, req.Model, p.Config().APIKey)
+		p.Config().BaseURL, req.Model, p.ResolveAPIKey(req))
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
@@ -412,7 +412,7 @@ func (p *GeminiProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	if baseURL == "" {
 		baseURL = "https://generativelanguage.googleapis.com"
 	}
-	url := fmt.Sprintf("%s/v1beta/models?key=%s", baseURL, p.Config().APIKey)
+	url := fmt.Sprintf("%s/v1beta/models?key=%s", baseURL, p.ResolveAPIKey(nil))
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("gemini: create models request: %w", err)

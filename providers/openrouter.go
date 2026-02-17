@@ -156,7 +156,7 @@ func (p *OpenRouterProvider) ListModels(ctx context.Context) ([]ModelInfo, error
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
+	httpReq.Header.Set("Authorization", "Bearer "+p.ResolveAPIKey(nil))
 	httpReq.Header.Set("HTTP-Referer", "https://github.com/voocel/litellm")
 	httpReq.Header.Set("X-Title", "litellm")
 
@@ -265,7 +265,7 @@ func (p *OpenRouterProvider) buildHTTPRequest(ctx context.Context, req *Request,
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
+	httpReq.Header.Set("Authorization", "Bearer "+p.ResolveAPIKey(req))
 	httpReq.Header.Set("HTTP-Referer", "https://github.com/voocel/litellm")
 	httpReq.Header.Set("X-Title", "litellm")
 	if stream {

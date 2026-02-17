@@ -107,6 +107,14 @@ func (p *BaseProvider) ResilienceConfig() ResilienceConfig {
 	return p.resilienceConfig
 }
 
+// ResolveAPIKey returns the per-request API key if set, otherwise the provider's default.
+func (p *BaseProvider) ResolveAPIKey(req *Request) string {
+	if req != nil && req.APIKey != "" {
+		return req.APIKey
+	}
+	return p.config.APIKey
+}
+
 func (p *BaseProvider) Validate() error {
 	if p.config.APIKey == "" {
 		return fmt.Errorf("%s: API key is required", p.name)

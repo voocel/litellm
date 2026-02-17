@@ -152,7 +152,7 @@ func (p *DeepSeekProvider) ListModels(ctx context.Context) ([]ModelInfo, error) 
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
+	httpReq.Header.Set("Authorization", "Bearer "+p.ResolveAPIKey(nil))
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -245,7 +245,7 @@ func (p *DeepSeekProvider) buildHTTPRequest(ctx context.Context, req *Request, s
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
+	httpReq.Header.Set("Authorization", "Bearer "+p.ResolveAPIKey(req))
 	if stream {
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}

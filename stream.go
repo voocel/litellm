@@ -30,10 +30,10 @@ func (a *ToolCallAccumulator) Apply(delta *ToolCallDelta) {
 		return
 	}
 
-	key := delta.ID
-	if key == "" {
-		key = fmt.Sprintf("index:%d", delta.Index)
-	}
+	// Always key by index so that start events (which carry ID/name)
+	// and subsequent delta events (which carry only arguments) merge
+	// into the same ToolCall entry.
+	key := fmt.Sprintf("index:%d", delta.Index)
 
 	tc := a.byKey[key]
 	if tc == nil {
@@ -51,6 +51,9 @@ func (a *ToolCallAccumulator) Apply(delta *ToolCallDelta) {
 		a.order = append(a.order, key)
 	}
 
+	if delta.ID != "" {
+		tc.ID = delta.ID
+	}
 	if delta.FunctionName != "" {
 		tc.Function.Name = delta.FunctionName
 	}
@@ -75,13 +78,8 @@ func (a *ToolCallAccumulator) Build() []ToolCall {
 
 // Started reports whether a delta with the given index has been received.
 func (a *ToolCallAccumulator) Started(index int) bool {
-	key := fmt.Sprintf("index:%d", index)
-	if _, ok := a.byKey[key]; ok {
-		return true
-	}
-	// Also check ID-keyed entries by scanning order
-	// (index-based key may not match if the delta had an ID)
-	return len(a.order) > index && index >= 0
+	_, ok := a.byKey[fmt.Sprintf("index:%d", index)]
+	return ok
 }
 
 // ---------------------------------------------------------------------------

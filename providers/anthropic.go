@@ -94,9 +94,14 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 				}
 			}
 		case "tool_use":
-			args, _ := json.Marshal(content.Input)
+			var args []byte
+			if content.Input != nil {
+				args, _ = json.Marshal(*content.Input)
+			} else {
+				args = []byte("{}")
+			}
 			response.ToolCalls = append(response.ToolCalls, ToolCall{
-				ID:   content.ToolUseID,
+				ID:   content.ID,
 				Type: "function",
 				Function: FunctionCall{
 					Name:      content.Name,
@@ -244,7 +249,7 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 		return nil, fmt.Errorf("anthropic: create request: %w", err)
 	}
 
-	p.setHeaders(httpReq)
+	p.setHeaders(httpReq, req)
 	return httpReq, nil
 }
 
@@ -295,14 +300,19 @@ func (p *AnthropicProvider) convertMessages(req *Request) (any, []anthropicMessa
 }
 
 func (p *AnthropicProvider) convertSingleMessage(msg Message, respFormat *ResponseFormat, isLast bool) anthropicMessage {
-	anthropicMsg := anthropicMessage{Role: msg.Role}
+	role := msg.Role
+	// Anthropic only allows "user" or "assistant". Map "tool" → "user".
+	if role == "tool" {
+		role = "user"
+	}
+	anthropicMsg := anthropicMessage{Role: role}
 
 	content := msg.Content
 	if respFormat != nil && isLast && msg.Role == "user" {
 		content = p.addStructuredOutputInstructions(content, respFormat)
 	}
 
-	if content != "" {
+	if content != "" && msg.ToolCallID == "" {
 		textContent := anthropicContent{Type: "text", Text: content}
 		if msg.CacheControl != nil {
 			textContent.CacheControl = &anthropicCacheControl{Type: msg.CacheControl.Type}
@@ -316,16 +326,16 @@ func (p *AnthropicProvider) convertSingleMessage(msg Message, respFormat *Respon
 			input = map[string]any{}
 		}
 		anthropicMsg.Content = append(anthropicMsg.Content, anthropicContent{
-			Type:      "tool_use",
-			ToolUseID: toolCall.ID,
-			Name:      toolCall.Function.Name,
-			Input:     input,
+			Type:  "tool_use",
+			ID:    toolCall.ID,
+			Name:  toolCall.Function.Name,
+			Input: &input,
 		})
 	}
 
 	if msg.ToolCallID != "" {
 		anthropicMsg.Content = []anthropicContent{
-			{Type: "tool_result", ToolUseID: msg.ToolCallID, Text: msg.Content},
+			{Type: "tool_result", ToolUseID: msg.ToolCallID, Content: msg.Content, IsError: msg.IsError},
 		}
 	}
 
@@ -340,18 +350,60 @@ func (p *AnthropicProvider) buildURL(endpoint string) string {
 	return baseURL + endpoint
 }
 
-func (p *AnthropicProvider) setHeaders(req *http.Request) {
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", p.Config().APIKey)
-	req.Header.Set("anthropic-version", "2023-06-01") // Latest stable version
-	// Add beta headers for prompt caching and extended thinking support
-	req.Header.Set("anthropic-beta", "prompt-caching-2024-07-31,extended-thinking-2025-01-01")
+func (p *AnthropicProvider) setHeaders(httpReq *http.Request, provReq *Request) {
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-api-key", p.ResolveAPIKey(provReq))
+	httpReq.Header.Set("anthropic-version", "2023-06-01") // Latest stable version
+
+	if betaHeader := resolveAnthropicBetaHeader(p.Config().Extra); betaHeader != "" {
+		httpReq.Header.Set("anthropic-beta", betaHeader)
+	}
 }
 
-func (p *AnthropicProvider) setModelHeaders(req *http.Request) {
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", p.Config().APIKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
+func (p *AnthropicProvider) setModelHeaders(httpReq *http.Request) {
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-api-key", p.ResolveAPIKey(nil))
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+}
+
+func resolveAnthropicBetaHeader(extra map[string]any) string {
+	if len(extra) == 0 {
+		return ""
+	}
+
+	raw, ok := extra["anthropic_beta"]
+	if !ok || raw == nil {
+		return ""
+	}
+
+	switch beta := raw.(type) {
+	case string:
+		return strings.TrimSpace(beta)
+	case []string:
+		values := make([]string, 0, len(beta))
+		for _, item := range beta {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				values = append(values, item)
+			}
+		}
+		return strings.Join(values, ",")
+	case []any:
+		values := make([]string, 0, len(beta))
+		for _, item := range beta {
+			s, ok := item.(string)
+			if !ok {
+				continue
+			}
+			s = strings.TrimSpace(s)
+			if s != "" {
+				values = append(values, s)
+			}
+		}
+		return strings.Join(values, ",")
+	default:
+		return ""
+	}
 }
 
 // addStructuredOutputInstructions adds JSON formatting instructions for structured output
@@ -585,9 +637,12 @@ type anthropicContent struct {
 	Text         string                 `json:"text,omitempty"`
 	Thinking     string                 `json:"thinking,omitempty"`  // For extended thinking
 	Signature    string                 `json:"signature,omitempty"` // For extended thinking
-	ToolUseID    string                 `json:"tool_use_id,omitempty"`
+	ID           string                 `json:"id,omitempty"`           // tool_use response: "id"
+	ToolUseID    string                 `json:"tool_use_id,omitempty"` // tool_result request: "tool_use_id"
 	Name         string                 `json:"name,omitempty"`
-	Input        map[string]any         `json:"input,omitempty"`
+	Input        *map[string]any        `json:"input,omitempty"`
+	Content      any                    `json:"content,omitempty"` // tool_result: string or []content
+	IsError      bool                   `json:"is_error,omitempty"`
 	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 

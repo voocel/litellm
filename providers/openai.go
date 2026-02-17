@@ -159,7 +159,7 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 		return nil, fmt.Errorf("openai: create request: %w", err)
 	}
 
-	p.setHeaders(httpReq)
+	p.setHeaders(httpReq, req)
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -301,7 +301,7 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		return nil, fmt.Errorf("openai: create request: %w", err)
 	}
 
-	p.setHeaders(httpReq)
+	p.setHeaders(httpReq, req)
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -337,7 +337,7 @@ func (p *OpenAIProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("openai: create models request: %w", err)
 	}
-	p.setHeaders(httpReq)
+	p.setHeaders(httpReq, nil)
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -380,9 +380,9 @@ func (p *OpenAIProvider) buildURL(endpoint string) string {
 	return baseURL + "/v1" + endpoint
 }
 
-func (p *OpenAIProvider) setHeaders(req *http.Request) {
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
+func (p *OpenAIProvider) setHeaders(httpReq *http.Request, provReq *Request) {
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.ResolveAPIKey(provReq))
 }
 
 // openaiStreamReader implements streaming for OpenAI

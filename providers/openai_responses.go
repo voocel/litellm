@@ -41,6 +41,9 @@ type OpenAIResponsesRequest struct {
 
 	// Unified thinking control (optional). If set, it maps to reasoning fields.
 	Thinking *ThinkingConfig `json:"thinking,omitempty"`
+
+	// APIKey overrides the provider-level API key for this single request.
+	APIKey string `json:"-"`
 }
 
 // responsesAPIRequest represents the request structure for OpenAI Responses API
@@ -370,7 +373,7 @@ func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Open
 		return nil, fmt.Errorf("openai: create responses request: %w", err)
 	}
 
-	p.setHeaders(httpReq)
+	p.setHeaders(httpReq, &Request{APIKey: req.APIKey})
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -550,7 +553,7 @@ func (p *OpenAIProvider) streamWithResponsesAPI(ctx context.Context, req *OpenAI
 		return nil, fmt.Errorf("openai: create responses request: %w", err)
 	}
 
-	p.setHeaders(httpReq)
+	p.setHeaders(httpReq, &Request{APIKey: req.APIKey})
 	// Ensure Accept header is set for SSE
 	httpReq.Header.Set("Accept", "text/event-stream")
 

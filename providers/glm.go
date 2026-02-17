@@ -209,7 +209,7 @@ func (p *GLMProvider) buildHTTPRequest(ctx context.Context, req *Request, stream
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.Config().APIKey)
+	httpReq.Header.Set("Authorization", "Bearer "+p.ResolveAPIKey(req))
 	if stream {
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}

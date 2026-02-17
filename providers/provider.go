@@ -10,6 +10,7 @@ type Message struct {
 	Contents     []MessageContent `json:"contents,omitempty"`
 	ToolCalls    []ToolCall       `json:"tool_calls,omitempty"`
 	ToolCallID   string           `json:"tool_call_id,omitempty"`
+	IsError      bool             `json:"is_error,omitempty"` // tool result error flag (Anthropic)
 	CacheControl *CacheControl    `json:"cache_control,omitempty"`
 }
 
@@ -82,7 +83,12 @@ type Request struct {
 	ToolChoice     any             `json:"tool_choice,omitempty"`
 	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
 	Stop           []string        `json:"stop,omitempty"`
-	Thinking       *ThinkingConfig `json:"thinking,omitempty"`
+	Thinking *ThinkingConfig `json:"thinking,omitempty"`
+
+	// APIKey overrides the provider-level API key for this single request.
+	// When empty, the provider's default key is used.
+	// Enables key rotation, OAuth short-lived tokens, and multi-tenant scenarios.
+	APIKey string `json:"-"`
 
 	// Provider-specific extensions
 	Extra map[string]any `json:"extra,omitempty"`
