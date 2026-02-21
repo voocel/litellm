@@ -44,7 +44,7 @@ func main() {
 
 	resp, err := client.Chat(context.Background(), &litellm.Request{
 		Model:    "gpt-4o-mini",
-		Messages: []litellm.Message{litellm.NewUserMessage("用一句话解释 AI。")},
+		Messages: []litellm.Message{litellm.UserMessage("用一句话解释 AI。")},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -87,7 +87,7 @@ func main() {
 
 	resp, err := client.Chat(context.Background(), &litellm.Request{
 		Model:      "gpt-4o-mini",
-		Messages:   []litellm.Message{litellm.NewUserMessage("东京天气怎么样？")},
+		Messages:   []litellm.Message{litellm.UserMessage("东京天气怎么样？")},
 		Tools:      tools,
 		ToolChoice: "auto",
 	})
@@ -122,7 +122,7 @@ func main() {
 
 	stream, err := client.Stream(context.Background(), &litellm.Request{
 		Model:    "gpt-4o-mini",
-		Messages: []litellm.Message{litellm.NewUserMessage("讲个笑话")},
+		Messages: []litellm.Message{litellm.UserMessage("讲个笑话")},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -268,7 +268,7 @@ _ = resp
 ```go
 resp, err := client.Chat(ctx, &litellm.Request{
 	Model:    "claude-haiku-4-5-20251001",
-	Messages: []litellm.Message{litellm.NewUserMessage("说一句笑话。")},
+	Messages: []litellm.Message{litellm.UserMessage("说一句笑话。")},
 	Thinking: litellm.NewThinkingEnabled(1024),
 })
 _ = resp
@@ -279,7 +279,7 @@ _ = resp
 ```go
 req := &litellm.Request{
 	Model:    "claude-haiku-4-5-20251001",
-	Messages: []litellm.Message{litellm.NewUserMessage("说一句笑话。")},
+	Messages: []litellm.Message{litellm.UserMessage("说一句笑话。")},
 	Thinking: litellm.NewThinkingDisabled(),
 }
 _ = req
@@ -320,7 +320,6 @@ _ = client
 
 支持的键：
 - Gemini：`tool_name`（string），用于 tool response 命名
-- GLM：`enable_thinking`（bool）或 `thinking`（包含 `type` 的对象）
 
 ### 费用计算
 

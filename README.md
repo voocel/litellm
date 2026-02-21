@@ -44,7 +44,7 @@ func main() {
 
 	resp, err := client.Chat(context.Background(), &litellm.Request{
 		Model:    "gpt-4o-mini",
-		Messages: []litellm.Message{litellm.NewUserMessage("Explain AI in one sentence.")},
+		Messages: []litellm.Message{litellm.UserMessage("Explain AI in one sentence.")},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -87,7 +87,7 @@ func main() {
 
 	resp, err := client.Chat(context.Background(), &litellm.Request{
 		Model:      "gpt-4o-mini",
-		Messages:   []litellm.Message{litellm.NewUserMessage("Weather in Tokyo?")},
+		Messages:   []litellm.Message{litellm.UserMessage("Weather in Tokyo?")},
 		Tools:      tools,
 		ToolChoice: "auto",
 	})
@@ -122,7 +122,7 @@ func main() {
 
 	stream, err := client.Stream(context.Background(), &litellm.Request{
 		Model:    "gpt-4o-mini",
-		Messages: []litellm.Message{litellm.NewUserMessage("Tell me a joke.")},
+		Messages: []litellm.Message{litellm.UserMessage("Tell me a joke.")},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -268,7 +268,7 @@ _ = resp
 ```go
 resp, err := client.Chat(ctx, &litellm.Request{
 	Model:    "claude-haiku-4-5-20251001",
-	Messages: []litellm.Message{litellm.NewUserMessage("Explain the tradeoffs.")},
+	Messages: []litellm.Message{litellm.UserMessage("Explain the tradeoffs.")},
 	Thinking: litellm.NewThinkingEnabled(1024),
 })
 _ = resp
@@ -279,7 +279,7 @@ To disable:
 ```go
 req := &litellm.Request{
 	Model:    "claude-haiku-4-5-20251001",
-	Messages: []litellm.Message{litellm.NewUserMessage("Explain the tradeoffs.")},
+	Messages: []litellm.Message{litellm.UserMessage("Explain the tradeoffs.")},
 	Thinking: litellm.NewThinkingDisabled(),
 }
 _ = req
@@ -320,7 +320,6 @@ _ = client
 
 Supported keys:
 - Gemini: `tool_name` (string) for tool response naming
-- GLM: `enable_thinking` (bool) or `thinking` (object with `type` string)
 
 ### Cost calculation
 

@@ -194,7 +194,7 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 		return nil, err
 	}
 
-	maxTokens := 65536
+	maxTokens := 64000
 	if req.MaxTokens != nil {
 		maxTokens = *req.MaxTokens
 	}
@@ -219,6 +219,9 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 			}
 			thinking.BudgetTokens = &defaultBudget
 		}
+		// Anthropic API accepts "type" and "budget_tokens" only.
+		// Drop generic level to avoid invalid_params errors on strict gateways.
+		thinking.Level = ""
 		anthropicReq.Thinking = thinking
 	}
 
@@ -635,9 +638,9 @@ type anthropicMessage struct {
 type anthropicContent struct {
 	Type         string                 `json:"type"`
 	Text         string                 `json:"text,omitempty"`
-	Thinking     string                 `json:"thinking,omitempty"`  // For extended thinking
-	Signature    string                 `json:"signature,omitempty"` // For extended thinking
-	ID           string                 `json:"id,omitempty"`           // tool_use response: "id"
+	Thinking     string                 `json:"thinking,omitempty"`    // For extended thinking
+	Signature    string                 `json:"signature,omitempty"`   // For extended thinking
+	ID           string                 `json:"id,omitempty"`          // tool_use response: "id"
 	ToolUseID    string                 `json:"tool_use_id,omitempty"` // tool_result request: "tool_use_id"
 	Name         string                 `json:"name,omitempty"`
 	Input        *map[string]any        `json:"input,omitempty"`
