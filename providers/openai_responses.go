@@ -44,6 +44,10 @@ type OpenAIResponsesRequest struct {
 
 	// APIKey overrides the provider-level API key for this single request.
 	APIKey string `json:"-"`
+
+	// OnPayload is called with the serialized JSON body before sending
+	// the HTTP request. Useful for debugging and logging API calls.
+	OnPayload func(provider string, payload []byte) `json:"-"`
 }
 
 // responsesAPIRequest represents the request structure for OpenAI Responses API
@@ -367,6 +371,10 @@ func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Open
 		return nil, fmt.Errorf("openai: marshal responses request: %w", err)
 	}
 
+	if req.OnPayload != nil {
+		req.OnPayload("openai", body)
+	}
+
 	// Use Responses API
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.buildURL("/responses"), bytes.NewReader(body))
 	if err != nil {
@@ -544,6 +552,10 @@ func (p *OpenAIProvider) streamWithResponsesAPI(ctx context.Context, req *OpenAI
 	body, err := json.Marshal(responsesReq)
 	if err != nil {
 		return nil, fmt.Errorf("openai: marshal responses request: %w", err)
+	}
+
+	if req.OnPayload != nil {
+		req.OnPayload("openai", body)
 	}
 
 	// Use Responses API with stream=true in request body
@@ -814,7 +826,7 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 				streamChunk.Type = "tool_call_delta"
 				streamChunk.ToolCallDelta.ArgumentsDelta = done.Arguments
 			} else {
-				streamChunk.Type = "tool_call_done"
+				streamChunk.Type = "tool_call_end"
 			}
 			streamChunk.ItemID = done.ItemID
 			streamChunk.OutputIndex = done.OutputIndex

@@ -194,6 +194,8 @@ func (p *BedrockProvider) Chat(ctx context.Context, req *Request) (*Response, er
 		return nil, fmt.Errorf("bedrock: marshal request: %w", err)
 	}
 
+	p.NotifyPayload(req, body)
+
 	url := fmt.Sprintf("%s/model/%s/converse", p.Config().BaseURL, req.Model)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
@@ -240,6 +242,8 @@ func (p *BedrockProvider) Stream(ctx context.Context, req *Request) (StreamReade
 	if err != nil {
 		return nil, fmt.Errorf("bedrock: marshal request: %w", err)
 	}
+
+	p.NotifyPayload(req, body)
 
 	url := fmt.Sprintf("%s/model/%s/converse-stream", p.Config().BaseURL, req.Model)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
@@ -801,19 +805,19 @@ func (s *bedrockStreamReader) handleContentBlockStop(data json.RawMessage) *Stre
 		return nil
 	}
 
-	// Finalize tool call
+	// Finalize tool call — do NOT include ArgumentsDelta here;
+	// arguments were already accumulated incrementally via contentBlockDelta events.
 	if tc, ok := s.pendingToolCalls[stop.ContentBlockIndex]; ok {
 		delete(s.pendingToolCalls, stop.ContentBlockIndex)
 		return &StreamChunk{
-			Type:     "tool_call_done",
+			Type:     "tool_call_end",
 			Provider: "bedrock",
 			Model:    s.model,
 			ToolCallDelta: &ToolCallDelta{
-				Index:          stop.ContentBlockIndex,
-				ID:             tc.ToolUseID,
-				Type:           "function",
-				FunctionName:   tc.Name,
-				ArgumentsDelta: tc.Input.String(),
+				Index:        stop.ContentBlockIndex,
+				ID:           tc.ToolUseID,
+				Type:         "function",
+				FunctionName: tc.Name,
 			},
 		}
 	}

@@ -14,8 +14,10 @@ const PricingURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model
 
 // ModelPricing contains pricing information for a model.
 type ModelPricing struct {
-	InputCostPerToken  float64 `json:"input_cost_per_token"`
-	OutputCostPerToken float64 `json:"output_cost_per_token"`
+	InputCostPerToken      float64 `json:"input_cost_per_token"`
+	OutputCostPerToken     float64 `json:"output_cost_per_token"`
+	CacheReadCostPerToken  float64 `json:"cache_read_input_token_cost,omitempty"`
+	CacheWriteCostPerToken float64 `json:"cache_creation_input_token_cost,omitempty"`
 }
 
 // ModelCapabilities contains capability and limit metadata for a model.
@@ -30,24 +32,28 @@ type ModelCapabilities struct {
 
 // CostResult contains the calculated cost for a request.
 type CostResult struct {
-	InputCost  float64 `json:"input_cost"`
-	OutputCost float64 `json:"output_cost"`
-	TotalCost  float64 `json:"total_cost"`
-	Currency   string  `json:"currency"`
+	InputCost     float64 `json:"input_cost"`
+	OutputCost    float64 `json:"output_cost"`
+	CacheReadCost float64 `json:"cache_read_cost,omitempty"`
+	CacheWriteCost float64 `json:"cache_write_cost,omitempty"`
+	TotalCost     float64 `json:"total_cost"`
+	Currency      string  `json:"currency"`
 }
 
 // modelEntry is the full internal record parsed from the registry JSON.
 type modelEntry struct {
-	inputCostPerToken  float64
-	outputCostPerToken float64
-	hasInputPricing    bool
-	hasOutputPricing   bool
-	provider           string
-	maxInputTokens     int
-	maxOutputTokens    int
-	supportsTools      bool
-	supportsVision     bool
-	supportsReasoning  bool
+	inputCostPerToken      float64
+	outputCostPerToken     float64
+	cacheReadCostPerToken  float64
+	cacheWriteCostPerToken float64
+	hasInputPricing        bool
+	hasOutputPricing       bool
+	provider               string
+	maxInputTokens         int
+	maxOutputTokens        int
+	supportsTools          bool
+	supportsVision         bool
+	supportsReasoning      bool
 }
 
 var (
@@ -91,14 +97,16 @@ func LoadPricingFromReader(r io.Reader) error {
 		}
 
 		var parsed struct {
-			InputCostPerToken  *float64 `json:"input_cost_per_token"`
-			OutputCostPerToken *float64 `json:"output_cost_per_token"`
-			Provider           string   `json:"litellm_provider"`
-			MaxInputTokens     int      `json:"max_input_tokens"`
-			MaxOutputTokens    int      `json:"max_output_tokens"`
-			SupportsTools      bool     `json:"supports_function_calling"`
-			SupportsVision     bool     `json:"supports_vision"`
-			SupportsReasoning  bool     `json:"supports_reasoning"`
+			InputCostPerToken      *float64 `json:"input_cost_per_token"`
+			OutputCostPerToken     *float64 `json:"output_cost_per_token"`
+			CacheReadCostPerToken  *float64 `json:"cache_read_input_token_cost"`
+			CacheWriteCostPerToken *float64 `json:"cache_creation_input_token_cost"`
+			Provider               string   `json:"litellm_provider"`
+			MaxInputTokens         int      `json:"max_input_tokens"`
+			MaxOutputTokens        int      `json:"max_output_tokens"`
+			SupportsTools          bool     `json:"supports_function_calling"`
+			SupportsVision         bool     `json:"supports_vision"`
+			SupportsReasoning      bool     `json:"supports_reasoning"`
 		}
 		if err := json.Unmarshal(rawData, &parsed); err != nil {
 			continue
@@ -119,6 +127,12 @@ func LoadPricingFromReader(r io.Reader) error {
 		if parsed.OutputCostPerToken != nil {
 			entry.outputCostPerToken = *parsed.OutputCostPerToken
 			entry.hasOutputPricing = true
+		}
+		if parsed.CacheReadCostPerToken != nil {
+			entry.cacheReadCostPerToken = *parsed.CacheReadCostPerToken
+		}
+		if parsed.CacheWriteCostPerToken != nil {
+			entry.cacheWriteCostPerToken = *parsed.CacheWriteCostPerToken
 		}
 		data[model] = entry
 	}
@@ -147,8 +161,10 @@ func GetModelPricing(model string) (*ModelPricing, bool) {
 		return nil, false
 	}
 	return &ModelPricing{
-		InputCostPerToken:  entry.inputCostPerToken,
-		OutputCostPerToken: entry.outputCostPerToken,
+		InputCostPerToken:      entry.inputCostPerToken,
+		OutputCostPerToken:     entry.outputCostPerToken,
+		CacheReadCostPerToken:  entry.cacheReadCostPerToken,
+		CacheWriteCostPerToken: entry.cacheWriteCostPerToken,
 	}, true
 }
 
@@ -181,6 +197,8 @@ func SetModelPricing(model string, pricing ModelPricing) {
 	entry := registryData[model]
 	entry.inputCostPerToken = pricing.InputCostPerToken
 	entry.outputCostPerToken = pricing.OutputCostPerToken
+	entry.cacheReadCostPerToken = pricing.CacheReadCostPerToken
+	entry.cacheWriteCostPerToken = pricing.CacheWriteCostPerToken
 	entry.hasInputPricing = true
 	entry.hasOutputPricing = true
 	registryData[model] = entry
@@ -204,11 +222,25 @@ func CalculateCost(model string, usage Usage) (*CostResult, error) {
 	inputCost := float64(usage.PromptTokens) * pricing.InputCostPerToken
 	outputCost := float64(usage.CompletionTokens) * pricing.OutputCostPerToken
 
+	// Cache costs: use dedicated rates when available, fall back to input rate
+	cacheReadRate := pricing.CacheReadCostPerToken
+	if cacheReadRate == 0 {
+		cacheReadRate = pricing.InputCostPerToken
+	}
+	cacheWriteRate := pricing.CacheWriteCostPerToken
+	if cacheWriteRate == 0 {
+		cacheWriteRate = pricing.InputCostPerToken
+	}
+	cacheReadCost := float64(usage.CacheReadInputTokens) * cacheReadRate
+	cacheWriteCost := float64(usage.CacheCreationInputTokens) * cacheWriteRate
+
 	return &CostResult{
-		InputCost:  inputCost,
-		OutputCost: outputCost,
-		TotalCost:  inputCost + outputCost,
-		Currency:   "USD",
+		InputCost:      inputCost,
+		OutputCost:     outputCost,
+		CacheReadCost:  cacheReadCost,
+		CacheWriteCost: cacheWriteCost,
+		TotalCost:      inputCost + outputCost + cacheReadCost + cacheWriteCost,
+		Currency:       "USD",
 	}, nil
 }
 

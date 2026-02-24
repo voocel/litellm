@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -108,8 +109,11 @@ func (c *ResilientHTTPClient) Do(req *http.Request) (*http.Response, error) {
 			break
 		}
 
-		// Calculate delay with exponential backoff
-		delay := c.calculateDelay(attempt)
+		// Prefer server-provided Retry-After over exponential backoff
+		delay := parseRetryAfter(resp)
+		if delay == 0 {
+			delay = c.calculateDelay(attempt)
+		}
 
 		// Wait with context cancellation support
 		timer := time.NewTimer(delay)
@@ -191,4 +195,28 @@ func isRetryableStatusCode(statusCode int) bool {
 	default:
 		return false
 	}
+}
+
+// parseRetryAfter extracts the retry delay from a Retry-After response header.
+// Supports both delta-seconds ("120") and HTTP-date formats (RFC 7231 §7.1.3).
+// Returns 0 if the response is nil, the header is absent, or the value is unparseable.
+func parseRetryAfter(resp *http.Response) time.Duration {
+	if resp == nil {
+		return 0
+	}
+	val := resp.Header.Get("Retry-After")
+	if val == "" {
+		return 0
+	}
+	// Delta-seconds (most common for API rate limits)
+	if seconds, err := strconv.Atoi(val); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	// HTTP-date fallback
+	if t, err := http.ParseTime(val); err == nil {
+		if delay := time.Until(t); delay > 0 {
+			return delay
+		}
+	}
+	return 0
 }

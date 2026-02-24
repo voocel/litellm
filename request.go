@@ -51,6 +51,16 @@ const (
 	ChunkTypeReasoning     = "reasoning"
 )
 
+// Lifecycle event types — bracket start/end of each content block during streaming.
+const (
+	ChunkTypeContentStart   = "content_start"
+	ChunkTypeContentEnd     = "content_end"
+	ChunkTypeReasoningStart = "reasoning_start"
+	ChunkTypeReasoningEnd   = "reasoning_end"
+	ChunkTypeToolCallStart  = "tool_call_start"
+	ChunkTypeToolCallEnd    = "tool_call_end"
+)
+
 // ResponseFormat type constants.
 const (
 	ResponseFormatText       = "text"
@@ -252,6 +262,29 @@ func WithExtras(extras map[string]any) RequestOption {
 			r.Extra[k] = v
 		}
 	}
+}
+
+// WithOnPayload sets a debug hook that receives the serialized JSON body
+// before each HTTP request is sent to the provider.
+func WithOnPayload(fn func(provider string, payload []byte)) RequestOption {
+	return func(r *Request) {
+		r.OnPayload = fn
+	}
+}
+
+// WithCacheRetention configures automatic prompt caching placement.
+// Supported values:
+//   - "none":  disable auto-caching
+//   - "short": ephemeral cache (~5 min, Anthropic default)
+//   - "long":  extended cache retention where supported
+//
+// When enabled, cache breakpoints are automatically placed on system messages
+// and the last user message. User-provided CacheControl on individual messages
+// takes precedence and is not overwritten.
+//
+// Currently supported by: Anthropic.
+func WithCacheRetention(retention string) RequestOption {
+	return WithExtra("cache_retention", retention)
 }
 
 // MultiContentMessage creates a message with multiple content items (text, images, etc).

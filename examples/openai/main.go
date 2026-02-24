@@ -5,20 +5,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 
 	"github.com/voocel/litellm"
 )
 
 func main() {
-	apiKey := os.Getenv("OPENAI_API_KEY")
+	apiKey := "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"
 	if apiKey == "" {
 		log.Fatal("OPENAI_API_KEY environment variable is required")
 	}
 
 	client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
 		APIKey:  apiKey,
-		BaseURL: os.Getenv("OPENAI_BASE_URL"),
+		BaseURL: "https://integrate.api.nvidia.com/v1",
 	})
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
@@ -31,6 +30,7 @@ func main() {
 	fmt.Println("\n1. Basic Chat Example")
 	fmt.Println("---------------------")
 	basicChat(client)
+	return
 
 	// Example 2: Streaming Chat
 	fmt.Println("\n2. Streaming Chat Example")
@@ -85,7 +85,7 @@ func responsesAPI(client *litellm.Client) {
 
 // Example 1: Basic Chat
 func basicChat(client *litellm.Client) {
-	request := litellm.NewRequest("gpt-4o-mini", "Who are you?",
+	request := litellm.NewRequest("qwen/qwen3.5-397b-a17b", "Who are you?",
 		litellm.WithMaxTokens(500),
 		litellm.WithTemperature(0.7),
 	)
@@ -97,6 +97,9 @@ func basicChat(client *litellm.Client) {
 		return
 	}
 
+	if response.Reasoning != nil {
+		fmt.Printf("Reasoning Summary: %s\n", response.Reasoning.Summary)
+	}
 	fmt.Printf("Response: %s\n", response.Content)
 	fmt.Printf("Usage: %d prompt + %d completion = %d total tokens\n",
 		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.TotalTokens)

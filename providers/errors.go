@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -13,15 +14,16 @@ import (
 type ErrorType string
 
 const (
-	ErrorTypeAuth       ErrorType = "auth"       // Auth/authorization errors
-	ErrorTypeRateLimit  ErrorType = "rate_limit" // Rate limit errors
-	ErrorTypeNetwork    ErrorType = "network"    // Network connectivity errors
-	ErrorTypeValidation ErrorType = "validation" // Request validation errors
-	ErrorTypeProvider   ErrorType = "provider"   // Upstream provider errors
-	ErrorTypeTimeout    ErrorType = "timeout"    // Timeout errors
-	ErrorTypeQuota      ErrorType = "quota"      // Quota/billing errors
-	ErrorTypeModel      ErrorType = "model"      // Model not found/unsupported errors
-	ErrorTypeInternal   ErrorType = "internal"   // Internal library errors
+	ErrorTypeAuth            ErrorType = "auth"             // Auth/authorization errors
+	ErrorTypeRateLimit       ErrorType = "rate_limit"       // Rate limit errors
+	ErrorTypeNetwork         ErrorType = "network"          // Network connectivity errors
+	ErrorTypeValidation      ErrorType = "validation"       // Request validation errors
+	ErrorTypeProvider        ErrorType = "provider"         // Upstream provider errors
+	ErrorTypeTimeout         ErrorType = "timeout"          // Timeout errors
+	ErrorTypeQuota           ErrorType = "quota"            // Quota/billing errors
+	ErrorTypeModel           ErrorType = "model"            // Model not found/unsupported errors
+	ErrorTypeInternal        ErrorType = "internal"         // Internal library errors
+	ErrorTypeContextOverflow ErrorType = "context_overflow" // Input exceeds model's context window
 )
 
 // LiteLLMError is a structured error with categorization and retry hints.
@@ -89,6 +91,11 @@ func NewProviderError(provider string, errorType ErrorType, message string) *Lit
 
 func NewHTTPError(provider string, statusCode int, message string) *LiteLLMError {
 	errorType := classifyHTTPError(statusCode)
+	// Refine: check if a 400/413 is actually a context overflow
+	if (statusCode == http.StatusBadRequest || statusCode == http.StatusRequestEntityTooLarge) &&
+		isContextOverflowMessage(message) {
+		errorType = ErrorTypeContextOverflow
+	}
 	return &LiteLLMError{
 		Type:       errorType,
 		Provider:   provider,
@@ -202,6 +209,41 @@ func IsValidationError(err error) bool {
 func IsModelError(err error) bool {
 	var e *LiteLLMError
 	return errors.As(err, &e) && e.Type == ErrorTypeModel
+}
+
+// IsContextOverflowError reports whether the error indicates the input
+// exceeded the model's context window.  Callers can use this to decide
+// whether to truncate messages and retry.
+func IsContextOverflowError(err error) bool {
+	var e *LiteLLMError
+	return errors.As(err, &e) && e.Type == ErrorTypeContextOverflow
+}
+
+// contextOverflowPatterns matches provider-specific error messages that indicate
+// the request exceeded the model's context window.
+// Patterns cover: Anthropic, OpenAI, Google, xAI, Groq, OpenRouter, llama.cpp,
+// LM Studio, GitHub Copilot, MiniMax, Kimi, Bedrock, and generic fallbacks.
+var contextOverflowPatterns = regexp.MustCompile(
+	`(?i)` +
+		`prompt is too long` + // Anthropic
+		`|input is too long for requested model` + // Amazon Bedrock
+		`|exceeds the context window` + // OpenAI
+		`|input token count.*exceeds the maximum` + // Google Gemini
+		`|maximum prompt length is \d+` + // xAI (Grok)
+		`|reduce the length of the messages` + // Groq
+		`|maximum context length is \d+ tokens` + // OpenRouter
+		`|exceeds the limit of \d+` + // GitHub Copilot
+		`|exceeds the available context size` + // llama.cpp
+		`|greater than the context length` + // LM Studio
+		`|context window exceeds limit` + // MiniMax
+		`|exceeded model token limit` + // Kimi
+		`|context[_ ]length[_ ]exceeded` + // Generic
+		`|too many tokens` + // Generic
+		`|token limit exceeded`, // Generic
+)
+
+func isContextOverflowMessage(message string) bool {
+	return contextOverflowPatterns.MatchString(message)
 }
 
 func IsRetryableError(err error) bool {

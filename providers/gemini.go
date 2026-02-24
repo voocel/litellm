@@ -226,6 +226,8 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 		return nil, fmt.Errorf("gemini: marshal request: %w", err)
 	}
 
+	p.NotifyPayload(req, body)
+
 	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s",
 		p.Config().BaseURL, modelName, p.ResolveAPIKey(req))
 
@@ -370,6 +372,8 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	if err != nil {
 		return nil, fmt.Errorf("gemini: marshal request: %w", err)
 	}
+
+	p.NotifyPayload(req, body)
 
 	url := fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?alt=sse&key=%s",
 		p.Config().BaseURL, req.Model, p.ResolveAPIKey(req))

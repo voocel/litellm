@@ -82,6 +82,23 @@ func (a *ToolCallAccumulator) Started(index int) bool {
 	return ok
 }
 
+// Get returns the accumulated ToolCall for the given index, or nil if not found.
+func (a *ToolCallAccumulator) Get(index int) *ToolCall {
+	return a.byKey[fmt.Sprintf("index:%d", index)]
+}
+
+// PartialArguments returns a best-effort parse of the accumulated (possibly incomplete)
+// function arguments for the tool call at the given index.
+// Useful for streaming UIs that want to display arguments as they arrive.
+// Returns nil if the index has no accumulated data.
+func (a *ToolCallAccumulator) PartialArguments(index int) any {
+	tc := a.Get(index)
+	if tc == nil || tc.Function.Arguments == "" {
+		return nil
+	}
+	return ParsePartialJSON(tc.Function.Arguments)
+}
+
 // ---------------------------------------------------------------------------
 // StreamCallbacks & CollectStream
 // ---------------------------------------------------------------------------
@@ -92,6 +109,15 @@ type StreamCallbacks struct {
 	OnContent   func(string)
 	OnReasoning func(*ReasoningChunk)
 	OnToolCall  func(*ToolCallDelta)
+
+	// Lifecycle callbacks — bracket start/end of each content block.
+	// Transitions are detected automatically from chunk types.
+	OnContentStart   func()
+	OnContentEnd     func(content string)     // content = full accumulated block
+	OnReasoningStart func()
+	OnReasoningEnd   func(content string)     // content = full accumulated reasoning
+	OnToolCallStart  func(delta *ToolCallDelta) // carries ID and FunctionName
+	OnToolCallEnd    func(call ToolCall)        // carries complete ToolCall
 }
 
 // CollectStream consumes a StreamReader and returns a unified Response.
@@ -103,7 +129,10 @@ func CollectStream(stream StreamReader) (*Response, error) {
 // CollectStreamWithCallbacks consumes a StreamReader, calls callbacks for each chunk, and returns a unified Response.
 // Callers are responsible for closing the stream.
 func CollectStreamWithCallbacks(stream StreamReader, callbacks StreamCallbacks) (*Response, error) {
+	lc := newLifecycleTracker(&callbacks)
 	return CollectStreamWithHandler(stream, func(chunk *StreamChunk) {
+		lc.process(chunk)
+
 		if callbacks.OnChunk != nil {
 			callbacks.OnChunk(chunk)
 		}
@@ -258,4 +287,131 @@ func CollectStreamWithHandler(stream StreamReader, onChunk func(*StreamChunk)) (
 	resp.ToolCalls = toolAcc.Build()
 
 	return &resp, nil
+}
+
+// ---------------------------------------------------------------------------
+// lifecycleTracker — emits start/end callbacks for content block transitions
+// ---------------------------------------------------------------------------
+
+type lifecycleTracker struct {
+	cb          *StreamCallbacks
+	active      string // "", "content", "reasoning"
+	contentAcc  strings.Builder
+	reasonAcc   strings.Builder
+	toolStarted map[int]bool
+	toolAcc     *ToolCallAccumulator
+	closed      bool
+}
+
+func newLifecycleTracker(cb *StreamCallbacks) *lifecycleTracker {
+	return &lifecycleTracker{
+		cb:          cb,
+		toolStarted: make(map[int]bool),
+		toolAcc:     NewToolCallAccumulator(),
+	}
+}
+
+func (t *lifecycleTracker) hasCallbacks() bool {
+	cb := t.cb
+	return cb.OnContentStart != nil || cb.OnContentEnd != nil ||
+		cb.OnReasoningStart != nil || cb.OnReasoningEnd != nil ||
+		cb.OnToolCallStart != nil || cb.OnToolCallEnd != nil
+}
+
+func (t *lifecycleTracker) process(chunk *StreamChunk) {
+	if !t.hasCallbacks() {
+		return
+	}
+
+	switch chunk.Type {
+	case ChunkTypeContent:
+		if t.active != "content" {
+			t.closeActive()
+			t.active = "content"
+			if t.cb.OnContentStart != nil {
+				t.cb.OnContentStart()
+			}
+		}
+		t.contentAcc.WriteString(chunk.Content)
+
+	case ChunkTypeReasoning:
+		if t.active != "reasoning" {
+			t.closeActive()
+			t.active = "reasoning"
+			if t.cb.OnReasoningStart != nil {
+				t.cb.OnReasoningStart()
+			}
+		}
+		if chunk.Reasoning != nil {
+			t.reasonAcc.WriteString(chunk.Reasoning.Content)
+		}
+
+	case ChunkTypeToolCallDelta, ChunkTypeToolCallStart:
+		if chunk.ToolCallDelta != nil {
+			idx := chunk.ToolCallDelta.Index
+			t.toolAcc.Apply(chunk.ToolCallDelta)
+			if !t.toolStarted[idx] {
+				if len(t.toolStarted) == 0 {
+					t.closeActive()
+				}
+				t.toolStarted[idx] = true
+				if t.cb.OnToolCallStart != nil {
+					t.cb.OnToolCallStart(chunk.ToolCallDelta)
+				}
+			}
+		}
+
+	case ChunkTypeToolCallEnd, "tool_call_done":
+		if chunk.ToolCallDelta != nil {
+			idx := chunk.ToolCallDelta.Index
+			t.toolAcc.Apply(chunk.ToolCallDelta)
+			if t.cb.OnToolCallEnd != nil {
+				if tc := t.toolAcc.Get(idx); tc != nil {
+					t.cb.OnToolCallEnd(*tc)
+				}
+			}
+			delete(t.toolStarted, idx)
+		}
+
+	case "reasoning_done":
+		// OpenAI Responses API signals reasoning complete explicitly.
+		if t.active == "reasoning" {
+			t.closeActive()
+		}
+	}
+
+	if chunk.Done || chunk.FinishReason != "" {
+		t.finish()
+	}
+}
+
+func (t *lifecycleTracker) closeActive() {
+	switch t.active {
+	case "content":
+		if t.cb.OnContentEnd != nil {
+			t.cb.OnContentEnd(t.contentAcc.String())
+		}
+		t.contentAcc.Reset()
+	case "reasoning":
+		if t.cb.OnReasoningEnd != nil {
+			t.cb.OnReasoningEnd(t.reasonAcc.String())
+		}
+		t.reasonAcc.Reset()
+	}
+	t.active = ""
+}
+
+func (t *lifecycleTracker) finish() {
+	if t.closed {
+		return
+	}
+	t.closed = true
+	t.closeActive()
+	if t.cb.OnToolCallEnd != nil {
+		for idx := range t.toolStarted {
+			if tc := t.toolAcc.Get(idx); tc != nil {
+				t.cb.OnToolCallEnd(*tc)
+			}
+		}
+	}
 }

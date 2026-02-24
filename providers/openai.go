@@ -154,6 +154,8 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 		return nil, fmt.Errorf("openai: marshal request: %w", err)
 	}
 
+	p.NotifyPayload(req, body)
+
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.buildURL("/chat/completions"), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("openai: create request: %w", err)
@@ -295,6 +297,8 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	if err != nil {
 		return nil, fmt.Errorf("openai: marshal request: %w", err)
 	}
+
+	p.NotifyPayload(req, body)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.buildURL("/chat/completions"), bytes.NewReader(body))
 	if err != nil {

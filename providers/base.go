@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -107,6 +108,13 @@ func (p *BaseProvider) ResilienceConfig() ResilienceConfig {
 	return p.resilienceConfig
 }
 
+// NotifyPayload calls the request's OnPayload hook if set.
+func (p *BaseProvider) NotifyPayload(req *Request, payload []byte) {
+	if req != nil && req.OnPayload != nil {
+		req.OnPayload(p.name, payload)
+	}
+}
+
 // ResolveAPIKey returns the per-request API key if set, otherwise the provider's default.
 func (p *BaseProvider) ResolveAPIKey(req *Request) string {
 	if req != nil && req.APIKey != "" {
@@ -166,6 +174,45 @@ func (p *BaseProvider) ValidateRequest(req *Request) error {
 		return fmt.Errorf("%s: max_tokens must be positive, got %d", p.name, *req.MaxTokens)
 	}
 
+	// Validate image formats in multi-content messages
+	for _, msg := range req.Messages {
+		for _, c := range msg.Contents {
+			if c.Type == "image_url" && c.ImageURL != nil {
+				if err := validateImageFormat(c.ImageURL.URL); err != nil {
+					return fmt.Errorf("%s: %w", p.name, err)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// supportedImageMIME lists MIME types accepted by major providers.
+var supportedImageMIME = map[string]bool{
+	"image/jpeg": true,
+	"image/png":  true,
+	"image/gif":  true,
+	"image/webp": true,
+}
+
+// validateImageFormat checks that a data-URI image uses a supported MIME type.
+// Regular URLs are not validated (the provider will check them).
+func validateImageFormat(url string) error {
+	// Only validate data URIs where we can inspect the MIME type
+	if !strings.HasPrefix(url, "data:") {
+		return nil
+	}
+	// Format: data:<mime>;base64,...
+	rest := url[5:]
+	semi := strings.IndexByte(rest, ';')
+	if semi < 0 {
+		return nil
+	}
+	mime := strings.ToLower(rest[:semi])
+	if !supportedImageMIME[mime] {
+		return fmt.Errorf("unsupported image format %q, must be jpeg, png, gif, or webp", mime)
+	}
 	return nil
 }
 

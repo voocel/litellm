@@ -5,19 +5,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 
 	"github.com/voocel/litellm"
 )
 
 func main() {
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	apiKey := "sk-ss-v1-2cb3346b29bddf905d0aa965e28cd42c56c82c5cb523b528944a0a5a2b936754"
 	if apiKey == "" {
 		log.Fatal("ANTHROPIC_API_KEY environment variable is required")
 	}
 
 	client, err := litellm.NewWithProvider("anthropic", litellm.ProviderConfig{
-		APIKey: apiKey,
+		APIKey:  apiKey,
+		BaseURL: "https://zenmux.ai/api/anthropic",
 	})
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
@@ -55,7 +55,7 @@ func main() {
 // Example 1: Basic Chat
 func basicChat(client *litellm.Client) {
 	request := &litellm.Request{
-		Model: "claude-haiku-4-5-20251001",
+		Model: "anthropic/claude-sonnet-4.5",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",

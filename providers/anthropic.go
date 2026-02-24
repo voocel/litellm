@@ -187,7 +187,7 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	if err := p.BaseProvider.ValidateExtra(req.Extra, nil); err != nil {
+	if err := p.BaseProvider.ValidateExtra(req.Extra, []string{"cache_retention"}); err != nil {
 		return nil, err
 	}
 	if err := p.BaseProvider.ValidateRequest(req); err != nil {
@@ -213,11 +213,16 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 			return nil, fmt.Errorf("anthropic: thinking type must be enabled or disabled")
 		}
 		if thinking.Type == "enabled" && thinking.BudgetTokens == nil {
-			defaultBudget := 1024
-			if maxTokens > 0 && maxTokens < defaultBudget {
-				defaultBudget = maxTokens
+			// Resolve from Level (e.g., "medium" → 8192) or fall back to default
+			if resolved := ResolveBudgetTokens(thinking); resolved != nil {
+				thinking.BudgetTokens = resolved
+			} else {
+				defaultBudget := 1024
+				if maxTokens > 0 && maxTokens < defaultBudget {
+					defaultBudget = maxTokens
+				}
+				thinking.BudgetTokens = &defaultBudget
 			}
-			thinking.BudgetTokens = &defaultBudget
 		}
 		// Anthropic API accepts "type" and "budget_tokens" only.
 		// Drop generic level to avoid invalid_params errors on strict gateways.
@@ -247,6 +252,8 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
 	}
 
+	p.NotifyPayload(req, body)
+
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.buildURL("/v1/messages"), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: create request: %w", err)
@@ -272,6 +279,8 @@ func (p *AnthropicProvider) convertToolParameters(tool Tool) (map[string]any, er
 }
 
 func (p *AnthropicProvider) convertMessages(req *Request) (any, []anthropicMessage) {
+	autoCache := resolveCacheRetention(req)
+
 	var systemContents []anthropicContent
 	var nonSystemMessages []Message
 
@@ -280,6 +289,8 @@ func (p *AnthropicProvider) convertMessages(req *Request) (any, []anthropicMessa
 			systemContent := anthropicContent{Type: "text", Text: msg.Content}
 			if msg.CacheControl != nil {
 				systemContent.CacheControl = &anthropicCacheControl{Type: msg.CacheControl.Type}
+			} else if autoCache != nil {
+				systemContent.CacheControl = autoCache
 			}
 			systemContents = append(systemContents, systemContent)
 		} else {
@@ -294,10 +305,41 @@ func (p *AnthropicProvider) convertMessages(req *Request) (any, []anthropicMessa
 		system = systemContents
 	}
 
-	messages := make([]anthropicMessage, len(nonSystemMessages))
-	for i, msg := range nonSystemMessages {
-		messages[i] = p.convertSingleMessage(msg, req.ResponseFormat, i == len(nonSystemMessages)-1)
+	messages := make([]anthropicMessage, 0, len(nonSystemMessages))
+	for i := 0; i < len(nonSystemMessages); i++ {
+		msg := nonSystemMessages[i]
+		isLast := i == len(nonSystemMessages)-1
+
+		// Batch consecutive tool result messages into a single user message
+		if msg.Role == "tool" {
+			var contents []anthropicContent
+			for i < len(nonSystemMessages) && nonSystemMessages[i].Role == "tool" {
+				m := nonSystemMessages[i]
+				contents = append(contents, anthropicContent{
+					Type:     "tool_result",
+					ToolUseID: m.ToolCallID,
+					Content:  m.Content,
+					IsError:  m.IsError,
+				})
+				i++
+			}
+			i-- // compensate for outer loop increment
+			messages = append(messages, anthropicMessage{Role: "user", Content: contents})
+			continue
+		}
+
+		messages = append(messages, p.convertSingleMessage(msg, req.ResponseFormat, isLast))
 	}
+
+	// Auto-place cache_control on the last user message's last content block
+	if autoCache != nil {
+		applyCacheToLastUserMessage(messages, autoCache)
+	}
+
+	// Anthropic requires strictly alternating user/assistant roles.
+	// Merge consecutive same-role messages (e.g. tool_result "user" followed
+	// by a text "user") by concatenating their content arrays.
+	messages = mergeConsecutiveRoles(messages)
 
 	return system, messages
 }
@@ -343,6 +385,36 @@ func (p *AnthropicProvider) convertSingleMessage(msg Message, respFormat *Respon
 	}
 
 	return anthropicMsg
+}
+
+// resolveCacheRetention returns the auto-cache control to apply, or nil if disabled.
+// Reads from req.Extra["cache_retention"]: "none" | "short" (default) | "long".
+func resolveCacheRetention(req *Request) *anthropicCacheControl {
+	retention := "short" // default: enable with ephemeral cache
+	if v, ok := req.Extra["cache_retention"].(string); ok {
+		retention = v
+	}
+	switch strings.ToLower(retention) {
+	case "none":
+		return nil
+	default:
+		return &anthropicCacheControl{Type: "ephemeral"}
+	}
+}
+
+// applyCacheToLastUserMessage adds cache_control to the last content block of
+// the last user message, enabling prompt caching for the conversation prefix.
+// Skips if the block already has cache_control set.
+func applyCacheToLastUserMessage(messages []anthropicMessage, cc *anthropicCacheControl) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" && len(messages[i].Content) > 0 {
+			last := &messages[i].Content[len(messages[i].Content)-1]
+			if last.CacheControl == nil {
+				last.CacheControl = cc
+			}
+			return
+		}
+	}
 }
 
 func (p *AnthropicProvider) buildURL(endpoint string) string {
@@ -633,6 +705,27 @@ type anthropicRequest struct {
 type anthropicMessage struct {
 	Role    string             `json:"role"`
 	Content []anthropicContent `json:"content"`
+}
+
+// mergeConsecutiveRoles merges adjacent messages with the same role by
+// concatenating their content arrays. This ensures the strict alternating
+// user/assistant requirement of the Anthropic API is satisfied, even when
+// tool results (mapped to "user") are immediately followed by a user text.
+func mergeConsecutiveRoles(msgs []anthropicMessage) []anthropicMessage {
+	if len(msgs) <= 1 {
+		return msgs
+	}
+	merged := make([]anthropicMessage, 0, len(msgs))
+	merged = append(merged, msgs[0])
+	for i := 1; i < len(msgs); i++ {
+		last := &merged[len(merged)-1]
+		if msgs[i].Role == last.Role {
+			last.Content = append(last.Content, msgs[i].Content...)
+		} else {
+			merged = append(merged, msgs[i])
+		}
+	}
+	return merged
 }
 
 type anthropicContent struct {

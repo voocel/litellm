@@ -7,15 +7,16 @@ type ErrorType = providers.ErrorType
 type LiteLLMError = providers.LiteLLMError
 
 const (
-	ErrorTypeAuth       ErrorType = providers.ErrorTypeAuth
-	ErrorTypeRateLimit  ErrorType = providers.ErrorTypeRateLimit
-	ErrorTypeNetwork    ErrorType = providers.ErrorTypeNetwork
-	ErrorTypeValidation ErrorType = providers.ErrorTypeValidation
-	ErrorTypeProvider   ErrorType = providers.ErrorTypeProvider
-	ErrorTypeTimeout    ErrorType = providers.ErrorTypeTimeout
-	ErrorTypeQuota      ErrorType = providers.ErrorTypeQuota
-	ErrorTypeModel      ErrorType = providers.ErrorTypeModel
-	ErrorTypeInternal   ErrorType = providers.ErrorTypeInternal
+	ErrorTypeAuth            ErrorType = providers.ErrorTypeAuth
+	ErrorTypeRateLimit       ErrorType = providers.ErrorTypeRateLimit
+	ErrorTypeNetwork         ErrorType = providers.ErrorTypeNetwork
+	ErrorTypeValidation      ErrorType = providers.ErrorTypeValidation
+	ErrorTypeProvider        ErrorType = providers.ErrorTypeProvider
+	ErrorTypeTimeout         ErrorType = providers.ErrorTypeTimeout
+	ErrorTypeQuota           ErrorType = providers.ErrorTypeQuota
+	ErrorTypeModel           ErrorType = providers.ErrorTypeModel
+	ErrorTypeInternal        ErrorType = providers.ErrorTypeInternal
+	ErrorTypeContextOverflow ErrorType = providers.ErrorTypeContextOverflow
 )
 
 func NewError(errorType ErrorType, message string) *LiteLLMError {
@@ -58,13 +59,14 @@ func NewTimeoutError(provider, message string) *LiteLLMError {
 	return providers.NewTimeoutError(provider, message)
 }
 
-func IsAuthError(err error) bool       { return providers.IsAuthError(err) }
-func IsRateLimitError(err error) bool  { return providers.IsRateLimitError(err) }
-func IsNetworkError(err error) bool    { return providers.IsNetworkError(err) }
-func IsValidationError(err error) bool { return providers.IsValidationError(err) }
-func IsModelError(err error) bool      { return providers.IsModelError(err) }
-func IsRetryableError(err error) bool  { return providers.IsRetryableError(err) }
-func GetRetryAfter(err error) int      { return providers.GetRetryAfter(err) }
+func IsAuthError(err error) bool            { return providers.IsAuthError(err) }
+func IsRateLimitError(err error) bool       { return providers.IsRateLimitError(err) }
+func IsNetworkError(err error) bool         { return providers.IsNetworkError(err) }
+func IsValidationError(err error) bool      { return providers.IsValidationError(err) }
+func IsModelError(err error) bool           { return providers.IsModelError(err) }
+func IsContextOverflowError(err error) bool { return providers.IsContextOverflowError(err) }
+func IsRetryableError(err error) bool       { return providers.IsRetryableError(err) }
+func GetRetryAfter(err error) int           { return providers.GetRetryAfter(err) }
 
 func WrapError(err error, provider string) error {
 	return providers.WrapError(err, provider)
