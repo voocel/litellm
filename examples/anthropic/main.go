@@ -5,19 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/voocel/litellm"
 )
 
 func main() {
-	apiKey := "sk-ss-v1-2cb3346b29bddf905d0aa965e28cd42c56c82c5cb523b528944a0a5a2b936754"
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
 		log.Fatal("ANTHROPIC_API_KEY environment variable is required")
 	}
 
 	client, err := litellm.NewWithProvider("anthropic", litellm.ProviderConfig{
 		APIKey:  apiKey,
-		BaseURL: "https://zenmux.ai/api/anthropic",
+		BaseURL: os.Getenv("ANTHROPIC_BASE_URL"),
 	})
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)

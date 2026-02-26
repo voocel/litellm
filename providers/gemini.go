@@ -134,7 +134,30 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 			Parts: []geminiPart{},
 		}
 
-		if msg.Content != "" {
+		// Multi-content (text + images): prefer Contents over Content.
+		if len(msg.Contents) > 0 && msg.ToolCallID == "" {
+			for _, c := range msg.Contents {
+				switch c.Type {
+				case "text", "", "input_text":
+					if c.Text != "" {
+						content.Parts = append(content.Parts, geminiPart{Text: c.Text})
+					}
+				case "image_url", "input_image":
+					if c.ImageURL == nil || c.ImageURL.URL == "" {
+						continue
+					}
+					if mime, data, ok := parseDataURL(c.ImageURL.URL); ok {
+						content.Parts = append(content.Parts, geminiPart{
+							InlineData: &geminiInlineData{MimeType: mime, Data: data},
+						})
+					} else {
+						content.Parts = append(content.Parts, geminiPart{
+							FileData: &geminiFileData{MimeType: inferMimeType(c.ImageURL.URL), FileURI: c.ImageURL.URL},
+						})
+					}
+				}
+			}
+		} else if msg.Content != "" {
 			content.Parts = append(content.Parts, geminiPart{Text: msg.Content})
 		}
 
@@ -344,7 +367,7 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		}
 	}
 
-	// Handle messages (simplified version for streaming)
+	// Handle messages for streaming
 	var systemMessage string
 	for _, msg := range req.Messages {
 		if msg.Role == "system" {
@@ -352,12 +375,38 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 			continue
 		}
 
-		if msg.Content != "" {
-			content := geminiContent{
-				Role:  p.convertRole(msg.Role),
-				Parts: []geminiPart{{Text: msg.Content}},
-			}
+		content := geminiContent{
+			Role:  p.convertRole(msg.Role),
+			Parts: []geminiPart{},
+		}
 
+		if len(msg.Contents) > 0 && msg.ToolCallID == "" {
+			for _, c := range msg.Contents {
+				switch c.Type {
+				case "text", "", "input_text":
+					if c.Text != "" {
+						content.Parts = append(content.Parts, geminiPart{Text: c.Text})
+					}
+				case "image_url", "input_image":
+					if c.ImageURL == nil || c.ImageURL.URL == "" {
+						continue
+					}
+					if mime, data, ok := parseDataURL(c.ImageURL.URL); ok {
+						content.Parts = append(content.Parts, geminiPart{
+							InlineData: &geminiInlineData{MimeType: mime, Data: data},
+						})
+					} else {
+						content.Parts = append(content.Parts, geminiPart{
+							FileData: &geminiFileData{MimeType: inferMimeType(c.ImageURL.URL), FileURI: c.ImageURL.URL},
+						})
+					}
+				}
+			}
+		} else if msg.Content != "" {
+			content.Parts = append(content.Parts, geminiPart{Text: msg.Content})
+		}
+
+		if len(content.Parts) > 0 {
 			geminiReq.Contents = append(geminiReq.Contents, content)
 		}
 	}
@@ -731,8 +780,20 @@ type geminiContent struct {
 type geminiPart struct {
 	Text             string                  `json:"text,omitempty"`
 	Thought          *bool                   `json:"thought,omitempty"`
+	InlineData       *geminiInlineData       `json:"inlineData,omitempty"`
+	FileData         *geminiFileData         `json:"fileData,omitempty"`
 	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
+}
+
+type geminiInlineData struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"`
+}
+
+type geminiFileData struct {
+	MimeType string `json:"mimeType"`
+	FileURI  string `json:"fileUri"`
 }
 
 type geminiFunctionCall struct {

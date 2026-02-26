@@ -357,7 +357,45 @@ func (p *AnthropicProvider) convertSingleMessage(msg Message, respFormat *Respon
 		content = p.addStructuredOutputInstructions(content, respFormat)
 	}
 
-	if content != "" && msg.ToolCallID == "" {
+	// Multi-content (text + images): prefer Contents over Content for non-tool messages.
+	if len(msg.Contents) > 0 && msg.ToolCallID == "" {
+		var cc *anthropicCacheControl
+		if msg.CacheControl != nil {
+			cc = &anthropicCacheControl{Type: msg.CacheControl.Type}
+		}
+		for i, c := range msg.Contents {
+			switch c.Type {
+			case "text", "", "input_text":
+				if c.Text != "" {
+					tc := anthropicContent{Type: "text", Text: c.Text}
+					if cc != nil && i == len(msg.Contents)-1 {
+						tc.CacheControl = cc
+					}
+					anthropicMsg.Content = append(anthropicMsg.Content, tc)
+				}
+			case "image_url", "input_image":
+				if c.ImageURL == nil || c.ImageURL.URL == "" {
+					continue
+				}
+				var ic anthropicContent
+				if mime, data, ok := parseDataURL(c.ImageURL.URL); ok {
+					ic = anthropicContent{
+						Type:   "image",
+						Source: &anthropicImageSource{Type: "base64", MediaType: mime, Data: data},
+					}
+				} else {
+					ic = anthropicContent{
+						Type:   "image",
+						Source: &anthropicImageSource{Type: "url", URL: c.ImageURL.URL},
+					}
+				}
+				if cc != nil && i == len(msg.Contents)-1 {
+					ic.CacheControl = cc
+				}
+				anthropicMsg.Content = append(anthropicMsg.Content, ic)
+			}
+		}
+	} else if content != "" && msg.ToolCallID == "" {
 		textContent := anthropicContent{Type: "text", Text: content}
 		if msg.CacheControl != nil {
 			textContent.CacheControl = &anthropicCacheControl{Type: msg.CacheControl.Type}
@@ -731,6 +769,7 @@ func mergeConsecutiveRoles(msgs []anthropicMessage) []anthropicMessage {
 type anthropicContent struct {
 	Type         string                 `json:"type"`
 	Text         string                 `json:"text,omitempty"`
+	Source       *anthropicImageSource  `json:"source,omitempty"`      // image content
 	Thinking     string                 `json:"thinking,omitempty"`    // For extended thinking
 	Signature    string                 `json:"signature,omitempty"`   // For extended thinking
 	ID           string                 `json:"id,omitempty"`          // tool_use response: "id"
@@ -740,6 +779,13 @@ type anthropicContent struct {
 	Content      any                    `json:"content,omitempty"` // tool_result: string or []content
 	IsError      bool                   `json:"is_error,omitempty"`
 	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+}
+
+type anthropicImageSource struct {
+	Type      string `json:"type"`                 // "base64" or "url"
+	MediaType string `json:"media_type,omitempty"` // e.g. "image/jpeg"
+	Data      string `json:"data,omitempty"`       // base64-encoded data
+	URL       string `json:"url,omitempty"`         // image URL
 }
 
 // anthropicCacheControl represents Anthropic's cache control structure

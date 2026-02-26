@@ -362,6 +362,28 @@ func (p *BedrockProvider) buildRequest(req *Request) *bedrockRequest {
 					Content:   []bedrockContent{{Text: msg.Content}},
 				},
 			})
+		} else if len(msg.Contents) > 0 && msg.ToolCallID == "" {
+			for _, c := range msg.Contents {
+				switch c.Type {
+				case "text", "", "input_text":
+					if c.Text != "" {
+						bedrockMsg.Content = append(bedrockMsg.Content, bedrockContent{Text: c.Text})
+					}
+				case "image_url", "input_image":
+					if c.ImageURL == nil || c.ImageURL.URL == "" {
+						continue
+					}
+					if mime, data, ok := parseDataURL(c.ImageURL.URL); ok {
+						format := strings.TrimPrefix(mime, "image/")
+						bedrockMsg.Content = append(bedrockMsg.Content, bedrockContent{
+							Image: &bedrockImageContent{
+								Format: format,
+								Source: bedrockImageSource{Bytes: data},
+							},
+						})
+					}
+				}
+			}
 		} else if msg.Content != "" {
 			bedrockMsg.Content = append(bedrockMsg.Content, bedrockContent{Text: msg.Content})
 		}

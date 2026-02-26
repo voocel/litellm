@@ -323,6 +323,52 @@ func flushOrphanedToolCalls(result []Message, pending []ToolCall, existing map[s
 	return result
 }
 
+// parseDataURL extracts MIME type and base64 data from a data URL.
+// Example: "data:image/jpeg;base64,/9j/..." → ("image/jpeg", "/9j/...", true)
+func parseDataURL(url string) (mimeType, data string, ok bool) {
+	rest, found := strings.CutPrefix(url, "data:")
+	if !found {
+		return "", "", false
+	}
+	semi := strings.IndexByte(rest, ';')
+	if semi < 0 {
+		return "", "", false
+	}
+	mimeType = rest[:semi]
+	if data, ok = strings.CutPrefix(rest[semi+1:], "base64,"); ok {
+		return mimeType, data, true
+	}
+	return "", "", false
+}
+
+// inferMimeType guesses the MIME type from a URL's file extension.
+// Returns empty string if the type cannot be determined.
+func inferMimeType(url string) string {
+	// Strip query string and fragment.
+	if i := strings.IndexAny(url, "?#"); i >= 0 {
+		url = url[:i]
+	}
+	url = strings.ToLower(url)
+	switch {
+	case strings.HasSuffix(url, ".jpg"), strings.HasSuffix(url, ".jpeg"):
+		return "image/jpeg"
+	case strings.HasSuffix(url, ".png"):
+		return "image/png"
+	case strings.HasSuffix(url, ".gif"):
+		return "image/gif"
+	case strings.HasSuffix(url, ".webp"):
+		return "image/webp"
+	case strings.HasSuffix(url, ".heic"):
+		return "image/heic"
+	case strings.HasSuffix(url, ".heif"):
+		return "image/heif"
+	case strings.HasSuffix(url, ".bmp"):
+		return "image/bmp"
+	default:
+		return ""
+	}
+}
+
 // sanitizeMessage removes invalid UTF-8 sequences (including surrogate codepoints
 // U+D800-DFFF) from message content fields. Invalid bytes in user input can cause
 // json.Marshal to produce malformed JSON that API providers reject.
