@@ -612,6 +612,7 @@ type geminiStreamReader struct {
 	pending          string
 	queue            []geminiStreamResponse
 	usage            *Usage // Accumulate usage from streaming response
+	toolCallIndex    int    // incrementing index for parallel tool calls
 }
 
 func (r *geminiStreamReader) Next() (*StreamChunk, error) {
@@ -721,11 +722,13 @@ func (r *geminiStreamReader) processResponse(streamResp geminiStreamResponse) (*
 				streamChunk.Type = "tool_call_delta"
 				args, _ := json.Marshal(part.FunctionCall.Args)
 				streamChunk.ToolCallDelta = &ToolCallDelta{
+					Index:          r.toolCallIndex,
 					ID:             fmt.Sprintf("call_%d", time.Now().UnixNano()),
 					Type:           "function",
 					FunctionName:   part.FunctionCall.Name,
 					ArgumentsDelta: string(args),
 				}
+				r.toolCallIndex++
 				return streamChunk, nil
 			}
 		}
