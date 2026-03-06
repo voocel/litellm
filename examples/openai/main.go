@@ -5,19 +5,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/voocel/litellm"
 )
 
 func main() {
-	apiKey := "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"
+	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		log.Fatal("OPENAI_API_KEY environment variable is required")
 	}
 
 	client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
-		APIKey:  apiKey,
-		BaseURL: "https://integrate.api.nvidia.com/v1",
+		APIKey: apiKey,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
@@ -29,13 +29,13 @@ func main() {
 	//Example 1: Basic Chat
 	fmt.Println("\n1. Basic Chat Example")
 	fmt.Println("---------------------")
-	basicChat(client)
-	return
+	//basicChat(client)
 
 	// Example 2: Streaming Chat
 	fmt.Println("\n2. Streaming Chat Example")
 	fmt.Println("-------------------------")
 	streamingChat(client)
+	return
 
 	// Example 3: Function/Tool Calling
 	fmt.Println("\n3. Function/Tool Calling Example")
@@ -85,7 +85,7 @@ func responsesAPI(client *litellm.Client) {
 
 // Example 1: Basic Chat
 func basicChat(client *litellm.Client) {
-	request := litellm.NewRequest("qwen/qwen3.5-397b-a17b", "Who are you?",
+	request := litellm.NewRequest("moonshotai/kimi-k2.5", "Who are you?",
 		litellm.WithMaxTokens(500),
 		litellm.WithTemperature(0.7),
 	)
@@ -115,12 +115,12 @@ func basicChat(client *litellm.Client) {
 // Example 2: Streaming Chat with Reasoning Models (gpt-5, o1, o3, o4)
 func streamingChat(client *litellm.Client) {
 	request := &litellm.OpenAIResponsesRequest{
-		Model: "gpt-5-nano",
+		Model: "gpt-5.4",
 		Messages: []litellm.Message{
-			{Role: "user", Content: "hi"},
+			{Role: "user", Content: "你是什么模型 数据截止时间"},
 		},
-		MaxOutputTokens: litellm.IntPtr(2200),
-		//ReasoningSummary: "auto", // Uncomment after org verification
+		MaxOutputTokens:  litellm.IntPtr(2200),
+		ReasoningSummary: "auto", // Uncomment after org verification
 	}
 
 	stream, err := client.ResponsesStream(context.Background(), request)
