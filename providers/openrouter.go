@@ -11,12 +11,25 @@ func NewOpenRouter(config ProviderConfig) *OpenAICompatProvider {
 	return NewOpenAICompat(config, Compat{
 		ProviderName:              "openrouter",
 		DefaultBaseURL:            "https://openrouter.ai/api/v1",
-		IncludeStreamUsage:        true,
 		ModelFromResponse:         true,
 		ContentAsInterface:        true,
 		ReasoningField:            "reasoning",
 		HasCompletionTokenDetails: true,
 		SupportsJSONSchema:        true,
+		// OpenRouter uses {"reasoning": {"effort": ..., "max_tokens": ...}}.
+		ThinkingMapper: func(thinking *ThinkingConfig, _ string) map[string]any {
+			if thinking.Type != "enabled" {
+				return nil
+			}
+			reasoning := map[string]any{}
+			if thinking.Level != "" {
+				reasoning["effort"] = thinking.Level
+			}
+			if budget := ResolveBudgetTokens(thinking); budget != nil {
+				reasoning["max_tokens"] = *budget
+			}
+			return map[string]any{"reasoning": reasoning}
+		},
 		ExtraHeaders: map[string]string{
 			"HTTP-Referer": "https://github.com/voocel/litellm",
 			"X-Title":      "litellm",

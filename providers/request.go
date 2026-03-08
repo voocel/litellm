@@ -143,8 +143,13 @@ func ResolveBudgetTokens(thinking *ThinkingConfig) *int {
 }
 
 func normalizeThinking(req *Request) *ThinkingConfig {
-	if req == nil || req.Thinking == nil {
+	if req == nil {
 		return nil
+	}
+
+	// Default to enabled when not explicitly configured.
+	if req.Thinking == nil {
+		return &ThinkingConfig{Type: "enabled"}
 	}
 
 	thinkingType := strings.TrimSpace(req.Thinking.Type)

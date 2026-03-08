@@ -41,9 +41,6 @@ type Compat struct {
 	// MaxTokensField overrides the JSON key for max tokens.  Default: "max_tokens".
 	MaxTokensField string
 
-	// IncludeStreamUsage sends stream_options.include_usage when streaming.
-	IncludeStreamUsage bool
-
 	// MaxStopSequences limits stop sequences sent.  0 = unlimited.
 	MaxStopSequences int
 
@@ -391,9 +388,7 @@ func (p *OpenAICompatProvider) buildRequestBody(req *Request, stream bool) ([]by
 	// Stream
 	if stream {
 		body["stream"] = true
-		if c.IncludeStreamUsage {
-			body["stream_options"] = map[string]any{"include_usage": true}
-		}
+		body["stream_options"] = map[string]any{"include_usage": true}
 	}
 
 	// Token limit

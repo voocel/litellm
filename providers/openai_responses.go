@@ -645,12 +645,29 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 
 		data := strings.TrimPrefix(line, "data: ")
 
+		// Fallback: when no "event:" prefix line is present (some proxies embed
+		// the event type only in the JSON "type" field), extract it from data.
+		if currentEvent == "" {
+			var peek struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal([]byte(data), &peek) == nil && peek.Type != "" {
+				currentEvent = peek.Type
+			}
+		}
+
+		// Consume and reset so it doesn't carry over to the next data line.
+		// Standard SSE will re-set it via the next "event:" prefix;
+		// fallback mode will re-parse from JSON.
+		event := currentEvent
+		currentEvent = ""
+
 		streamChunk := &StreamChunk{
 			Provider: r.provider,
 			Model:    r.model,
 		}
 
-		switch currentEvent {
+		switch event {
 		// === Content Events ===
 		case "response.output_text.delta":
 			var delta struct {

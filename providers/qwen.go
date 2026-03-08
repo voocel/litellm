@@ -12,7 +12,6 @@ func NewQwen(config ProviderConfig) *OpenAICompatProvider {
 		ProviderName:              "qwen",
 		DefaultBaseURL:            "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		ModelFromResponse:         true,
-		IncludeStreamUsage:        true,
 		HasCompletionTokenDetails: true,
 		ThinkingMapper: func(thinking *ThinkingConfig, model string) map[string]any {
 			if thinking == nil || thinking.Type != "enabled" {

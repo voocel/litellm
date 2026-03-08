@@ -11,9 +11,16 @@ func NewGrok(config ProviderConfig) *OpenAICompatProvider {
 	return NewOpenAICompat(config, Compat{
 		ProviderName:              "grok",
 		DefaultBaseURL:            "https://api.x.ai/v1",
-		IncludeStreamUsage:        true,
 		ModelFromResponse:         true,
 		HasCompletionTokenDetails: true,
 		SupportsJSONSchema:        true,
+		// Grok uses top-level reasoning_effort ("low"/"medium"/"high").
+		// Only sent when Level is explicitly set; models default to their own behavior.
+		ThinkingMapper: func(thinking *ThinkingConfig, _ string) map[string]any {
+			if thinking.Type != "enabled" || thinking.Level == "" {
+				return nil
+			}
+			return map[string]any{"reasoning_effort": thinking.Level}
+		},
 	})
 }

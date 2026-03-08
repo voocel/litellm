@@ -11,7 +11,6 @@ func NewDeepSeek(config ProviderConfig) *OpenAICompatProvider {
 	return NewOpenAICompat(config, Compat{
 		ProviderName:              "deepseek",
 		DefaultBaseURL:            "https://api.deepseek.com",
-		IncludeStreamUsage:        true,
 		ModelFromResponse:         true,
 		HasCompletionTokenDetails: true,
 		HasCacheTokens:            true,
