@@ -118,10 +118,10 @@ func (r *compatStreamReader) Next() (*StreamChunk, error) {
 				if r.includeReasoning && r.compat.shouldExtractReasoning(r.model) {
 					if reasoning, _ := r.compat.findReasoning(delta); reasoning != "" {
 						pending = append(pending, &StreamChunk{
-							Provider:  r.compat.ProviderName,
-							Model:     r.model,
-							Type:      "reasoning",
-							Reasoning: &ReasoningChunk{Content: reasoning},
+							Provider:         r.compat.ProviderName,
+							Model:            r.model,
+							Type:             "reasoning",
+							ReasoningContent: reasoning,
 						})
 					}
 				}

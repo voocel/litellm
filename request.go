@@ -20,14 +20,12 @@ type (
 	OpenAIResponsesRequest = providers.OpenAIResponsesRequest
 	ThinkingConfig         = providers.ThinkingConfig
 
-	Request       = providers.Request
-	Response      = providers.Response
-	Usage         = providers.Usage
-	ReasoningData = providers.ReasoningData
+	Request  = providers.Request
+	Response = providers.Response
+	Usage    = providers.Usage
 
-	StreamChunk    = providers.StreamChunk
-	ReasoningChunk = providers.ReasoningChunk
-	StreamReader   = providers.StreamReader
+	StreamChunk  = providers.StreamChunk
+	StreamReader = providers.StreamReader
 
 	Provider       = providers.Provider
 	ProviderConfig = providers.ProviderConfig

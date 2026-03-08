@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -145,6 +146,20 @@ func LoadPricingFromReader(r io.Reader) error {
 	return nil
 }
 
+// lookupModel tries exact match first, then strips "provider/" prefix as fallback.
+// Must be called with registryMu held.
+func lookupModel(model string) (modelEntry, bool) {
+	if entry, ok := registryData[model]; ok {
+		return entry, true
+	}
+	if _, after, ok := strings.Cut(model, "/"); ok {
+		if entry, found := registryData[after]; found {
+			return entry, true
+		}
+	}
+	return modelEntry{}, false
+}
+
 // GetModelPricing returns the pricing for a model.
 func GetModelPricing(model string) (*ModelPricing, bool) {
 	registryMu.RLock()
@@ -153,7 +168,7 @@ func GetModelPricing(model string) (*ModelPricing, bool) {
 	if !registryLoaded {
 		return nil, false
 	}
-	entry, ok := registryData[model]
+	entry, ok := lookupModel(model)
 	if !ok {
 		return nil, false
 	}
@@ -176,7 +191,7 @@ func GetModelCapabilities(model string) (*ModelCapabilities, bool) {
 	if !registryLoaded {
 		return nil, false
 	}
-	entry, ok := registryData[model]
+	entry, ok := lookupModel(model)
 	if !ok {
 		return nil, false
 	}

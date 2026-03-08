@@ -107,7 +107,7 @@ func (a *ToolCallAccumulator) PartialArguments(index int) any {
 type StreamCallbacks struct {
 	OnChunk     func(*StreamChunk)
 	OnContent   func(string)
-	OnReasoning func(*ReasoningChunk)
+	OnReasoning func(content string)
 	OnToolCall  func(*ToolCallDelta)
 
 	// Lifecycle callbacks — bracket start/end of each content block.
@@ -139,8 +139,8 @@ func CollectStreamWithCallbacks(stream StreamReader, callbacks StreamCallbacks) 
 		if callbacks.OnContent != nil && chunk.Type == ChunkTypeContent && chunk.Content != "" {
 			callbacks.OnContent(chunk.Content)
 		}
-		if callbacks.OnReasoning != nil && chunk.Reasoning != nil {
-			callbacks.OnReasoning(chunk.Reasoning)
+		if callbacks.OnReasoning != nil && chunk.ReasoningContent != "" {
+			callbacks.OnReasoning(chunk.ReasoningContent)
 		}
 		if callbacks.OnToolCall != nil && chunk.ToolCallDelta != nil {
 			callbacks.OnToolCall(chunk.ToolCallDelta)
@@ -160,7 +160,6 @@ func CollectStreamWithHandler(stream StreamReader, onChunk func(*StreamChunk)) (
 		refusalBuilder       strings.Builder
 		contentByOutputIndex = map[int]*strings.Builder{}
 		refusalByOutputIndex = map[int]*strings.Builder{}
-		reasoningSummary     strings.Builder
 		reasoningContent     strings.Builder
 		toolAcc              = NewToolCallAccumulator()
 		resp                 Response
@@ -216,19 +215,11 @@ func CollectStreamWithHandler(stream StreamReader, onChunk func(*StreamChunk)) (
 			}
 		}
 
-		if chunk.Reasoning != nil {
-			if chunk.Reasoning.Summary != "" {
-				if reasoningSummary.Len() > 0 {
-					reasoningSummary.WriteString("\n")
-				}
-				reasoningSummary.WriteString(chunk.Reasoning.Summary)
+		if chunk.ReasoningContent != "" {
+			if reasoningContent.Len() > 0 {
+				reasoningContent.WriteString("\n")
 			}
-			if chunk.Reasoning.Content != "" {
-				if reasoningContent.Len() > 0 {
-					reasoningContent.WriteString("\n")
-				}
-				reasoningContent.WriteString(chunk.Reasoning.Content)
-			}
+			reasoningContent.WriteString(chunk.ReasoningContent)
 		}
 
 		if chunk.ToolCallDelta != nil {
@@ -277,11 +268,8 @@ func CollectStreamWithHandler(stream StreamReader, onChunk func(*StreamChunk)) (
 		resp.Content = refusalBuilder.String()
 	}
 
-	if reasoningSummary.Len() > 0 || reasoningContent.Len() > 0 {
-		resp.Reasoning = &ReasoningData{
-			Summary: reasoningSummary.String(),
-			Content: reasoningContent.String(),
-		}
+	if reasoningContent.Len() > 0 {
+		resp.ReasoningContent = reasoningContent.String()
 	}
 
 	resp.ToolCalls = toolAcc.Build()
@@ -342,9 +330,7 @@ func (t *lifecycleTracker) process(chunk *StreamChunk) {
 				t.cb.OnReasoningStart()
 			}
 		}
-		if chunk.Reasoning != nil {
-			t.reasonAcc.WriteString(chunk.Reasoning.Content)
-		}
+		t.reasonAcc.WriteString(chunk.ReasoningContent)
 
 	case ChunkTypeToolCallDelta, ChunkTypeToolCallStart:
 		if chunk.ToolCallDelta != nil {

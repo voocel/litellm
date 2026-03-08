@@ -63,8 +63,8 @@ func basicChat(client *litellm.Client) {
 	}
 
 	// Display reasoning if available
-	if response.Reasoning != nil && response.Reasoning.Content != "" {
-		fmt.Printf("Reasoning Process:\n%s\n", response.Reasoning.Content)
+	if response.ReasoningContent != "" {
+		fmt.Printf("Reasoning Process:\n%s\n", response.ReasoningContent)
 		fmt.Println("---")
 	}
 
@@ -168,10 +168,10 @@ func streamingChat(client *litellm.Client) {
 				fmt.Print(text)
 			}
 		},
-		OnReasoning: func(r *litellm.ReasoningChunk) {
-			if r.Content != "" {
+		OnReasoning: func(content string) {
+			if content != "" {
 				printPrefix("[think]: ", &thinkingPrinted)
-				fmt.Print(r.Content)
+				fmt.Print(content)
 			}
 		},
 	})

@@ -399,7 +399,7 @@ func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Open
 		return nil, fmt.Errorf("openai: decode responses response: %w", err)
 	}
 
-	responseContent, responseContents, toolCalls, reasoningData := p.extractResponsesOutput(&responsesResp)
+	responseContent, responseContents, toolCalls, reasoningContent := p.extractResponsesOutput(&responsesResp)
 
 	response := &Response{
 		Content:   responseContent,
@@ -410,10 +410,10 @@ func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Open
 			CompletionTokens: responsesResp.Usage.OutputTokens,
 			TotalTokens:      responsesResp.Usage.TotalTokens,
 		},
-		Model:        responsesResp.Model,
-		Provider:     "openai",
-		Reasoning:    reasoningData,
-		FinishReason: NormalizeFinishReason(responsesResp.Status),
+		Model:            responsesResp.Model,
+		Provider:         "openai",
+		ReasoningContent: reasoningContent,
+		FinishReason:     NormalizeFinishReason(responsesResp.Status),
 	}
 
 	if responsesResp.Usage.OutputTokensDetails != nil {
@@ -424,11 +424,11 @@ func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Open
 }
 
 // extractResponsesOutput converts Responses API output into the common response format
-func (p *OpenAIProvider) extractResponsesOutput(responsesResp *responsesAPIResponse) (string, []MessageContent, []ToolCall, *ReasoningData) {
+func (p *OpenAIProvider) extractResponsesOutput(responsesResp *responsesAPIResponse) (string, []MessageContent, []ToolCall, string) {
 	var (
-		toolCalls       []ToolCall
-		reasoning       *ReasoningData
-		messageContents []MessageContent
+		toolCalls        []ToolCall
+		reasoningContent string
+		messageContents  []MessageContent
 	)
 
 	for _, outputItem := range responsesResp.Output {
@@ -466,10 +466,7 @@ func (p *OpenAIProvider) extractResponsesOutput(responsesResp *responsesAPIRespo
 				summaryBuilder.WriteString(summary.Text)
 			}
 			if summaryBuilder.Len() > 0 {
-				reasoning = &ReasoningData{
-					Summary: summaryBuilder.String(),
-					Content: summaryBuilder.String(),
-				}
+				reasoningContent = summaryBuilder.String()
 			}
 		}
 	}
@@ -479,11 +476,7 @@ func (p *OpenAIProvider) extractResponsesOutput(responsesResp *responsesAPIRespo
 		content = text
 	}
 
-	if reasoning != nil && responsesResp.Usage.OutputTokensDetails != nil {
-		reasoning.TokensUsed = responsesResp.Usage.OutputTokensDetails.ReasoningTokens
-	}
-
-	return content, messageContents, toolCalls, reasoning
+	return content, messageContents, toolCalls, reasoningContent
 }
 
 // convertToTextFormat converts ResponseFormat to Responses API text.format structure.
@@ -752,7 +745,7 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 				continue
 			}
 			streamChunk.Type = "reasoning"
-			streamChunk.Reasoning = &ReasoningChunk{Content: delta.Delta}
+			streamChunk.ReasoningContent = delta.Delta
 			streamChunk.ItemID = delta.ItemID
 			streamChunk.OutputIndex = delta.OutputIndex
 			streamChunk.ContentIndex = delta.ContentIndex
@@ -760,7 +753,7 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 
 		case "response.reasoning_text.done":
 			streamChunk.Type = "reasoning_done"
-			streamChunk.Reasoning = &ReasoningChunk{Done: true}
+			streamChunk.ReasoningDone = true
 			return streamChunk, nil
 
 		case "response.reasoning_summary_text.delta":
@@ -778,14 +771,14 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 				continue
 			}
 			streamChunk.Type = "reasoning"
-			streamChunk.Reasoning = &ReasoningChunk{Summary: delta.Delta}
+			streamChunk.ReasoningContent = delta.Delta
 			streamChunk.ItemID = delta.ItemID
 			streamChunk.OutputIndex = delta.OutputIndex
 			return streamChunk, nil
 
 		case "response.reasoning_summary_text.done":
 			streamChunk.Type = "reasoning_summary_done"
-			streamChunk.Reasoning = &ReasoningChunk{Done: true}
+			streamChunk.ReasoningDone = true
 			return streamChunk, nil
 
 		// === Tool Call Events ===

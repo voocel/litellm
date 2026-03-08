@@ -15,21 +15,15 @@ type Usage struct {
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`     // Tokens read from cache
 }
 
-type ReasoningData struct {
-	Summary    string `json:"summary,omitempty"`
-	Content    string `json:"content,omitempty"`
-	TokensUsed int    `json:"tokens_used,omitempty"`
-}
-
 type Response struct {
-	Content      string           `json:"content"`
-	Contents     []MessageContent `json:"contents,omitempty"`
-	ToolCalls    []ToolCall       `json:"tool_calls,omitempty"`
-	Usage        Usage            `json:"usage"`
-	Model        string           `json:"model"`
-	Provider     string           `json:"provider"`
-	FinishReason string           `json:"finish_reason,omitempty"`
-	Reasoning    *ReasoningData   `json:"reasoning,omitempty"`
+	Content          string           `json:"content"`
+	Contents         []MessageContent `json:"contents,omitempty"`
+	ToolCalls        []ToolCall       `json:"tool_calls,omitempty"`
+	Usage            Usage            `json:"usage"`
+	Model            string           `json:"model"`
+	Provider         string           `json:"provider"`
+	FinishReason     string           `json:"finish_reason,omitempty"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
 
 	// Extra captures provider-specific response fields not covered by the
 	// standard schema (e.g. logprobs, annotations, system_fingerprint).
@@ -37,18 +31,19 @@ type Response struct {
 }
 
 type StreamChunk struct {
-	Type          string          `json:"type"`
-	Content       string          `json:"content,omitempty"`
-	ContentIndex  *int            `json:"content_index,omitempty"`
-	OutputIndex   *int            `json:"output_index,omitempty"`
-	ItemID        string          `json:"item_id,omitempty"`
-	ToolCallDelta *ToolCallDelta  `json:"tool_call_delta,omitempty"`
-	FinishReason  string          `json:"finish_reason,omitempty"`
-	Model         string          `json:"model,omitempty"`
-	Provider      string          `json:"provider"`
-	Done          bool            `json:"done"`
-	Reasoning     *ReasoningChunk `json:"reasoning,omitempty"`
-	Usage         *Usage          `json:"usage,omitempty"`
+	Type             string         `json:"type"`
+	Content          string         `json:"content,omitempty"`
+	ContentIndex     *int           `json:"content_index,omitempty"`
+	OutputIndex      *int           `json:"output_index,omitempty"`
+	ItemID           string         `json:"item_id,omitempty"`
+	ToolCallDelta    *ToolCallDelta `json:"tool_call_delta,omitempty"`
+	FinishReason     string         `json:"finish_reason,omitempty"`
+	Model            string         `json:"model,omitempty"`
+	Provider         string         `json:"provider"`
+	Done             bool           `json:"done"`
+	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	ReasoningDone    bool           `json:"reasoning_done,omitempty"`
+	Usage            *Usage         `json:"usage,omitempty"`
 }
 
 type ToolCallDelta struct {
@@ -59,12 +54,6 @@ type ToolCallDelta struct {
 	ArgumentsDelta string `json:"arguments_delta,omitempty"`
 	OutputIndex    *int   `json:"output_index,omitempty"`
 	ItemID         string `json:"item_id,omitempty"`
-}
-
-type ReasoningChunk struct {
-	Summary string `json:"summary,omitempty"`
-	Content string `json:"content,omitempty"`
-	Done    bool   `json:"done,omitempty"`
 }
 
 // ModelInfo provides a minimal, provider-agnostic model descriptor.

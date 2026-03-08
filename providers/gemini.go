@@ -323,10 +323,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 
 		// Populate reasoning data if thinking content exists
 		if !isThinkingDisabled(req) && thinkingContent != "" {
-			response.Reasoning = &ReasoningData{
-				Content:    thinkingContent,
-				TokensUsed: geminiResp.UsageMetadata.ThoughtsTokenCount,
-			}
+			response.ReasoningContent = thinkingContent
 		}
 	}
 
@@ -619,10 +616,12 @@ func (r *geminiStreamReader) Next() (*StreamChunk, error) {
 	if r.done {
 		return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 	}
-	if len(r.queue) > 0 {
+	for len(r.queue) > 0 {
 		next := r.queue[0]
 		r.queue = r.queue[1:]
-		return r.processResponse(next)
+		if chunk, err := r.processResponse(next); chunk != nil || err != nil {
+			return chunk, err
+		}
 	}
 
 	// Read next line from the stream
@@ -648,7 +647,10 @@ func (r *geminiStreamReader) Next() (*StreamChunk, error) {
 		objErr := json.Unmarshal([]byte(r.pending), &streamResp)
 		if objErr == nil {
 			r.pending = ""
-			return r.processResponse(streamResp)
+			if chunk, err := r.processResponse(streamResp); chunk != nil || err != nil {
+				return chunk, err
+			}
+			continue
 		}
 
 		var streamArray []geminiStreamResponse
@@ -659,7 +661,10 @@ func (r *geminiStreamReader) Next() (*StreamChunk, error) {
 				continue
 			}
 			r.queue = append(r.queue, streamArray[1:]...)
-			return r.processResponse(streamArray[0])
+			if chunk, err := r.processResponse(streamArray[0]); chunk != nil || err != nil {
+				return chunk, err
+			}
+			continue
 		}
 
 		if isIncompleteJSON(objErr) || isIncompleteJSON(arrErr) {
@@ -706,9 +711,7 @@ func (r *geminiStreamReader) processResponse(streamResp geminiStreamResponse) (*
 					continue
 				}
 				streamChunk.Type = "reasoning"
-				streamChunk.Reasoning = &ReasoningChunk{
-					Content: part.Text,
-				}
+				streamChunk.ReasoningContent = part.Text
 				return streamChunk, nil
 			} else if part.Text != "" {
 				// Regular content
@@ -741,10 +744,10 @@ func (r *geminiStreamReader) processResponse(streamResp geminiStreamResponse) (*
 			return streamChunk, nil
 		}
 
-		return r.Next()
+		return nil, nil // no emittable content, let caller continue
 	}
 
-	return r.Next()
+	return nil, nil // no candidates, let caller continue
 }
 
 func (r *geminiStreamReader) Close() error {

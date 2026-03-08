@@ -34,6 +34,10 @@ func NewOpenAI(config ProviderConfig) *OpenAIProvider {
 // needsMaxCompletionTokens checks if the model requires max_completion_tokens instead of max_tokens
 func (p *OpenAIProvider) needsMaxCompletionTokens(model string) bool {
 	modelLower := strings.ToLower(model)
+	// Strip provider prefix (e.g. "openai/gpt-5.4" -> "gpt-5.4")
+	if _, after, ok := strings.Cut(modelLower, "/"); ok {
+		modelLower = after
+	}
 
 	// o-series reasoning models (o1, o3, o4)
 	if strings.HasPrefix(modelLower, "o1") ||
@@ -205,11 +209,17 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 		response.Content = joinMessageContentsText(response.Contents)
 		response.FinishReason = NormalizeFinishReason(choice.FinishReason)
 
-		// Extract reasoning content (OpenAI format only)
-		if !isThinkingDisabled(req) && choice.ReasoningSummary != nil && choice.ReasoningSummary.Text != "" {
-			response.Reasoning = &ReasoningData{
-				Summary:    choice.ReasoningSummary.Text,
-				TokensUsed: response.Usage.ReasoningTokens,
+		// Extract reasoning content from multiple possible formats
+		if !isThinkingDisabled(req) {
+			if choice.ReasoningSummary != nil && choice.ReasoningSummary.Text != "" {
+				// OpenAI o-series / gpt-5: choice-level reasoning_summary
+				response.ReasoningContent = choice.ReasoningSummary.Text
+			} else if choice.Message.Reasoning != "" {
+				// Proxy / minimax format: message.reasoning
+				response.ReasoningContent = choice.Message.Reasoning
+			} else if choice.Message.ReasoningContent != "" {
+				// DeepSeek / GLM / Qwen format: message.reasoning_content
+				response.ReasoningContent = choice.Message.ReasoningContent
 			}
 		}
 
@@ -458,16 +468,24 @@ func (r *openaiStreamReader) Next() (*StreamChunk, error) {
 				})
 			}
 
-			// Handle reasoning streaming (OpenAI format only)
-			if r.includeReasoning && choice.Delta.ReasoningSummary != nil && choice.Delta.ReasoningSummary.Text != "" {
-				pending = append(pending, &StreamChunk{
-					Provider: r.provider,
-					Model:    chunk.Model,
-					Type:     "reasoning",
-					Reasoning: &ReasoningChunk{
-						Summary: choice.Delta.ReasoningSummary.Text,
-					},
-				})
+			// Handle reasoning streaming from multiple formats
+			if r.includeReasoning {
+				var reasoningText string
+				if choice.Delta.ReasoningSummary != nil && choice.Delta.ReasoningSummary.Text != "" {
+					reasoningText = choice.Delta.ReasoningSummary.Text
+				} else if choice.Delta.Reasoning != "" {
+					reasoningText = choice.Delta.Reasoning
+				} else if choice.Delta.ReasoningContent != "" {
+					reasoningText = choice.Delta.ReasoningContent
+				}
+				if reasoningText != "" {
+					pending = append(pending, &StreamChunk{
+						Provider:         r.provider,
+						Model:            chunk.Model,
+						Type:             "reasoning",
+						ReasoningContent: reasoningText,
+					})
+				}
 			}
 
 			// Handle tool call deltas
@@ -601,10 +619,12 @@ type openaiJSONSchema struct {
 }
 
 type openaiMessage struct {
-	Role       string           `json:"role"`
-	Content    interface{}      `json:"content,omitempty"`
-	ToolCalls  []openaiToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
+	Role             string           `json:"role"`
+	Content          interface{}      `json:"content,omitempty"`
+	ToolCalls        []openaiToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
+	Reasoning        string           `json:"reasoning,omitempty"`         // proxy/minimax format
+	ReasoningContent string           `json:"reasoning_content,omitempty"` // DeepSeek/GLM/Qwen format
 }
 
 type openaiContentPart struct {
@@ -677,6 +697,8 @@ type openaiDelta struct {
 	Content          string                  `json:"content,omitempty"`
 	ToolCalls        []openaiToolCallDelta   `json:"tool_calls,omitempty"`
 	ReasoningSummary *openaiReasoningSummary `json:"reasoning_summary,omitempty"`
+	Reasoning        string                  `json:"reasoning,omitempty"`         // proxy/minimax format
+	ReasoningContent string                  `json:"reasoning_content,omitempty"` // DeepSeek/GLM/Qwen format
 }
 
 type openaiUsage struct {

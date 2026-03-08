@@ -29,13 +29,12 @@ func main() {
 	//Example 1: Basic Chat
 	fmt.Println("\n1. Basic Chat Example")
 	fmt.Println("---------------------")
-	//basicChat(client)
+	basicChat(client)
 
 	// Example 2: Streaming Chat
 	fmt.Println("\n2. Streaming Chat Example")
 	fmt.Println("-------------------------")
 	streamingChat(client)
-	return
 
 	// Example 3: Function/Tool Calling
 	fmt.Println("\n3. Function/Tool Calling Example")
@@ -76,11 +75,11 @@ func responsesAPI(client *litellm.Client) {
 	}
 
 	fmt.Printf("Response: %s\n", response.Content)
-	if response.Reasoning != nil {
-		fmt.Printf("Reasoning Summary: %s\n", response.Reasoning.Summary)
+	if response.ReasoningContent != "" {
+		fmt.Printf("Reasoning: %s\n", response.ReasoningContent)
 	}
-	fmt.Printf("Usage: %d prompt + %d completion = %d total tokens\n",
-		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.TotalTokens)
+	fmt.Printf("Usage: %d prompt + %d completion (%d reasoning) = %d total tokens\n",
+		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.ReasoningTokens, response.Usage.TotalTokens)
 }
 
 // Example 1: Basic Chat
@@ -97,12 +96,12 @@ func basicChat(client *litellm.Client) {
 		return
 	}
 
-	if response.Reasoning != nil {
-		fmt.Printf("Reasoning Summary: %s\n", response.Reasoning.Summary)
+	if response.ReasoningContent != "" {
+		fmt.Printf("Reasoning: %s\n", response.ReasoningContent)
 	}
 	fmt.Printf("Response: %s\n", response.Content)
-	fmt.Printf("Usage: %d prompt + %d completion = %d total tokens\n",
-		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.TotalTokens)
+	fmt.Printf("Usage: %d prompt + %d completion (%d reasoning) = %d total tokens\n",
+		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.ReasoningTokens, response.Usage.TotalTokens)
 
 	// Calculate cost
 	if cost, err := litellm.CalculateCostForResponse(response); err == nil {
@@ -150,14 +149,10 @@ func streamingChat(client *litellm.Client) {
 				fmt.Print(text)
 			}
 		},
-		OnReasoning: func(r *litellm.ReasoningChunk) {
-			if r.Content != "" {
+		OnReasoning: func(content string) {
+			if content != "" {
 				printPrefix("think: ", &thinkingPrinted)
-				fmt.Print(r.Content)
-			}
-			if r.Content == "" && r.Summary != "" {
-				printPrefix("think: ", &thinkingPrinted)
-				fmt.Print(r.Summary)
+				fmt.Print(content)
 			}
 		},
 	})

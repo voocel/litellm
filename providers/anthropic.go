@@ -81,17 +81,10 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 				continue
 			}
 			if content.Thinking != "" {
-				if response.Reasoning == nil {
-					response.Reasoning = &ReasoningData{}
+				if response.ReasoningContent != "" {
+					response.ReasoningContent += "\n\n"
 				}
-				if response.Reasoning.Content != "" {
-					response.Reasoning.Content += "\n\n"
-				}
-				response.Reasoning.Content += content.Thinking
-				// Set summary from signature if available
-				if content.Signature != "" {
-					response.Reasoning.Summary = content.Signature
-				}
+				response.ReasoningContent += content.Thinking
 			}
 		case "tool_use":
 			var args []byte
@@ -640,10 +633,10 @@ func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
 					continue
 				}
 				return &StreamChunk{
-					Type:      "reasoning",
-					Provider:  r.provider,
-					Model:     r.model,
-					Reasoning: &ReasoningChunk{Content: ""},
+					Type:             "reasoning",
+					Provider:         r.provider,
+					Model:            r.model,
+					ReasoningContent: "",
 				}, nil
 			case "tool_use":
 				return &StreamChunk{
@@ -677,10 +670,10 @@ func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
 					continue
 				}
 				return &StreamChunk{
-					Type:      "reasoning",
-					Reasoning: &ReasoningChunk{Content: chunk.Delta.Thinking},
-					Provider:  r.provider,
-					Model:     r.model,
+					Type:             "reasoning",
+					ReasoningContent: chunk.Delta.Thinking,
+					Provider:         r.provider,
+					Model:            r.model,
 				}, nil
 			case "signature_delta":
 				// Signature for extended thinking verification, skip for now

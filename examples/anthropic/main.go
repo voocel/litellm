@@ -203,14 +203,10 @@ func streamingChat(client *litellm.Client) {
 				fmt.Print(text)
 			}
 		},
-		OnReasoning: func(r *litellm.ReasoningChunk) {
-			if r.Content != "" {
+		OnReasoning: func(content string) {
+			if content != "" {
 				printPrefix("[think]: ", &thinkingPrinted)
-				fmt.Print(r.Content)
-			}
-			if r.Content == "" && r.Summary != "" {
-				printPrefix("think: ", &thinkingPrinted)
-				fmt.Print(r.Summary)
+				fmt.Print(content)
 			}
 		},
 	})

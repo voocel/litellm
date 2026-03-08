@@ -104,10 +104,10 @@ func testOpenAI(client *litellm.Client) {
 				fmt.Print(text)
 			}
 		},
-		OnReasoning: func(r *litellm.ReasoningChunk) {
-			if r.Content != "" {
+		OnReasoning: func(content string) {
+			if content != "" {
 				printPrefix("[think]: ", &thinkingPrinted)
-				fmt.Print(r.Content)
+				fmt.Print(content)
 			}
 		},
 	})
@@ -296,8 +296,8 @@ func streamingChat(client *litellm.Client) {
 			fmt.Print(chunk.Content)
 		}
 
-		if chunk.Type == "reasoning" && chunk.Reasoning != nil {
-			fmt.Printf("\n[Reasoning: %s]\n", chunk.Reasoning.Content)
+		if chunk.Type == "reasoning" && chunk.ReasoningContent != "" {
+			fmt.Printf("\n[Reasoning: %s]\n", chunk.ReasoningContent)
 		}
 	}
 	fmt.Println()

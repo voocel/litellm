@@ -104,8 +104,8 @@ func thinkingMode(client *litellm.Client) {
 		return
 	}
 
-	if response.Reasoning != nil && response.Reasoning.Content != "" {
-		fmt.Printf("think: %s\n", response.Reasoning.Content)
+	if response.ReasoningContent != "" {
+		fmt.Printf("think: %s\n", response.ReasoningContent)
 	}
 
 	fmt.Printf("output: %s\n", response.Content)
@@ -203,10 +203,10 @@ func streamingChat(client *litellm.Client) {
 				fmt.Print(text)
 			}
 		},
-		OnReasoning: func(r *litellm.ReasoningChunk) {
-			if r.Content != "" {
+		OnReasoning: func(content string) {
+			if content != "" {
 				printPrefix("[think]: ", &thinkingPrinted)
-				fmt.Print(r.Content)
+				fmt.Print(content)
 			}
 		},
 	})

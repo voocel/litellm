@@ -577,10 +577,7 @@ func (p *OpenAICompatProvider) convertResponse(raw *compatResponse, req *Request
 		// Reasoning — probe multiple field names
 		if !isThinkingDisabled(req) && c.shouldExtractReasoning(resp.Model) {
 			if reasoning, _ := c.findReasoning(msg); reasoning != "" {
-				resp.Reasoning = &ReasoningData{
-					Content:    reasoning,
-					TokensUsed: resp.Usage.ReasoningTokens,
-				}
+				resp.ReasoningContent = reasoning
 			}
 		}
 
