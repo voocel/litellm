@@ -31,3 +31,7 @@ go.work.sum
 .idea
 .vscode
 .DS_Store
+
+# Release artifacts
+release-notes.md
+dist/

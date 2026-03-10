@@ -16,17 +16,21 @@ func NewOpenRouter(config ProviderConfig) *OpenAICompatProvider {
 		ReasoningField:            "reasoning",
 		HasCompletionTokenDetails: true,
 		SupportsJSONSchema:        true,
-		// OpenRouter uses {"reasoning": {"effort": ..., "max_tokens": ...}}.
+		// OpenRouter uses {"reasoning": {"effort": ...}} OR {"reasoning": {"max_tokens": ...}},
+		// but NOT both simultaneously.
 		ThinkingMapper: func(thinking *ThinkingConfig, _ string) map[string]any {
 			if thinking.Type != "enabled" {
 				return nil
 			}
 			reasoning := map[string]any{}
-			if thinking.Level != "" {
+			if thinking.BudgetTokens != nil && *thinking.BudgetTokens > 0 {
+				// Explicit budget → use max_tokens only.
+				reasoning["max_tokens"] = *thinking.BudgetTokens
+			} else if thinking.Level != "" {
+				// Level → use effort only.
 				reasoning["effort"] = thinking.Level
-			}
-			if budget := ResolveBudgetTokens(thinking); budget != nil {
-				reasoning["max_tokens"] = *budget
+			} else {
+				reasoning["effort"] = "medium"
 			}
 			return map[string]any{"reasoning": reasoning}
 		},

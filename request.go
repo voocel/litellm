@@ -221,13 +221,24 @@ func WithStop(sequences ...string) RequestOption {
 	}
 }
 
-// WithThinking enables thinking/reasoning mode with an optional token budget.
-// Set budget to 0 for provider default.
-func WithThinking(budget int) RequestOption {
+// WithThinking enables thinking/reasoning mode.
+//
+//	WithThinking()              // enable with provider defaults
+//	WithThinking("high")        // set reasoning effort level (low/medium/high)
+//	WithThinking(8192)          // set token budget
+//	WithThinking("high", 8192)  // both level and budget
+func WithThinking(opts ...any) RequestOption {
 	return func(r *Request) {
 		cfg := &ThinkingConfig{Type: ThinkingEnabled}
-		if budget > 0 {
-			cfg.BudgetTokens = &budget
+		for _, o := range opts {
+			switch v := o.(type) {
+			case string:
+				cfg.Level = v
+			case int:
+				if v > 0 {
+					cfg.BudgetTokens = &v
+				}
+			}
 		}
 		r.Thinking = cfg
 	}
