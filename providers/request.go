@@ -24,6 +24,7 @@ type MessageContent struct {
 	Type        string           `json:"type"`
 	Text        string           `json:"text,omitempty"`
 	ImageURL    *MessageImageURL `json:"image_url,omitempty"`
+	ToolName    string           `json:"tool_name,omitempty"` // tool_reference blocks
 	Annotations []map[string]any `json:"annotations,omitempty"`
 	Logprobs    []map[string]any `json:"logprobs,omitempty"`
 }
@@ -55,8 +56,9 @@ type FunctionCall struct {
 // ---------------------------------------------------------------------------
 
 type Tool struct {
-	Type     string      `json:"type"`
-	Function FunctionDef `json:"function"`
+	Type         string      `json:"type"`
+	Function     FunctionDef `json:"function"`
+	DeferLoading bool        `json:"defer_loading,omitempty"`
 }
 
 type FunctionDef struct {

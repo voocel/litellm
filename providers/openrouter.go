@@ -52,7 +52,11 @@ func convertOpenRouterMessages(messages []Message) any {
 			ToolCallID: msg.ToolCallID,
 		}
 
-		if msg.CacheControl != nil {
+		// Tool result messages require plain string content per OpenAI spec;
+		// wrapping in content-parts array causes 400 on some providers.
+		if msg.Role == "tool" {
+			m.Content = msg.Content
+		} else if msg.CacheControl != nil {
 			m.Content = []openRouterContent{{
 				Type: "text",
 				Text: msg.Content,

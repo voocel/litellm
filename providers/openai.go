@@ -819,7 +819,12 @@ func ConvertMessagesToOpenAI(messages []Message) []openaiMessage {
 			ToolCallID: msg.ToolCallID,
 		}
 
-		if parts := buildOpenAIContentParts(msg); len(parts) > 0 {
+		// Tool result messages require plain string content per OpenAI spec.
+		if msg.Role == "tool" {
+			if msg.Content != "" {
+				openaiMsg.Content = msg.Content
+			}
+		} else if parts := buildOpenAIContentParts(msg); len(parts) > 0 {
 			openaiMsg.Content = parts
 		} else if msg.Content != "" {
 			openaiMsg.Content = msg.Content
@@ -855,7 +860,10 @@ func ConvertMessages(messages []Message) []OpenAICompatMessage {
 			ToolCallID: msg.ToolCallID,
 		}
 
-		if parts := buildOpenAIContentParts(msg); len(parts) > 0 {
+		// Tool result messages require plain string content per OpenAI spec.
+		if msg.Role == "tool" {
+			compatMsg.Content = msg.Content
+		} else if parts := buildOpenAIContentParts(msg); len(parts) > 0 {
 			compatMsg.Content = parts
 		} else {
 			compatMsg.Content = msg.Content

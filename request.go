@@ -327,6 +327,11 @@ func ImageContentWithDetail(url, detail string) MessageContent {
 	}
 }
 
+// ToolRefContent creates a tool_reference content item for tool search results.
+func ToolRefContent(toolName string) MessageContent {
+	return MessageContent{Type: "tool_reference", ToolName: toolName}
+}
+
 // NewTool creates a function tool definition.
 func NewTool(name, description string, parameters any) Tool {
 	return Tool{

@@ -231,9 +231,10 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 				return nil, err
 			}
 			anthropicReq.Tools = append(anthropicReq.Tools, anthropicTool{
-				Name:        tool.Function.Name,
-				Description: tool.Function.Description,
-				InputSchema: inputSchema,
+				Name:         tool.Function.Name,
+				Description:  tool.Function.Description,
+				InputSchema:  inputSchema,
+				DeferLoading: tool.DeferLoading,
 			})
 		}
 	}
@@ -308,12 +309,17 @@ func (p *AnthropicProvider) convertMessages(req *Request) (any, []anthropicMessa
 			var contents []anthropicContent
 			for i < len(nonSystemMessages) && nonSystemMessages[i].Role == "tool" {
 				m := nonSystemMessages[i]
-				contents = append(contents, anthropicContent{
-					Type:     "tool_result",
+				tc := anthropicContent{
+					Type:      "tool_result",
 					ToolUseID: m.ToolCallID,
-					Content:  m.Content,
-					IsError:  m.IsError,
-				})
+					IsError:   m.IsError,
+				}
+				if toolRefContent := buildToolRefContent(m); toolRefContent != nil {
+					tc.Content = toolRefContent
+				} else {
+					tc.Content = m.Content
+				}
+				contents = append(contents, tc)
 				i++
 			}
 			i-- // compensate for outer loop increment
@@ -759,6 +765,34 @@ func mergeConsecutiveRoles(msgs []anthropicMessage) []anthropicMessage {
 	return merged
 }
 
+// buildToolRefContent checks if a tool message contains tool_reference content
+// blocks (from tool search results) and builds a structured content array for
+// the Anthropic API. Returns nil if no tool_reference blocks are present.
+func buildToolRefContent(msg Message) []anthropicContent {
+	var hasRef bool
+	for _, c := range msg.Contents {
+		if c.Type == "tool_reference" {
+			hasRef = true
+			break
+		}
+	}
+	if !hasRef {
+		return nil
+	}
+	var result []anthropicContent
+	for _, c := range msg.Contents {
+		switch c.Type {
+		case "text":
+			if c.Text != "" {
+				result = append(result, anthropicContent{Type: "text", Text: c.Text})
+			}
+		case "tool_reference":
+			result = append(result, anthropicContent{Type: "tool_reference", ToolName: c.ToolName})
+		}
+	}
+	return result
+}
+
 type anthropicContent struct {
 	Type         string                 `json:"type"`
 	Text         string                 `json:"text,omitempty"`
@@ -769,7 +803,8 @@ type anthropicContent struct {
 	ToolUseID    string                 `json:"tool_use_id,omitempty"` // tool_result request: "tool_use_id"
 	Name         string                 `json:"name,omitempty"`
 	Input        *map[string]any        `json:"input,omitempty"`
-	Content      any                    `json:"content,omitempty"` // tool_result: string or []content
+	Content      any                    `json:"content,omitempty"`   // tool_result: string or []content
+	ToolName     string                 `json:"tool_name,omitempty"` // tool_reference: referenced tool name
 	IsError      bool                   `json:"is_error,omitempty"`
 	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
@@ -787,9 +822,10 @@ type anthropicCacheControl struct {
 }
 
 type anthropicTool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"input_schema"`
+	Name         string         `json:"name"`
+	Description  string         `json:"description"`
+	InputSchema  map[string]any `json:"input_schema"`
+	DeferLoading bool           `json:"defer_loading,omitempty"`
 }
 
 type anthropicResponse struct {

@@ -160,7 +160,7 @@ func (r *compatStreamReader) Next() (*StreamChunk, error) {
 	}
 
 	if err := r.scanner.Err(); err != nil {
-		return nil, fmt.Errorf("%s: stream read error: %w", r.compat.ProviderName, err)
+		return nil, NewNetworkError(r.compat.ProviderName, "stream read error: "+err.Error(), err)
 	}
 
 	r.done = true
