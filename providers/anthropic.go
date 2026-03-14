@@ -304,7 +304,10 @@ func (p *AnthropicProvider) convertMessages(req *Request) (any, []anthropicMessa
 		msg := nonSystemMessages[i]
 		isLast := i == len(nonSystemMessages)-1
 
-		// Batch consecutive tool result messages into a single user message
+		// Batch consecutive tool result messages into a single user message.
+		// When tool_reference blocks are present, they go inside tool_result
+		// content; text blocks become siblings alongside tool_result (matching
+		// the Claude Code wire format).
 		if msg.Role == "tool" {
 			var contents []anthropicContent
 			for i < len(nonSystemMessages) && nonSystemMessages[i].Role == "tool" {
@@ -314,12 +317,14 @@ func (p *AnthropicProvider) convertMessages(req *Request) (any, []anthropicMessa
 					ToolUseID: m.ToolCallID,
 					IsError:   m.IsError,
 				}
-				if toolRefContent := buildToolRefContent(m); toolRefContent != nil {
-					tc.Content = toolRefContent
+				refContent, siblingText := splitToolRefContent(m)
+				if refContent != nil {
+					tc.Content = refContent
 				} else {
 					tc.Content = m.Content
 				}
 				contents = append(contents, tc)
+				contents = append(contents, siblingText...)
 				i++
 			}
 			i-- // compensate for outer loop increment
@@ -744,10 +749,11 @@ type anthropicMessage struct {
 	Content []anthropicContent `json:"content"`
 }
 
-// mergeConsecutiveRoles merges adjacent messages with the same role by
-// concatenating their content arrays. This ensures the strict alternating
-// user/assistant requirement of the Anthropic API is satisfied, even when
-// tool results (mapped to "user") are immediately followed by a user text.
+// mergeConsecutiveRoles merges adjacent assistant messages by concatenating
+// their content arrays. Consecutive user messages are kept separate —
+// Anthropic API accepts them and auto-merges server-side, but keeping them
+// distinct preserves per-message cache_control placement and matches the
+// Claude Code message layout (e.g. deferred-tools preamble + user input).
 func mergeConsecutiveRoles(msgs []anthropicMessage) []anthropicMessage {
 	if len(msgs) <= 1 {
 		return msgs
@@ -756,7 +762,7 @@ func mergeConsecutiveRoles(msgs []anthropicMessage) []anthropicMessage {
 	merged = append(merged, msgs[0])
 	for i := 1; i < len(msgs); i++ {
 		last := &merged[len(merged)-1]
-		if msgs[i].Role == last.Role {
+		if msgs[i].Role == last.Role && msgs[i].Role == "assistant" {
 			last.Content = append(last.Content, msgs[i].Content...)
 		} else {
 			merged = append(merged, msgs[i])
@@ -765,10 +771,13 @@ func mergeConsecutiveRoles(msgs []anthropicMessage) []anthropicMessage {
 	return merged
 }
 
-// buildToolRefContent checks if a tool message contains tool_reference content
-// blocks (from tool search results) and builds a structured content array for
-// the Anthropic API. Returns nil if no tool_reference blocks are present.
-func buildToolRefContent(msg Message) []anthropicContent {
+// splitToolRefContent checks if a tool message contains tool_reference content
+// blocks (from tool search results). Returns:
+//   - refContent: tool_reference blocks to place inside the tool_result
+//   - siblings: text blocks to place alongside the tool_result in the user message
+//
+// Returns (nil, nil) if no tool_reference blocks are present.
+func splitToolRefContent(msg Message) (refContent []anthropicContent, siblings []anthropicContent) {
 	var hasRef bool
 	for _, c := range msg.Contents {
 		if c.Type == "tool_reference" {
@@ -777,20 +786,19 @@ func buildToolRefContent(msg Message) []anthropicContent {
 		}
 	}
 	if !hasRef {
-		return nil
+		return nil, nil
 	}
-	var result []anthropicContent
 	for _, c := range msg.Contents {
 		switch c.Type {
 		case "text":
 			if c.Text != "" {
-				result = append(result, anthropicContent{Type: "text", Text: c.Text})
+				siblings = append(siblings, anthropicContent{Type: "text", Text: c.Text})
 			}
 		case "tool_reference":
-			result = append(result, anthropicContent{Type: "tool_reference", ToolName: c.ToolName})
+			refContent = append(refContent, anthropicContent{Type: "tool_reference", ToolName: c.ToolName})
 		}
 	}
-	return result
+	return
 }
 
 type anthropicContent struct {
