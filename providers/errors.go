@@ -24,6 +24,7 @@ const (
 	ErrorTypeModel           ErrorType = "model"            // Model not found/unsupported errors
 	ErrorTypeInternal        ErrorType = "internal"         // Internal library errors
 	ErrorTypeContextOverflow ErrorType = "context_overflow" // Input exceeds model's context window
+	ErrorTypeOverloaded      ErrorType = "overloaded"       // Service overloaded (e.g. Anthropic 529)
 )
 
 // LiteLLMError is a structured error with categorization and retry hints.
@@ -166,6 +167,8 @@ func classifyHTTPError(statusCode int) ErrorType {
 		return ErrorTypeTimeout
 	case statusCode == http.StatusBadRequest:
 		return ErrorTypeValidation
+	case statusCode == 529:
+		return ErrorTypeOverloaded
 	case statusCode >= 500:
 		return ErrorTypeProvider
 	default:
@@ -175,7 +178,7 @@ func classifyHTTPError(statusCode int) ErrorType {
 
 func isRetryableByType(errorType ErrorType) bool {
 	switch errorType {
-	case ErrorTypeNetwork, ErrorTypeTimeout, ErrorTypeRateLimit:
+	case ErrorTypeNetwork, ErrorTypeTimeout, ErrorTypeRateLimit, ErrorTypeOverloaded:
 		return true
 	case ErrorTypeProvider:
 		return true
@@ -244,6 +247,11 @@ var contextOverflowPatterns = regexp.MustCompile(
 
 func isContextOverflowMessage(message string) bool {
 	return contextOverflowPatterns.MatchString(message)
+}
+
+func IsOverloadedError(err error) bool {
+	var e *LiteLLMError
+	return errors.As(err, &e) && e.Type == ErrorTypeOverloaded
 }
 
 func IsRetryableError(err error) bool {
@@ -352,6 +360,8 @@ func httpStatusLabel(statusCode int) string {
 		return "request timeout"
 	case http.StatusTooManyRequests:
 		return "rate limited"
+	case 529:
+		return "overloaded"
 	default:
 		if statusCode >= 500 {
 			return "provider error"

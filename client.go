@@ -69,6 +69,8 @@ func validateProviderConfig(name string, config ProviderConfig) error {
 	}
 
 	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "ollama":
+		return nil // Ollama does not require an API key
 	case "bedrock":
 		if config.APIKey != "" {
 			parts := strings.SplitN(config.APIKey, ":", 2)

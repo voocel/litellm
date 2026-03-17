@@ -17,6 +17,7 @@ const (
 	ErrorTypeModel           ErrorType = providers.ErrorTypeModel
 	ErrorTypeInternal        ErrorType = providers.ErrorTypeInternal
 	ErrorTypeContextOverflow ErrorType = providers.ErrorTypeContextOverflow
+	ErrorTypeOverloaded      ErrorType = providers.ErrorTypeOverloaded
 )
 
 func NewError(errorType ErrorType, message string) *LiteLLMError {
@@ -65,6 +66,7 @@ func IsNetworkError(err error) bool         { return providers.IsNetworkError(er
 func IsValidationError(err error) bool      { return providers.IsValidationError(err) }
 func IsModelError(err error) bool           { return providers.IsModelError(err) }
 func IsContextOverflowError(err error) bool { return providers.IsContextOverflowError(err) }
+func IsOverloadedError(err error) bool      { return providers.IsOverloadedError(err) }
 func IsRetryableError(err error) bool       { return providers.IsRetryableError(err) }
 func GetRetryAfter(err error) int           { return providers.GetRetryAfter(err) }
 

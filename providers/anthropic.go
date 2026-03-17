@@ -305,11 +305,14 @@ func (p *AnthropicProvider) convertMessages(req *Request) (any, []anthropicMessa
 		isLast := i == len(nonSystemMessages)-1
 
 		// Batch consecutive tool result messages into a single user message.
-		// When tool_reference blocks are present, they go inside tool_result
-		// content; text blocks become siblings alongside tool_result (matching
-		// the Claude Code wire format).
+		// Keep all tool_result blocks contiguous at the start of the user
+		// message, then append any sibling text from tool_reference results.
+		// Anthropic validates that each tool_use is followed immediately by
+		// tool_result blocks; interleaving sibling text between multiple
+		// tool_result blocks can cause request rejection.
 		if msg.Role == "tool" {
-			var contents []anthropicContent
+			var toolResults []anthropicContent
+			var siblings []anthropicContent
 			for i < len(nonSystemMessages) && nonSystemMessages[i].Role == "tool" {
 				m := nonSystemMessages[i]
 				tc := anthropicContent{
@@ -323,11 +326,12 @@ func (p *AnthropicProvider) convertMessages(req *Request) (any, []anthropicMessa
 				} else {
 					tc.Content = m.Content
 				}
-				contents = append(contents, tc)
-				contents = append(contents, siblingText...)
+				toolResults = append(toolResults, tc)
+				siblings = append(siblings, siblingText...)
 				i++
 			}
 			i-- // compensate for outer loop increment
+			contents := append(toolResults, siblings...)
 			messages = append(messages, anthropicMessage{Role: "user", Content: contents})
 			continue
 		}

@@ -106,6 +106,10 @@ type Compat struct {
 
 	// DataPrefix is the SSE data line prefix.  Default: "data: ".
 	DataPrefix string
+
+	// SkipAPIKeyValidation skips the API key check.  Used by local
+	// providers like Ollama that don't require authentication.
+	SkipAPIKeyValidation bool
 }
 
 // defaultReasoningFields lists all known reasoning field names in probe order.
@@ -264,8 +268,10 @@ func (p *OpenAICompatProvider) Stream(ctx context.Context, req *Request) (Stream
 
 // ListModels returns available models from the provider.
 func (p *OpenAICompatProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
-	if err := p.Validate(); err != nil {
-		return nil, err
+	if !p.compat.SkipAPIKeyValidation {
+		if err := p.Validate(); err != nil {
+			return nil, err
+		}
 	}
 
 	url := p.modelsURL()
@@ -324,8 +330,10 @@ func (p *OpenAICompatProvider) ListModels(ctx context.Context) ([]ModelInfo, err
 // ---------------------------------------------------------------------------
 
 func (p *OpenAICompatProvider) validate(req *Request) error {
-	if err := p.Validate(); err != nil {
-		return err
+	if !p.compat.SkipAPIKeyValidation {
+		if err := p.Validate(); err != nil {
+			return err
+		}
 	}
 	// OpenAI-compatible APIs accept arbitrary extra parameters — skip validation.
 	// req.Extra is merged into the request body by buildRequestBody.
@@ -344,7 +352,11 @@ func (p *OpenAICompatProvider) modelsURL() string {
 
 func (p *OpenAICompatProvider) setHeaders(httpReq *http.Request, req *Request, stream bool) {
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.ResolveAPIKey(req))
+	if !p.compat.SkipAPIKeyValidation {
+		httpReq.Header.Set("Authorization", "Bearer "+p.ResolveAPIKey(req))
+	} else if key := p.ResolveAPIKey(req); key != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+key)
+	}
 	for k, v := range p.compat.ExtraHeaders {
 		httpReq.Header.Set(k, v)
 	}

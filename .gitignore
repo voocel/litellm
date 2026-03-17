@@ -35,3 +35,4 @@ go.work.sum
 # Release artifacts
 release-notes.md
 dist/
+refer
