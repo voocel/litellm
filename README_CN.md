@@ -144,7 +144,7 @@ resp, err := litellm.CollectStreamWithHandler(stream, func(chunk *litellm.Stream
 	if chunk.Type == litellm.ChunkTypeContent && chunk.Content != "" {
 		fmt.Print(chunk.Content)
 	}
-	if chunk.Reasoning != nil && chunk.Reasoning.Done {
+	if chunk.ReasoningDone {
 		fmt.Print("\n[reasoning done]")
 	}
 })
@@ -169,7 +169,7 @@ fmt.Println(resp.Content)
 - `CollectStream(stream)` 将流式结果收集为统一的 `Response`。
 - `CollectStreamWithHandler(stream, onChunk)` 收集时也会处理每个 chunk。
 - `CollectStreamWithCallbacks(stream, callbacks)` 提供内容/思考/工具回调。
-- `Request.Thinking` 控制思考输出（默认开启，显式禁用才关闭）。
+- `Request.Thinking` 在显式设置时控制思考输出；未设置时行为由具体 Provider 决定。
 - `ListModels(ctx)` 列出当前 Provider 可用模型（仅部分 Provider 支持，字段为 best-effort）。
 
 ### 流式（最小示例）
@@ -263,7 +263,7 @@ resp, err := client.Chat(ctx, &litellm.Request{
 _ = resp
 ```
 
-### 思考输出（默认开启）
+### 思考输出
 
 ```go
 resp, err := client.Chat(ctx, &litellm.Request{
@@ -368,11 +368,22 @@ func (p *MyProvider) Stream(ctx context.Context, req *litellm.Request) (litellm.
 }
 
 func init() {
-	litellm.RegisterProvider("myprovider", func(cfg litellm.ProviderConfig) litellm.Provider {
-		return &MyProvider{name: "myprovider", config: cfg}
+	_ = litellm.RegisterProviderWithDescriptor(litellm.ProviderDescriptor{
+		Name:       "myprovider",
+		DefaultURL: "https://api.example.com/v1",
+		Factory: func(cfg litellm.ProviderConfig) litellm.Provider {
+			return &MyProvider{name: "myprovider", config: cfg}
+		},
 	})
 }
 ```
+
+自定义 Provider 契约：
+
+- `Chat` 应先校验基础请求字段，并尽量返回统一字段：`Response.Provider`、`Response.Model`、`Response.FinishReason`、`Response.Usage`。
+- `Stream` 应将文本增量作为 `ChunkTypeContent` 输出，将思考增量放在 `ReasoningContent`，工具调用增量放在 `ToolCallDelta`，并在结束时发送 `Done=true` 的最终块。
+- 同一个流式工具调用的 `ToolCallDelta.Index` 必须稳定，否则聚合器无法正确重建完整的 tool call。
+- 建议返回 `LiteLLMError`，或者返回经 `WrapError` 包装后的错误，这样上层才能一致地区分认证、限流、超时、模型和参数校验错误。
 
 ## 内置 Provider
 

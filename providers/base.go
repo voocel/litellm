@@ -69,6 +69,9 @@ func NewBaseProvider(name string, config ProviderConfig) *BaseProvider {
 	}
 
 	resilienceConfig := ResolveResilienceConfig(config.Resilience)
+	if config.Timeout > 0 {
+		resilienceConfig.RequestTimeout = config.Timeout
+	}
 
 	if config.HTTPClient == nil {
 		config.HTTPClient = &http.Client{

@@ -2,6 +2,7 @@ package litellm
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -10,7 +11,7 @@ import (
 
 // Global registry for custom providers
 var (
-	customProviders = make(map[string]ProviderFactory)
+	customProviders = make(map[string]ProviderDescriptor)
 	providerMutex   sync.RWMutex
 )
 
@@ -21,22 +22,18 @@ func normalizeProviderName(name string) string {
 // createProvider creates a provider instance by name
 func createProvider(name string, config ProviderConfig) (Provider, error) {
 	providerName := normalizeProviderName(name)
+	config = normalizeProviderConfig(config)
 
 	// Check custom providers first
 	providerMutex.RLock()
-	if factory, exists := customProviders[providerName]; exists {
+	if descriptor, exists := customProviders[providerName]; exists {
 		providerMutex.RUnlock()
-		return factory(config), nil
+		if config.BaseURL == "" && descriptor.DefaultURL != "" {
+			config.BaseURL = descriptor.DefaultURL
+		}
+		return descriptor.Factory(config), nil
 	}
 	providerMutex.RUnlock()
-
-	resilienceConfig := providers.ResolveResilienceConfig(config.Resilience)
-	config.Resilience = resilienceConfig
-
-	// If HTTPClient is not provided, inject a resilient client with retry/backoff.
-	if config.HTTPClient == nil {
-		config.HTTPClient = NewResilientHTTPClient(resilienceConfig)
-	}
 
 	// Check builtin providers from registry
 	if factory, ok := providers.GetBuiltin(providerName); ok {
@@ -46,36 +43,71 @@ func createProvider(name string, config ProviderConfig) (Provider, error) {
 	return nil, fmt.Errorf("unknown provider: %s", providerName)
 }
 
+func normalizeProviderConfig(config ProviderConfig) ProviderConfig {
+	resilienceConfig := providers.ResolveResilienceConfig(config.Resilience)
+	if config.Timeout > 0 {
+		resilienceConfig.RequestTimeout = config.Timeout
+	}
+	config.Resilience = resilienceConfig
+
+	if config.HTTPClient == nil {
+		config.HTTPClient = NewResilientHTTPClient(resilienceConfig)
+	}
+
+	return config
+}
+
 // RegisterProvider registers a custom provider factory
 // Returns an error if the name is empty or factory is nil
 func RegisterProvider(name string, factory ProviderFactory) error {
-	providerName := normalizeProviderName(name)
+	return RegisterProviderWithDescriptor(ProviderDescriptor{
+		Name:    name,
+		Factory: factory,
+	})
+}
+
+// RegisterProviderWithDescriptor registers a custom provider together with
+// lightweight static metadata such as its default BaseURL.
+func RegisterProviderWithDescriptor(descriptor ProviderDescriptor) error {
+	providerName := normalizeProviderName(descriptor.Name)
 	if providerName == "" {
 		return fmt.Errorf("provider name cannot be empty")
 	}
-	if factory == nil {
+	if descriptor.Factory == nil {
 		return fmt.Errorf("provider factory cannot be nil")
 	}
 
 	providerMutex.Lock()
 	defer providerMutex.Unlock()
-	customProviders[providerName] = factory
+	if providers.IsBuiltinRegistered(providerName) {
+		return fmt.Errorf("provider %q conflicts with builtin provider", providerName)
+	}
+	if _, exists := customProviders[providerName]; exists {
+		return fmt.Errorf("provider %q is already registered", providerName)
+	}
+
+	descriptor.Name = providerName
+	descriptor.DefaultURL = strings.TrimSpace(descriptor.DefaultURL)
+	customProviders[providerName] = descriptor
 	return nil
 }
 
 // ListRegisteredProviders returns all registered provider names
 func ListRegisteredProviders() []string {
-	// Get builtin providers from registry
-	builtIn := providers.ListBuiltins()
+	names := make([]string, 0, len(providers.ListBuiltins())+len(customProviders))
 
-	// Add custom providers
+	for _, name := range providers.ListBuiltins() {
+		names = append(names, name)
+	}
+
 	providerMutex.RLock()
 	defer providerMutex.RUnlock()
 	for name := range customProviders {
-		builtIn = append(builtIn, name)
+		names = append(names, name)
 	}
 
-	return builtIn
+	slices.Sort(names)
+	return names
 }
 
 // IsProviderRegistered checks if a provider is registered (built-in or custom)

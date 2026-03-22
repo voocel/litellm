@@ -91,9 +91,23 @@ Implement the Provider interface and register it:
 	func (p *MyProvider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) { ... }
 	func (p *MyProvider) Stream(ctx context.Context, req *litellm.Request) (litellm.StreamReader, error) { ... }
 
-	litellm.RegisterProvider("myprovider", func(cfg litellm.ProviderConfig) litellm.Provider {
-	    return &MyProvider{}
+	litellm.RegisterProviderWithDescriptor(litellm.ProviderDescriptor{
+	    Name:       "myprovider",
+	    DefaultURL: "https://api.example.com/v1",
+	    Factory: func(cfg litellm.ProviderConfig) litellm.Provider {
+	        return &MyProvider{}
+	    },
 	})
+
+Custom provider contract:
+
+  - Chat should validate request basics and return canonical fields when possible:
+    Response.Provider, Response.Model, Response.FinishReason, and Response.Usage.
+  - Stream should emit ChunkTypeContent for text deltas, ReasoningContent for
+    reasoning deltas, ToolCallDelta for tool streaming, and a final chunk with Done=true.
+  - ToolCallDelta.Index must remain stable across all deltas of the same tool call.
+  - Prefer returning LiteLLMError (or errors wrapped by WrapError) so upper layers
+    can classify auth, rate-limit, timeout, model, and validation failures consistently.
 
 # Thread Safety
 

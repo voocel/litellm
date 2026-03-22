@@ -53,7 +53,7 @@ func New(provider Provider, opts ...ClientOption) (*Client, error) {
 
 // NewWithProvider creates a client from provider name and config.
 func NewWithProvider(name string, config ProviderConfig, opts ...ClientOption) (*Client, error) {
-	if err := validateProviderConfig(name, config); err != nil {
+	if err := validateProviderName(name); err != nil {
 		return nil, err
 	}
 	provider, err := createProvider(name, config)
@@ -63,36 +63,11 @@ func NewWithProvider(name string, config ProviderConfig, opts ...ClientOption) (
 	return New(provider, opts...)
 }
 
-func validateProviderConfig(name string, config ProviderConfig) error {
-	if strings.TrimSpace(name) == "" {
+func validateProviderName(name string) error {
+	if normalizeProviderName(name) == "" {
 		return fmt.Errorf("provider name cannot be empty")
 	}
-
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "ollama":
-		return nil // Ollama does not require an API key
-	case "bedrock":
-		if config.APIKey != "" {
-			parts := strings.SplitN(config.APIKey, ":", 2)
-			if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
-				return nil
-			}
-		}
-		if config.Extra == nil {
-			return fmt.Errorf("bedrock requires access_key_id and secret_access_key")
-		}
-		accessKeyID, _ := config.Extra["access_key_id"].(string)
-		secretAccessKey, _ := config.Extra["secret_access_key"].(string)
-		if accessKeyID == "" || secretAccessKey == "" {
-			return fmt.Errorf("bedrock requires access_key_id and secret_access_key")
-		}
-		return nil
-	default:
-		if config.APIKey == "" {
-			return fmt.Errorf("%s requires api key", strings.ToLower(strings.TrimSpace(name)))
-		}
-		return nil
-	}
+	return nil
 }
 
 // WithDefaults sets request-level defaults (applies only when fields are unset).

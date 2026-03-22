@@ -144,7 +144,7 @@ resp, err := litellm.CollectStreamWithHandler(stream, func(chunk *litellm.Stream
 	if chunk.Type == litellm.ChunkTypeContent && chunk.Content != "" {
 		fmt.Print(chunk.Content)
 	}
-	if chunk.Reasoning != nil && chunk.Reasoning.Done {
+	if chunk.ReasoningDone {
 		fmt.Print("\n[reasoning done]")
 	}
 })
@@ -169,7 +169,7 @@ fmt.Println(resp.Content)
 - `CollectStream(stream)` collects a stream into a unified `Response`.
 - `CollectStreamWithHandler(stream, onChunk)` collects and also handles each chunk.
 - `CollectStreamWithCallbacks(stream, callbacks)` adds content/reasoning/tool callbacks.
-- `Request.Thinking` controls thinking output (default enabled; set to disabled to turn off).
+- `Request.Thinking` controls thinking output when explicitly set; otherwise behavior is provider-specific.
 - `ListModels(ctx)` lists available models for the current provider (only some providers; fields are best‑effort).
 
 ### Streaming (minimal)
@@ -263,7 +263,7 @@ resp, err := client.Chat(ctx, &litellm.Request{
 _ = resp
 ```
 
-### Thinking output (default enabled)
+### Thinking output
 
 ```go
 resp, err := client.Chat(ctx, &litellm.Request{
@@ -368,11 +368,22 @@ func (p *MyProvider) Stream(ctx context.Context, req *litellm.Request) (litellm.
 }
 
 func init() {
-	litellm.RegisterProvider("myprovider", func(cfg litellm.ProviderConfig) litellm.Provider {
-		return &MyProvider{name: "myprovider", config: cfg}
+	_ = litellm.RegisterProviderWithDescriptor(litellm.ProviderDescriptor{
+		Name:       "myprovider",
+		DefaultURL: "https://api.example.com/v1",
+		Factory: func(cfg litellm.ProviderConfig) litellm.Provider {
+			return &MyProvider{name: "myprovider", config: cfg}
+		},
 	})
 }
 ```
+
+Custom provider contract:
+
+- `Chat` should validate basic request fields and return canonical fields when possible: `Response.Provider`, `Response.Model`, `Response.FinishReason`, and `Response.Usage`.
+- `Stream` should emit text deltas as `ChunkTypeContent`, reasoning deltas via `ReasoningContent`, tool deltas via `ToolCallDelta`, and finish with a chunk where `Done=true`.
+- `ToolCallDelta.Index` must stay stable for the same streamed tool call so the accumulator can rebuild complete tool calls.
+- Prefer returning `LiteLLMError` values, or errors wrapped by `WrapError`, so upper layers can classify auth, rate limit, timeout, model, and validation failures consistently.
 
 ## Supported Providers
 

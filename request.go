@@ -36,6 +36,15 @@ type (
 // ProviderFactory is used to register custom providers.
 type ProviderFactory func(config ProviderConfig) Provider
 
+// ProviderDescriptor describes a custom provider registration.
+// Keep this intentionally small: only static metadata needed by the client
+// runtime should live here.
+type ProviderDescriptor struct {
+	Name       string
+	DefaultURL string
+	Factory    ProviderFactory
+}
+
 // CacheControl type constants.
 const (
 	CacheTypeEphemeral  = "ephemeral"
