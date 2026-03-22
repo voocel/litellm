@@ -56,15 +56,15 @@ func main() {
 // Example 1: Basic Chat
 func basicChat(client *litellm.Client) {
 	request := &litellm.Request{
-		Model: "anthropic/claude-sonnet-4.5",
+		Model: "anthropic/claude-sonnet-4.6",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
-				Content: "What are the main benefits of renewable energy?",
+				Content: "Who are you?",
 			},
 		},
-		MaxTokens:   litellm.IntPtr(200),
-		Temperature: litellm.Float64Ptr(0.7),
+		MaxTokens:   litellm.IntPtr(2048),
+		Temperature: litellm.Float64Ptr(1),
 	}
 
 	ctx := context.Background()
@@ -74,6 +74,9 @@ func basicChat(client *litellm.Client) {
 		return
 	}
 
+	if response.ReasoningContent != "" {
+		fmt.Printf("Thinking:\n%s\n\n", response.ReasoningContent)
+	}
 	fmt.Printf("Response: %s\n", response.Content)
 	fmt.Printf("Usage: %d prompt + %d completion = %d total tokens\n",
 		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.TotalTokens)
@@ -163,15 +166,15 @@ Always explain the reasoning behind your recommendations and consider the broade
 // Example 2: Streaming Chat
 func streamingChat(client *litellm.Client) {
 	request := &litellm.Request{
-		Model: "claude-haiku-4-5-20251001",
+		Model: "anthropic/claude-sonnet-4.6",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
-				Content: "你是openai吧",
+				Content: "Who are you?",
 			},
 		},
 		MaxTokens:   litellm.IntPtr(2048),
-		Temperature: litellm.Float64Ptr(0.8),
+		Temperature: litellm.Float64Ptr(1),
 		Thinking:    litellm.NewThinkingEnabled(1024),
 	}
 

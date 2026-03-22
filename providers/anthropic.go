@@ -201,25 +201,11 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 		ToolChoice:    req.ToolChoice,
 	}
 
-	if thinking := normalizeThinking(req); thinking != nil {
-		if thinking.Type != "enabled" && thinking.Type != "disabled" {
-			return nil, fmt.Errorf("anthropic: thinking type must be enabled or disabled")
-		}
-		if thinking.Type == "enabled" && thinking.BudgetTokens == nil {
-			// Resolve from Level (e.g., "medium" → 8192) or fall back to default
-			if resolved := ResolveBudgetTokens(thinking); resolved != nil {
-				thinking.BudgetTokens = resolved
-			} else {
-				defaultBudget := 1024
-				if maxTokens > 0 && maxTokens < defaultBudget {
-					defaultBudget = maxTokens
-				}
-				thinking.BudgetTokens = &defaultBudget
-			}
-		}
-		// Anthropic API accepts "type" and "budget_tokens" only.
-		// Drop generic level to avoid invalid_params errors on strict gateways.
-		thinking.Level = ""
+	thinking, err := resolveAnthropicThinking(req, maxTokens)
+	if err != nil {
+		return nil, err
+	}
+	if thinking != nil {
 		anthropicReq.Thinking = thinking
 	}
 
@@ -255,6 +241,61 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 
 	p.setHeaders(httpReq, req)
 	return httpReq, nil
+}
+
+func resolveAnthropicThinking(req *Request, maxTokens int) (*ThinkingConfig, error) {
+	if req == nil {
+		return nil, nil
+	}
+
+	explicitThinking := req.Thinking != nil
+	if !explicitThinking {
+		if maxTokens < 1024 {
+			return nil, nil
+		}
+		if req.Temperature != nil && *req.Temperature != 1 {
+			return nil, nil
+		}
+	}
+
+	thinking := normalizeThinking(req)
+	if thinking == nil {
+		return nil, nil
+	}
+	if thinking.Type != "enabled" && thinking.Type != "disabled" {
+		return nil, fmt.Errorf("anthropic: thinking type must be enabled or disabled")
+	}
+	if thinking.Type == "disabled" {
+		return thinking, nil
+	}
+
+	if maxTokens < 1024 {
+		return nil, fmt.Errorf("anthropic: thinking requires max_tokens >= 1024, got %d", maxTokens)
+	}
+	if req.Temperature != nil && *req.Temperature != 1 {
+		return nil, fmt.Errorf("anthropic: temperature must be 1 when thinking is enabled, got %g", *req.Temperature)
+	}
+
+	if thinking.BudgetTokens == nil {
+		if resolved := ResolveBudgetTokens(thinking); resolved != nil {
+			thinking.BudgetTokens = resolved
+		} else {
+			defaultBudget := 1024
+			thinking.BudgetTokens = &defaultBudget
+		}
+	}
+	if thinking.BudgetTokens == nil {
+		return nil, fmt.Errorf("anthropic: thinking budget_tokens is required")
+	}
+	if *thinking.BudgetTokens < 1024 {
+		return nil, fmt.Errorf("anthropic: thinking budget_tokens must be >= 1024, got %d", *thinking.BudgetTokens)
+	}
+	if *thinking.BudgetTokens > maxTokens {
+		return nil, fmt.Errorf("anthropic: thinking budget_tokens must be <= max_tokens, got %d > %d", *thinking.BudgetTokens, maxTokens)
+	}
+
+	thinking.Level = ""
+	return thinking, nil
 }
 
 func (p *AnthropicProvider) convertToolParameters(tool Tool) (map[string]any, error) {

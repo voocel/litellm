@@ -84,7 +84,7 @@ func responsesAPI(client *litellm.Client) {
 
 // Example 1: Basic Chat
 func basicChat(client *litellm.Client) {
-	request := litellm.NewRequest("moonshotai/kimi-k2.5", "Who are you?",
+	request := litellm.NewRequest("gpt-5.4", "Who are you?",
 		litellm.WithMaxTokens(500),
 		litellm.WithTemperature(0.7),
 	)
@@ -116,7 +116,7 @@ func streamingChat(client *litellm.Client) {
 	request := &litellm.OpenAIResponsesRequest{
 		Model: "gpt-5.4",
 		Messages: []litellm.Message{
-			{Role: "user", Content: "你是什么模型 数据截止时间"},
+			{Role: "user", Content: "Who are you?"},
 		},
 		MaxOutputTokens:  litellm.IntPtr(2200),
 		ReasoningSummary: "auto", // Uncomment after org verification
