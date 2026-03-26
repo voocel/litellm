@@ -57,8 +57,7 @@ type responsesAPIRequest struct {
 	Model string `json:"model"`
 
 	// Input: can be string or array of input items
-	// For simplicity, we use array format; simple string input should be wrapped
-	Input []responsesAPIInputItem `json:"input,omitempty"`
+	Input any `json:"input,omitempty"`
 
 	// System instructions
 	Instructions string `json:"instructions,omitempty"`
@@ -293,7 +292,9 @@ func (p *OpenAIProvider) buildResponsesAPIRequest(req *OpenAIResponsesRequest) r
 	if instructions != "" {
 		responsesReq.Instructions = instructions
 	}
-	if inputItems := convertMessagesToResponsesInput(filteredMessages); len(inputItems) > 0 {
+	if inputText, ok := tryConvertMessagesToResponsesInputString(filteredMessages); ok {
+		responsesReq.Input = inputText
+	} else if inputItems := convertMessagesToResponsesInput(filteredMessages); len(inputItems) > 0 {
 		responsesReq.Input = inputItems
 	}
 
@@ -362,6 +363,28 @@ func (p *OpenAIProvider) buildResponsesAPIRequest(req *OpenAIResponsesRequest) r
 	return responsesReq
 }
 
+func tryConvertMessagesToResponsesInputString(messages []Message) (string, bool) {
+	if len(messages) != 1 {
+		return "", false
+	}
+
+	msg := messages[0]
+	if role := strings.ToLower(strings.TrimSpace(msg.Role)); role != "user" {
+		return "", false
+	}
+	if len(msg.ToolCalls) > 0 || msg.ToolCallID != "" || msg.CacheControl != nil || msg.IsError {
+		return "", false
+	}
+	if msg.Content == "" {
+		return "", false
+	}
+	if len(msg.Contents) > 0 {
+		return "", false
+	}
+
+	return msg.Content, true
+}
+
 // completeWithResponsesAPI uses OpenAI Responses API.
 func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *OpenAIResponsesRequest) (*Response, error) {
 	responsesReq := p.buildResponsesAPIRequest(req)
@@ -425,13 +448,17 @@ func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Open
 
 // extractResponsesOutput converts Responses API output into the common response format
 func (p *OpenAIProvider) extractResponsesOutput(responsesResp *responsesAPIResponse) (string, []MessageContent, []ToolCall, string) {
+	return extractResponsesOutputItems(responsesResp.Output, responsesResp.OutputText)
+}
+
+func extractResponsesOutputItems(output []responsesAPIOutputItem, outputText string) (string, []MessageContent, []ToolCall, string) {
 	var (
 		toolCalls        []ToolCall
 		reasoningContent string
 		messageContents  []MessageContent
 	)
 
-	for _, outputItem := range responsesResp.Output {
+	for _, outputItem := range output {
 		switch outputItem.Type {
 		case "message":
 			messageContents = append(messageContents, convertResponsesContentToMessageContents(outputItem.Content)...)
@@ -471,7 +498,7 @@ func (p *OpenAIProvider) extractResponsesOutput(responsesResp *responsesAPIRespo
 		}
 	}
 
-	content := responsesResp.OutputText
+	content := outputText
 	if text := joinMessageContentsText(messageContents); text != "" {
 		content = text
 	}

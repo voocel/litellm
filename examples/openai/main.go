@@ -26,15 +26,20 @@ func main() {
 	fmt.Println("OpenAI Examples - From Simple to Complex")
 	fmt.Println("=====================================")
 
-	//Example 1: Basic Chat
-	fmt.Println("\n1. Basic Chat Example")
-	fmt.Println("---------------------")
-	basicChat(client)
+	// Example 1: Basic Responses API
+	fmt.Println("\n1. Basic Reasoning Example")
+	fmt.Println("--------------------------")
+	basicReasoning(client)
 
 	// Example 2: Streaming Chat
-	fmt.Println("\n2. Streaming Chat Example")
-	fmt.Println("-------------------------")
+	fmt.Println("\n2. Streaming Reasoning Example")
+	fmt.Println("------------------------------")
 	streamingChat(client)
+
+	// Example 3: Chat Completions reasoning probe
+	fmt.Println("\n3. Chat Completions Reasoning Probe")
+	fmt.Println("-----------------------------------")
+	chatCompletionsReasoning(client)
 
 	// Example 3: Function/Tool Calling
 	fmt.Println("\n3. Function/Tool Calling Example")
@@ -45,54 +50,28 @@ func main() {
 	fmt.Println("\n4. JSON Schema Response Format Example")
 	fmt.Println("--------------------------------------")
 	jsonSchemaExample(client)
-
-	//Example 5: Responses API
-	fmt.Println("\n5. Responses API Example")
-	fmt.Println("------------------------")
-	responsesAPI(client)
 }
 
-// Example 5: Responses API (for detailed reasoning)
-func responsesAPI(client *litellm.Client) {
+// Example 1: Basic reasoning via Responses API.
+// 这里只打印官方 reasoning 字段，不通过提示词诱导模型把“思考摘要”写进正文。
+func basicReasoning(client *litellm.Client) {
 	request := &litellm.OpenAIResponsesRequest{
-		Model: "o3-mini",
+		Model: "gpt-5.4",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
-				Content: "Solve this step by step: A train travels at 80 km/h for 2.5 hours, then at 120 km/h for 1.5 hours. What is the average speed?",
+				Content: "思考一下为什么天空看起来是蓝色的？",
 			},
 		},
 		ReasoningEffort:  "high",
-		ReasoningSummary: "auto",
-		MaxOutputTokens:  litellm.IntPtr(800),
+		ReasoningSummary: "detailed",
+		MaxOutputTokens:  litellm.IntPtr(2200),
 	}
 
 	ctx := context.Background()
 	response, err := client.Responses(ctx, request)
 	if err != nil {
-		log.Printf("Responses API failed: %v", err)
-		return
-	}
-
-	fmt.Printf("Response: %s\n", response.Content)
-	if response.ReasoningContent != "" {
-		fmt.Printf("Reasoning: %s\n", response.ReasoningContent)
-	}
-	fmt.Printf("Usage: %d prompt + %d completion (%d reasoning) = %d total tokens\n",
-		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.ReasoningTokens, response.Usage.TotalTokens)
-}
-
-// Example 1: Basic Chat
-func basicChat(client *litellm.Client) {
-	request := litellm.NewRequest("gpt-5.4", "Who are you?",
-		litellm.WithMaxTokens(500),
-		litellm.WithTemperature(0.7),
-	)
-
-	ctx := context.Background()
-	response, err := client.Chat(ctx, request)
-	if err != nil {
-		log.Printf("Basic chat failed: %v", err)
+		log.Printf("Basic reasoning failed: %v", err)
 		return
 	}
 
@@ -103,7 +82,6 @@ func basicChat(client *litellm.Client) {
 	fmt.Printf("Usage: %d prompt + %d completion (%d reasoning) = %d total tokens\n",
 		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.ReasoningTokens, response.Usage.TotalTokens)
 
-	// Calculate cost
 	if cost, err := litellm.CalculateCostForResponse(response); err == nil {
 		fmt.Printf("Cost: $%.6f (input: $%.6f, output: $%.6f)\n", cost.TotalCost, cost.InputCost, cost.OutputCost)
 	} else {
@@ -111,15 +89,20 @@ func basicChat(client *litellm.Client) {
 	}
 }
 
-// Example 2: Streaming Chat with Reasoning Models (gpt-5, o1, o3, o4)
+// Example 2: Streaming reasoning via Responses API.
+// OnReasoning 只消费官方 reasoning 流事件，不依赖正文内容。
 func streamingChat(client *litellm.Client) {
 	request := &litellm.OpenAIResponsesRequest{
 		Model: "gpt-5.4",
 		Messages: []litellm.Message{
-			{Role: "user", Content: "Who are you?"},
+			{
+				Role:    "user",
+				Content: "一个人先以每小时 80 公里行驶 2.5 小时，再以每小时 120 公里行驶 1.5 小时。平均速度是多少？",
+			},
 		},
+		ReasoningEffort:  "high",
 		MaxOutputTokens:  litellm.IntPtr(2200),
-		ReasoningSummary: "auto", // Uncomment after org verification
+		ReasoningSummary: "auto",
 	}
 
 	stream, err := client.ResponsesStream(context.Background(), request)
@@ -151,7 +134,7 @@ func streamingChat(client *litellm.Client) {
 		},
 		OnReasoning: func(content string) {
 			if content != "" {
-				printPrefix("think: ", &thinkingPrinted)
+				printPrefix("Reasoning: ", &thinkingPrinted)
 				fmt.Print(content)
 			}
 		},
@@ -172,6 +155,29 @@ func streamingChat(client *litellm.Client) {
 		}
 		fmt.Printf("  Total Tokens:      %d\n", response.Usage.TotalTokens)
 	}
+}
+
+// Example 3: Chat Completions reasoning probe.
+// 这个例子用于验证 Chat Completions 是否返回可见的 reasoning 字段。
+func chatCompletionsReasoning(client *litellm.Client) {
+	request := litellm.NewRequest("gpt-5.4", "一个人先以每小时 80 公里行驶 2.5 小时，再以每小时 120 公里行驶 1.5 小时。平均速度是多少？",
+		litellm.WithMaxTokens(2200),
+		litellm.WithThinking("high"),
+	)
+
+	ctx := context.Background()
+	response, err := client.Chat(ctx, request)
+	if err != nil {
+		log.Printf("Chat Completions probe failed: %v", err)
+		return
+	}
+
+	if response.ReasoningContent != "" {
+		fmt.Printf("Reasoning: %s\n", response.ReasoningContent)
+	}
+	fmt.Printf("Response: %s\n", response.Content)
+	fmt.Printf("Usage: %d prompt + %d completion (%d reasoning) = %d total tokens\n",
+		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.ReasoningTokens, response.Usage.TotalTokens)
 }
 
 // Example 3: Function/Tool Calling
