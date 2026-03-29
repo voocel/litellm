@@ -53,14 +53,13 @@ func main() {
 }
 
 // Example 1: Basic reasoning via Responses API.
-// 这里只打印官方 reasoning 字段，不通过提示词诱导模型把“思考摘要”写进正文。
 func basicReasoning(client *litellm.Client) {
 	request := &litellm.OpenAIResponsesRequest{
 		Model: "gpt-5.4",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
-				Content: "思考一下为什么天空看起来是蓝色的？",
+				Content: "A person first drives at 80 km/h for 2.5 hours, then at 120 km/h for 1.5 hours. What is the average speed?",
 			},
 		},
 		ReasoningEffort:  "high",
@@ -90,14 +89,13 @@ func basicReasoning(client *litellm.Client) {
 }
 
 // Example 2: Streaming reasoning via Responses API.
-// OnReasoning 只消费官方 reasoning 流事件，不依赖正文内容。
 func streamingChat(client *litellm.Client) {
 	request := &litellm.OpenAIResponsesRequest{
 		Model: "gpt-5.4",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
-				Content: "一个人先以每小时 80 公里行驶 2.5 小时，再以每小时 120 公里行驶 1.5 小时。平均速度是多少？",
+				Content: "A person first drives at 80 km/h for 2.5 hours, then at 120 km/h for 1.5 hours. What is the average speed?",
 			},
 		},
 		ReasoningEffort:  "high",
@@ -158,9 +156,8 @@ func streamingChat(client *litellm.Client) {
 }
 
 // Example 3: Chat Completions reasoning probe.
-// 这个例子用于验证 Chat Completions 是否返回可见的 reasoning 字段。
 func chatCompletionsReasoning(client *litellm.Client) {
-	request := litellm.NewRequest("gpt-5.4", "一个人先以每小时 80 公里行驶 2.5 小时，再以每小时 120 公里行驶 1.5 小时。平均速度是多少？",
+	request := litellm.NewRequest("gpt-5.4", "A person first drives at 80 km/h for 2.5 hours, then at 120 km/h for 1.5 hours. What is the average speed?",
 		litellm.WithMaxTokens(2200),
 		litellm.WithThinking("high"),
 	)

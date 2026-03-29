@@ -57,7 +57,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 		Usage: Usage{
 			PromptTokens:             anthropicResp.Usage.InputTokens,
 			CompletionTokens:         anthropicResp.Usage.OutputTokens,
-			TotalTokens:              anthropicResp.Usage.InputTokens + anthropicResp.Usage.OutputTokens,
+			TotalTokens:              anthropicResp.Usage.InputTokens + anthropicResp.Usage.OutputTokens + anthropicResp.Usage.CacheReadInputTokens + anthropicResp.Usage.CacheCreationInputTokens,
 			CacheCreationInputTokens: anthropicResp.Usage.CacheCreationInputTokens,
 			CacheReadInputTokens:     anthropicResp.Usage.CacheReadInputTokens,
 		},
@@ -630,7 +630,7 @@ func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
 					r.usage = &Usage{
 						PromptTokens:             chunk.Message.Usage.InputTokens,
 						CompletionTokens:         chunk.Message.Usage.OutputTokens,
-						TotalTokens:              chunk.Message.Usage.InputTokens + chunk.Message.Usage.OutputTokens,
+						TotalTokens:              chunk.Message.Usage.InputTokens + chunk.Message.Usage.OutputTokens + chunk.Message.Usage.CacheReadInputTokens + chunk.Message.Usage.CacheCreationInputTokens,
 						CacheCreationInputTokens: chunk.Message.Usage.CacheCreationInputTokens,
 						CacheReadInputTokens:     chunk.Message.Usage.CacheReadInputTokens,
 					}
@@ -657,7 +657,7 @@ func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
 				if chunk.Usage.CacheReadInputTokens > 0 {
 					r.usage.CacheReadInputTokens = chunk.Usage.CacheReadInputTokens
 				}
-				r.usage.TotalTokens = r.usage.PromptTokens + r.usage.CompletionTokens
+				r.usage.TotalTokens = r.usage.PromptTokens + r.usage.CompletionTokens + r.usage.CacheReadInputTokens + r.usage.CacheCreationInputTokens
 			}
 			// Return finish reason
 			if chunk.Delta != nil && chunk.Delta.StopReason != "" {
