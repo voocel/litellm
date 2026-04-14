@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/voocel/litellm/providers"
 )
 
 // ---------------------------------------------------------------------------
@@ -273,6 +275,15 @@ func CollectStreamWithHandler(stream StreamReader, onChunk func(*StreamChunk)) (
 	}
 
 	resp.ToolCalls = toolAcc.Build()
+
+	// A stream that ends with a valid finish reason (stop, end_turn, etc.)
+	// but no output is a legitimate model decision — not an error.
+	// Only treat it as a transient network issue when the stream produced
+	// zero output AND has no finish reason (i.e. the stream was truncated).
+	if resp.Content == "" && resp.ReasoningContent == "" && len(resp.ToolCalls) == 0 && resp.FinishReason == "" {
+		return nil, providers.NewNetworkError(resp.Provider,
+			"stream completed but produced no output (0 content, 0 reasoning, 0 tool calls, no finish reason)", nil)
+	}
 
 	return &resp, nil
 }
