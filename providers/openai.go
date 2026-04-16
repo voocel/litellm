@@ -528,7 +528,7 @@ func (r *openaiStreamReader) Next() (*StreamChunk, error) {
 	}
 
 	if err := r.scanner.Err(); err != nil {
-		return nil, fmt.Errorf("openai: stream read error: %w", err)
+		return nil, NewNetworkError(r.provider, "stream read error: "+err.Error(), err)
 	}
 
 	r.done = true

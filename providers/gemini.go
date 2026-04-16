@@ -674,7 +674,7 @@ func (r *geminiStreamReader) Next() (*StreamChunk, error) {
 	}
 
 	if err := r.scanner.Err(); err != nil {
-		return nil, fmt.Errorf("gemini: stream read error: %w", err)
+		return nil, NewNetworkError(r.provider, "stream read error: "+err.Error(), err)
 	}
 	if strings.TrimSpace(r.pending) != "" {
 		return nil, fmt.Errorf("gemini: incomplete JSON stream")
