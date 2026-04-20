@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/voocel/litellm/providers"
 )
 
 // Client is a minimal, predictable client bound to a single Provider.
@@ -137,6 +139,9 @@ func (c *Client) Chat(ctx context.Context, req *Request) (*Response, error) {
 
 	reqCopy := *req
 	c.applyDefaults(&reqCopy)
+	if err := validateRequestMessages(c.provider.Name(), reqCopy.Messages); err != nil {
+		return nil, err
+	}
 
 	c.debugRequest(&reqCopy, false)
 	start := time.Now()
@@ -147,6 +152,9 @@ func (c *Client) Chat(ctx context.Context, req *Request) (*Response, error) {
 
 	if err != nil {
 		return nil, WrapError(err, c.provider.Name())
+	}
+	if err := validateToolCalls(c.provider.Name(), resp.ToolCalls); err != nil {
+		return nil, err
 	}
 	return resp, nil
 }
@@ -165,6 +173,9 @@ func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error)
 
 	reqCopy := *req
 	c.applyDefaults(&reqCopy)
+	if err := validateRequestMessages(c.provider.Name(), reqCopy.Messages); err != nil {
+		return nil, err
+	}
 
 	c.debugRequest(&reqCopy, true)
 	start := time.Now()
@@ -213,6 +224,9 @@ func (c *Client) Responses(ctx context.Context, req *OpenAIResponsesRequest) (*R
 
 	reqCopy := *req
 	c.applyResponsesDefaults(&reqCopy)
+	if err := validateRequestMessages(c.provider.Name(), reqCopy.Messages); err != nil {
+		return nil, err
+	}
 
 	c.debugResponsesRequest(&reqCopy)
 	start := time.Now()
@@ -231,6 +245,9 @@ func (c *Client) Responses(ctx context.Context, req *OpenAIResponsesRequest) (*R
 	if err != nil {
 		return nil, WrapError(err, c.provider.Name())
 	}
+	if err := validateToolCalls(c.provider.Name(), resp.ToolCalls); err != nil {
+		return nil, err
+	}
 	return resp, nil
 }
 
@@ -248,6 +265,9 @@ func (c *Client) ResponsesStream(ctx context.Context, req *OpenAIResponsesReques
 
 	reqCopy := *req
 	c.applyResponsesDefaults(&reqCopy)
+	if err := validateRequestMessages(c.provider.Name(), reqCopy.Messages); err != nil {
+		return nil, err
+	}
 
 	c.debugResponsesRequest(&reqCopy)
 	start := time.Now()
@@ -384,4 +404,58 @@ func (c *Client) debugResponsesRequest(req *OpenAIResponsesRequest) {
 	if req.ReasoningEffort != "" {
 		c.debugLog("  reasoning_effort=%s", req.ReasoningEffort)
 	}
+}
+
+func validateToolCalls(provider string, toolCalls []ToolCall) error {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]string, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		if toolCall.ID == "" {
+			continue
+		}
+		if prev, ok := seen[toolCall.ID]; ok {
+			message := fmt.Sprintf("invalid tool calls: duplicate tool_call.id %q", toolCall.ID)
+			if prev != "" && toolCall.Function.Name != "" && prev != toolCall.Function.Name {
+				message = fmt.Sprintf("%s reused by tools %q and %q", message, prev, toolCall.Function.Name)
+			}
+			if provider != "" {
+				return NewValidationError(provider, message)
+			}
+			return NewError(ErrorTypeValidation, message)
+		}
+		seen[toolCall.ID] = toolCall.Function.Name
+	}
+
+	return nil
+}
+
+func validateRequestMessages(provider string, messages []Message) error {
+	for i, msg := range messages {
+		if msg.Role != "assistant" || msg.IsError || len(msg.ToolCalls) == 0 {
+			continue
+		}
+
+		seen := make(map[string]string, len(msg.ToolCalls))
+		for _, toolCall := range msg.ToolCalls {
+			normalizedID := providers.NormalizeToolCallID(toolCall.ID)
+			if normalizedID == "" {
+				continue
+			}
+			if prev, ok := seen[normalizedID]; ok {
+				message := fmt.Sprintf("invalid request messages: assistant message %d has duplicate tool_call.id %q", i, normalizedID)
+				if prev != "" && toolCall.Function.Name != "" && prev != toolCall.Function.Name {
+					message = fmt.Sprintf("%s reused by tools %q and %q", message, prev, toolCall.Function.Name)
+				}
+				if provider != "" {
+					return NewValidationError(provider, message)
+				}
+				return NewError(ErrorTypeValidation, message)
+			}
+			seen[normalizedID] = toolCall.Function.Name
+		}
+	}
+	return nil
 }

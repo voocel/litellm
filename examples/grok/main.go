@@ -38,7 +38,7 @@ func main() {
 
 // Example 1: Basic Chat
 func basicChat(client *litellm.Client) {
-	request := litellm.NewRequest("grok-3", "Explain what xAI's Grok is in simple terms.",
+	request := litellm.NewRequest("grok-4.20-0309-reasoning", "Explain what xAI's Grok is in simple terms.",
 		litellm.WithMaxTokens(500),
 	)
 

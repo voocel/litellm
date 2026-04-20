@@ -115,9 +115,9 @@ type StreamCallbacks struct {
 	// Lifecycle callbacks — bracket start/end of each content block.
 	// Transitions are detected automatically from chunk types.
 	OnContentStart   func()
-	OnContentEnd     func(content string)     // content = full accumulated block
+	OnContentEnd     func(content string) // content = full accumulated block
 	OnReasoningStart func()
-	OnReasoningEnd   func(content string)     // content = full accumulated reasoning
+	OnReasoningEnd   func(content string)       // content = full accumulated reasoning
 	OnToolCallStart  func(delta *ToolCallDelta) // carries ID and FunctionName
 	OnToolCallEnd    func(call ToolCall)        // carries complete ToolCall
 }
@@ -275,6 +275,9 @@ func CollectStreamWithHandler(stream StreamReader, onChunk func(*StreamChunk)) (
 	}
 
 	resp.ToolCalls = toolAcc.Build()
+	if err := validateToolCalls(resp.Provider, resp.ToolCalls); err != nil {
+		return nil, err
+	}
 
 	// A stream that ends with a valid finish reason (stop, end_turn, etc.)
 	// but no output is a legitimate model decision — not an error.

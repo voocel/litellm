@@ -534,10 +534,10 @@ func (p *OpenAICompatProvider) applyResponseFormat(body map[string]any, req *Req
 
 // compatResponse is a generic response envelope for OpenAI-compatible APIs.
 type compatResponse struct {
-	ID      string            `json:"id"`
-	Model   string            `json:"model"`
-	Choices []compatChoice    `json:"choices"`
-	Usage   json.RawMessage   `json:"usage,omitempty"`
+	ID      string          `json:"id"`
+	Model   string          `json:"model"`
+	Choices []compatChoice  `json:"choices"`
+	Usage   json.RawMessage `json:"usage,omitempty"`
 }
 
 type compatChoice struct {
