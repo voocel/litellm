@@ -187,7 +187,10 @@ func (p *BedrockProvider) Chat(ctx context.Context, req *Request) (*Response, er
 		return nil, err
 	}
 
-	bedrockReq := p.buildRequest(req)
+	bedrockReq, err := p.buildRequest(req)
+	if err != nil {
+		return nil, err
+	}
 
 	body, err := json.Marshal(bedrockReq)
 	if err != nil {
@@ -236,7 +239,10 @@ func (p *BedrockProvider) Stream(ctx context.Context, req *Request) (StreamReade
 		return nil, err
 	}
 
-	bedrockReq := p.buildRequest(req)
+	bedrockReq, err := p.buildRequest(req)
+	if err != nil {
+		return nil, err
+	}
 
 	body, err := json.Marshal(bedrockReq)
 	if err != nil {
@@ -338,12 +344,16 @@ func (p *BedrockProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	return models, nil
 }
 
-func (p *BedrockProvider) buildRequest(req *Request) *bedrockRequest {
+func (p *BedrockProvider) buildRequest(req *Request) (*bedrockRequest, error) {
+	prepared, err := PrepareMessages(req.Messages)
+	if err != nil {
+		return nil, fmt.Errorf("bedrock: %w", err)
+	}
 	bedrockReq := &bedrockRequest{
-		Messages: make([]bedrockMessage, 0, len(req.Messages)),
+		Messages: make([]bedrockMessage, 0, len(prepared)),
 	}
 
-	for _, msg := range req.Messages {
+	for _, msg := range prepared {
 		if msg.Role == "system" {
 			bedrockReq.System = append(bedrockReq.System, bedrockSystemContent{Text: msg.Content})
 			continue
@@ -355,13 +365,18 @@ func (p *BedrockProvider) buildRequest(req *Request) *bedrockRequest {
 		}
 
 		if msg.Role == "tool" && msg.ToolCallID != "" {
+			// Bedrock Converse wraps tool results in a user message carrying a
+			// toolResult block. Status is "error" for failures, omitted otherwise.
+			// https://docs.aws.amazon.com/bedrock/latest/userguide/tool-use.html
+			toolResult := &bedrockToolResult{
+				ToolUseID: msg.ToolCallID,
+				Content:   []bedrockContent{{Text: msg.Content}},
+			}
+			if msg.IsError {
+				toolResult.Status = "error"
+			}
 			bedrockMsg.Role = "user"
-			bedrockMsg.Content = append(bedrockMsg.Content, bedrockContent{
-				ToolResult: &bedrockToolResult{
-					ToolUseID: msg.ToolCallID,
-					Content:   []bedrockContent{{Text: msg.Content}},
-				},
-			})
+			bedrockMsg.Content = append(bedrockMsg.Content, bedrockContent{ToolResult: toolResult})
 		} else if len(msg.Contents) > 0 && msg.ToolCallID == "" {
 			for _, c := range msg.Contents {
 				switch c.Type {
@@ -439,7 +454,7 @@ func (p *BedrockProvider) buildRequest(req *Request) *bedrockRequest {
 		}
 	}
 
-	return bedrockReq
+	return bedrockReq, nil
 }
 
 func (p *BedrockProvider) parseResponse(resp *bedrockResponse, model string) *Response {

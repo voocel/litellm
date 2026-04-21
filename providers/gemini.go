@@ -120,90 +120,11 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 		}
 	}
 
-	// Handle system messages and regular messages
-	var systemMessage string
-	for _, msg := range req.Messages {
-		if msg.Role == "system" {
-			// Gemini uses systemInstruction for system messages
-			systemMessage = msg.Content
-			continue
-		}
-
-		content := geminiContent{
-			Role:  p.convertRole(msg.Role),
-			Parts: []geminiPart{},
-		}
-
-		// Multi-content (text + images): prefer Contents over Content.
-		if len(msg.Contents) > 0 && msg.ToolCallID == "" {
-			for _, c := range msg.Contents {
-				switch c.Type {
-				case "text", "", "input_text":
-					if c.Text != "" {
-						content.Parts = append(content.Parts, geminiPart{Text: c.Text})
-					}
-				case "image_url", "input_image":
-					if c.ImageURL == nil || c.ImageURL.URL == "" {
-						continue
-					}
-					if mime, data, ok := parseDataURL(c.ImageURL.URL); ok {
-						content.Parts = append(content.Parts, geminiPart{
-							InlineData: &geminiInlineData{MimeType: mime, Data: data},
-						})
-					} else {
-						content.Parts = append(content.Parts, geminiPart{
-							FileData: &geminiFileData{MimeType: inferMimeType(c.ImageURL.URL), FileURI: c.ImageURL.URL},
-						})
-					}
-				}
-			}
-		} else if msg.Content != "" {
-			content.Parts = append(content.Parts, geminiPart{Text: msg.Content})
-		}
-
-		// Handle tool calls
-		if len(msg.ToolCalls) > 0 {
-			for _, toolCall := range msg.ToolCalls {
-				var args map[string]any
-				if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-					return nil, fmt.Errorf("gemini: invalid tool call arguments for '%s': %w", toolCall.Function.Name, err)
-				}
-				content.Parts = append(content.Parts, geminiPart{
-					FunctionCall: &geminiFunctionCall{
-						Name: toolCall.Function.Name,
-						Args: args,
-					},
-				})
-			}
-		}
-
-		// Handle tool responses
-		if msg.ToolCallID != "" {
-			var response map[string]any
-			if err := json.Unmarshal([]byte(msg.Content), &response); err != nil {
-				return nil, fmt.Errorf("gemini: invalid tool response content (expected JSON): %w", err)
-			}
-
-			// Get tool name from context or generate one
-			toolName := "function_result"
-			if req.Extra != nil {
-				if name, ok := req.Extra["tool_name"].(string); ok {
-					toolName = name
-				}
-			}
-
-			content.Parts = []geminiPart{{
-				FunctionResponse: &geminiFunctionResponse{
-					Name:     toolName,
-					Response: response,
-				},
-			}}
-		}
-
-		if len(content.Parts) > 0 {
-			geminiReq.Contents = append(geminiReq.Contents, content)
-		}
+	contents, systemMessage, err := p.buildContents(req)
+	if err != nil {
+		return nil, err
 	}
+	geminiReq.Contents = contents
 
 	if systemMessage != "" {
 		geminiReq.SystemInstruction = &geminiContent{
@@ -310,8 +231,12 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 
 			if part.FunctionCall != nil {
 				args, _ := json.Marshal(part.FunctionCall.Args)
+				id := part.FunctionCall.ID
+				if id == "" {
+					id = p.generateToolCallID()
+				}
 				response.ToolCalls = append(response.ToolCalls, ToolCall{
-					ID:   p.generateToolCallID(),
+					ID:   id,
 					Type: "function",
 					Function: FunctionCall{
 						Name:      part.FunctionCall.Name,
@@ -364,49 +289,11 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		}
 	}
 
-	// Handle messages for streaming
-	var systemMessage string
-	for _, msg := range req.Messages {
-		if msg.Role == "system" {
-			systemMessage = msg.Content
-			continue
-		}
-
-		content := geminiContent{
-			Role:  p.convertRole(msg.Role),
-			Parts: []geminiPart{},
-		}
-
-		if len(msg.Contents) > 0 && msg.ToolCallID == "" {
-			for _, c := range msg.Contents {
-				switch c.Type {
-				case "text", "", "input_text":
-					if c.Text != "" {
-						content.Parts = append(content.Parts, geminiPart{Text: c.Text})
-					}
-				case "image_url", "input_image":
-					if c.ImageURL == nil || c.ImageURL.URL == "" {
-						continue
-					}
-					if mime, data, ok := parseDataURL(c.ImageURL.URL); ok {
-						content.Parts = append(content.Parts, geminiPart{
-							InlineData: &geminiInlineData{MimeType: mime, Data: data},
-						})
-					} else {
-						content.Parts = append(content.Parts, geminiPart{
-							FileData: &geminiFileData{MimeType: inferMimeType(c.ImageURL.URL), FileURI: c.ImageURL.URL},
-						})
-					}
-				}
-			}
-		} else if msg.Content != "" {
-			content.Parts = append(content.Parts, geminiPart{Text: msg.Content})
-		}
-
-		if len(content.Parts) > 0 {
-			geminiReq.Contents = append(geminiReq.Contents, content)
-		}
+	contents, systemMessage, err := p.buildContents(req)
+	if err != nil {
+		return nil, err
 	}
+	geminiReq.Contents = contents
 
 	if systemMessage != "" {
 		geminiReq.SystemInstruction = &geminiContent{
@@ -449,6 +336,7 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		provider:         "gemini",
 		model:            req.Model,
 		includeReasoning: includeReasoning,
+		toolCallIndexes:  make(map[string]int),
 	}, nil
 }
 
@@ -504,6 +392,118 @@ func (p *GeminiProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	return models, nil
 }
 
+// buildContents translates canonical messages into Gemini's Contents array
+// plus a system-instruction string. Used by both Chat and Stream so the two
+// code paths cannot drift on tool-call / tool-response handling.
+//
+// Gemini uses the same request body schema for generateContent and
+// streamGenerateContent — see https://ai.google.dev/api/rest/v1beta/models/streamGenerateContent
+func (p *GeminiProvider) buildContents(req *Request) ([]geminiContent, string, error) {
+	prepared, err := PrepareMessages(req.Messages)
+	if err != nil {
+		return nil, "", fmt.Errorf("gemini: %w", err)
+	}
+
+	contents := make([]geminiContent, 0, len(prepared))
+	// callNames binds a tool call id to its function name so tool-result
+	// messages can emit the correct functionResponse.name (Gemini docs
+	// recommend echoing both id and name). We learn the mapping from the
+	// assistant tool_calls we emit earlier in this same message stream.
+	callNames := make(map[string]string)
+	var systemMessage string
+
+	for _, msg := range prepared {
+		if msg.Role == "system" {
+			systemMessage = msg.Content
+			continue
+		}
+
+		content := geminiContent{
+			Role:  p.convertRole(msg.Role),
+			Parts: []geminiPart{},
+		}
+
+		// Multi-content (text + images) take precedence over Content — but not
+		// for tool results, which must emit a functionResponse part instead.
+		if len(msg.Contents) > 0 && msg.ToolCallID == "" {
+			for _, c := range msg.Contents {
+				switch c.Type {
+				case "text", "", "input_text":
+					if c.Text != "" {
+						content.Parts = append(content.Parts, geminiPart{Text: c.Text})
+					}
+				case "image_url", "input_image":
+					if c.ImageURL == nil || c.ImageURL.URL == "" {
+						continue
+					}
+					if mime, data, ok := parseDataURL(c.ImageURL.URL); ok {
+						content.Parts = append(content.Parts, geminiPart{
+							InlineData: &geminiInlineData{MimeType: mime, Data: data},
+						})
+					} else {
+						content.Parts = append(content.Parts, geminiPart{
+							FileData: &geminiFileData{MimeType: inferMimeType(c.ImageURL.URL), FileURI: c.ImageURL.URL},
+						})
+					}
+				}
+			}
+		} else if msg.Content != "" && msg.ToolCallID == "" {
+			content.Parts = append(content.Parts, geminiPart{Text: msg.Content})
+		}
+
+		// Assistant tool_calls → functionCall parts (id echoed, name required)
+		if len(msg.ToolCalls) > 0 {
+			for _, toolCall := range msg.ToolCalls {
+				var args map[string]any
+				if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+					return nil, "", fmt.Errorf("gemini: invalid tool call arguments for '%s': %w", toolCall.Function.Name, err)
+				}
+				callNames[toolCall.ID] = toolCall.Function.Name
+				content.Parts = append(content.Parts, geminiPart{
+					FunctionCall: &geminiFunctionCall{
+						ID:   toolCall.ID,
+						Name: toolCall.Function.Name,
+						Args: args,
+					},
+				})
+			}
+		}
+
+		// Tool role → functionResponse part: echo id + name for correlation.
+		if msg.ToolCallID != "" {
+			response := decodeGeminiToolResponse(msg)
+
+			toolName := callNames[msg.ToolCallID]
+			if toolName == "" {
+				// Fallback only when id→name is unknown (e.g. tool result sent
+				// without its matching assistant turn in the same request).
+				if req.Extra != nil {
+					if name, ok := req.Extra["tool_name"].(string); ok && name != "" {
+						toolName = name
+					}
+				}
+				if toolName == "" {
+					toolName = "function_result"
+				}
+			}
+
+			content.Parts = []geminiPart{{
+				FunctionResponse: &geminiFunctionResponse{
+					ID:       msg.ToolCallID,
+					Name:     toolName,
+					Response: response,
+				},
+			}}
+		}
+
+		if len(content.Parts) > 0 {
+			contents = append(contents, content)
+		}
+	}
+
+	return contents, systemMessage, nil
+}
+
 // convertRole converts standard roles to Gemini roles
 // Gemini only supports "user" and "model" roles
 // Tool/function responses should use "user" role with functionResponse part
@@ -517,6 +517,29 @@ func (p *GeminiProvider) convertRole(role string) string {
 	default:
 		return "user"
 	}
+}
+
+// decodeGeminiToolResponse converts a canonical tool-result message into the
+// map form Gemini's functionResponse expects. Gemini requires a JSON object;
+// when Content is not valid JSON (e.g. a plain string from OpenAI-style tool
+// results, or the synthetic error produced by PrepareMessages for orphaned
+// tool calls) we wrap it under a single key so the request still validates.
+func decodeGeminiToolResponse(msg Message) map[string]any {
+	if msg.Content == "" {
+		if msg.IsError {
+			return map[string]any{"error": "tool execution failed"}
+		}
+		return map[string]any{}
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(msg.Content), &obj); err == nil && obj != nil {
+		return obj
+	}
+	key := "result"
+	if msg.IsError {
+		key = "error"
+	}
+	return map[string]any{key: msg.Content}
 }
 
 // generateToolCallID generates a unique tool call ID
@@ -609,7 +632,8 @@ type geminiStreamReader struct {
 	pending          string
 	queue            []geminiStreamResponse
 	usage            *Usage // Accumulate usage from streaming response
-	toolCallIndex    int    // incrementing index for parallel tool calls
+	toolCallIndex    int    // next index for unseen tool calls
+	toolCallIndexes  map[string]int
 }
 
 func (r *geminiStreamReader) Next() (*StreamChunk, error) {
@@ -724,14 +748,26 @@ func (r *geminiStreamReader) processResponse(streamResp geminiStreamResponse) (*
 			if part.FunctionCall != nil {
 				streamChunk.Type = "tool_call_delta"
 				args, _ := json.Marshal(part.FunctionCall.Args)
+				id := part.FunctionCall.ID
+				index := r.toolCallIndex
+				if id != "" {
+					if existing, ok := r.toolCallIndexes[id]; ok {
+						index = existing
+					} else {
+						r.toolCallIndexes[id] = index
+						r.toolCallIndex++
+					}
+				} else {
+					id = fmt.Sprintf("call_%d", time.Now().UnixNano())
+					r.toolCallIndex++
+				}
 				streamChunk.ToolCallDelta = &ToolCallDelta{
-					Index:          r.toolCallIndex,
-					ID:             fmt.Sprintf("call_%d", time.Now().UnixNano()),
+					Index:          index,
+					ID:             id,
 					Type:           "function",
 					FunctionName:   part.FunctionCall.Name,
 					ArgumentsDelta: string(args),
 				}
-				r.toolCallIndex++
 				return streamChunk, nil
 			}
 		}
@@ -802,12 +838,20 @@ type geminiFileData struct {
 	FileURI  string `json:"fileUri"`
 }
 
+// geminiFunctionCall carries the model's tool invocation. Gemini 3+ emits a
+// unique per-call id; earlier models omit it. See:
+// https://ai.google.dev/gemini-api/docs/function-calling
 type geminiFunctionCall struct {
+	ID   string         `json:"id,omitempty"`
 	Name string         `json:"name"`
 	Args map[string]any `json:"args"`
 }
 
+// geminiFunctionResponse returns a tool result to the model. When the original
+// functionCall carried an id, the response must echo it so multi-tool parallel
+// calls can be correlated.
 type geminiFunctionResponse struct {
+	ID       string         `json:"id,omitempty"`
 	Name     string         `json:"name"`
 	Response map[string]any `json:"response"`
 }

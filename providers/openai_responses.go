@@ -134,12 +134,21 @@ type responsesAPIReasoning struct {
 	Summary string `json:"summary,omitempty"` // auto, concise, detailed
 }
 
-// responsesAPIInputItem represents an input item in Responses API
+// responsesAPIInputItem represents an input item in Responses API.
+// Per https://platform.openai.com/docs/api-reference/responses input items are
+// a tagged union keyed on Type:
+//   - "message"              → Role + Content
+//   - "function_call"        → CallID + Name + Arguments
+//   - "function_call_output" → CallID + Output
 type responsesAPIInputItem struct {
-	Type    string                    `json:"type"`
-	Role    string                    `json:"role,omitempty"`
-	Content []responsesAPIContentItem `json:"content,omitempty"`
-	ID      string                    `json:"id,omitempty"`
+	Type      string                    `json:"type"`
+	Role      string                    `json:"role,omitempty"`
+	Content   []responsesAPIContentItem `json:"content,omitempty"`
+	ID        string                    `json:"id,omitempty"`
+	CallID    string                    `json:"call_id,omitempty"`
+	Name      string                    `json:"name,omitempty"`
+	Arguments string                    `json:"arguments,omitempty"`
+	Output    string                    `json:"output,omitempty"`
 }
 
 // responsesAPIResponse represents the response from Responses API
@@ -283,12 +292,16 @@ func (p *OpenAIProvider) ResponsesStream(ctx context.Context, req *OpenAIRespons
 }
 
 // buildResponsesAPIRequest maps OpenAIResponsesRequest into the official Responses API payload.
-func (p *OpenAIProvider) buildResponsesAPIRequest(req *OpenAIResponsesRequest) responsesAPIRequest {
+func (p *OpenAIProvider) buildResponsesAPIRequest(req *OpenAIResponsesRequest) (responsesAPIRequest, error) {
 	responsesReq := responsesAPIRequest{
 		Model: req.Model,
 	}
 
-	instructions, filteredMessages := extractResponsesInstructions(req.Messages)
+	prepared, err := PrepareMessages(req.Messages)
+	if err != nil {
+		return responsesAPIRequest{}, fmt.Errorf("openai: %w", err)
+	}
+	instructions, filteredMessages := extractResponsesInstructions(prepared)
 	if instructions != "" {
 		responsesReq.Instructions = instructions
 	}
@@ -360,7 +373,7 @@ func (p *OpenAIProvider) buildResponsesAPIRequest(req *OpenAIResponsesRequest) r
 		responsesReq.MaxOutputTokens = req.MaxOutputTokens
 	}
 
-	return responsesReq
+	return responsesReq, nil
 }
 
 func tryConvertMessagesToResponsesInputString(messages []Message) (string, bool) {
@@ -387,7 +400,10 @@ func tryConvertMessagesToResponsesInputString(messages []Message) (string, bool)
 
 // completeWithResponsesAPI uses OpenAI Responses API.
 func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *OpenAIResponsesRequest) (*Response, error) {
-	responsesReq := p.buildResponsesAPIRequest(req)
+	responsesReq, err := p.buildResponsesAPIRequest(req)
+	if err != nil {
+		return nil, err
+	}
 
 	body, err := json.Marshal(responsesReq)
 	if err != nil {
@@ -565,7 +581,10 @@ func convertResponsesUsage(apiUsage responsesAPIUsage) *Usage {
 
 // streamWithResponsesAPI handles streaming for the /responses endpoint.
 func (p *OpenAIProvider) streamWithResponsesAPI(ctx context.Context, req *OpenAIResponsesRequest) (StreamReader, error) {
-	responsesReq := p.buildResponsesAPIRequest(req)
+	responsesReq, err := p.buildResponsesAPIRequest(req)
+	if err != nil {
+		return nil, err
+	}
 	stream := true
 	responsesReq.Stream = &stream
 
@@ -1085,7 +1104,17 @@ func extractResponsesInstructions(messages []Message) (string, []Message) {
 	return instructions, filtered
 }
 
-// convertMessagesToResponsesInput converts messages to Responses API input format
+// convertMessagesToResponsesInput converts messages to Responses API input items.
+//
+// The Responses API input is a heterogeneous array of tagged items, not a flat
+// list of chat messages:
+//   - user messages               → {type: "message", role: "user", content: [input_text | input_image]}
+//   - assistant text              → {type: "message", role: "assistant", content: [output_text]}
+//   - assistant tool_calls        → one {type: "function_call", call_id, name, arguments} per call
+//   - tool results                → {type: "function_call_output", call_id, output}
+//
+// System/developer messages are expected to be stripped upstream by
+// extractResponsesInstructions and surfaced via the top-level "instructions" field.
 func convertMessagesToResponsesInput(messages []Message) []responsesAPIInputItem {
 	if len(messages) == 0 {
 		return nil
@@ -1093,21 +1122,60 @@ func convertMessagesToResponsesInput(messages []Message) []responsesAPIInputItem
 
 	items := make([]responsesAPIInputItem, 0, len(messages))
 	for _, msg := range messages {
-		contentItems := convertMessageContentsToResponsesContent(msg)
-		if len(contentItems) == 0 {
-			continue
+		role := strings.ToLower(strings.TrimSpace(msg.Role))
+		switch role {
+		case "tool":
+			// PrepareMessages guarantees ToolCallID is non-empty.
+			output := msg.Content
+			if output == "" && msg.IsError {
+				output = "tool execution failed"
+			}
+			items = append(items, responsesAPIInputItem{
+				Type:   "function_call_output",
+				CallID: msg.ToolCallID,
+				Output: output,
+			})
+
+		case "assistant":
+			if contentItems := convertMessageContentsToResponsesContent(msg, "output_text"); len(contentItems) > 0 {
+				items = append(items, responsesAPIInputItem{
+					Type:    "message",
+					Role:    "assistant",
+					Content: contentItems,
+				})
+			}
+			// PrepareMessages guarantees every ToolCall has non-empty ID and Name.
+			for _, tc := range msg.ToolCalls {
+				items = append(items, responsesAPIInputItem{
+					Type:      "function_call",
+					CallID:    tc.ID,
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				})
+			}
+
+		default:
+			contentItems := convertMessageContentsToResponsesContent(msg, "input_text")
+			if len(contentItems) == 0 {
+				continue
+			}
+			if role == "" {
+				role = "user"
+			}
+			items = append(items, responsesAPIInputItem{
+				Type:    "message",
+				Role:    role,
+				Content: contentItems,
+			})
 		}
-		items = append(items, responsesAPIInputItem{
-			Type:    "message",
-			Role:    msg.Role,
-			Content: contentItems,
-		})
 	}
 	return items
 }
 
-// convertMessageContentsToResponsesContent converts message contents to Responses API format
-func convertMessageContentsToResponsesContent(msg Message) []responsesAPIContentItem {
+// convertMessageContentsToResponsesContent converts a message's content into
+// Responses API content items. textType selects the text block variant:
+// "input_text" for user-originated turns, "output_text" for assistant turns.
+func convertMessageContentsToResponsesContent(msg Message, textType string) []responsesAPIContentItem {
 	contents := normalizeMessageContents(msg)
 	if len(contents) == 0 {
 		return nil
@@ -1116,12 +1184,12 @@ func convertMessageContentsToResponsesContent(msg Message) []responsesAPIContent
 	result := make([]responsesAPIContentItem, 0, len(contents))
 	for _, content := range contents {
 		switch strings.ToLower(content.Type) {
-		case "", "text", "input_text":
+		case "", "text", "input_text", "output_text":
 			if content.Text == "" {
 				continue
 			}
 			result = append(result, responsesAPIContentItem{
-				Type: "input_text",
+				Type: textType,
 				Text: content.Text,
 			})
 		case "image_url", "input_image":
@@ -1138,7 +1206,7 @@ func convertMessageContentsToResponsesContent(msg Message) []responsesAPIContent
 		default:
 			if content.Text != "" {
 				result = append(result, responsesAPIContentItem{
-					Type: "input_text",
+					Type: textType,
 					Text: content.Text,
 				})
 			}

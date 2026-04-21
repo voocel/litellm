@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync/atomic"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -203,17 +205,31 @@ func NormalizeToolCallID(id string) string {
 	return out
 }
 
+// synthesizedIDCounter backs synthesizeToolCallID so repeated calls within
+// the same nanosecond still produce distinct IDs.
+var synthesizedIDCounter atomic.Uint64
+
+// synthesizeToolCallID fabricates a compliant tool_call_id when the caller
+// omitted one. Matches the pattern PrepareMessages already uses for orphan
+// compensation (fix-forward, not reject).
+func synthesizeToolCallID() string {
+	return fmt.Sprintf("call_%d_%d", time.Now().UnixNano(), synthesizedIDCounter.Add(1))
+}
+
 // PrepareMessages preprocesses a message slice for API submission:
 //   - Sanitizes invalid UTF-8 (including surrogate codepoints) in content
 //   - Skips error assistant messages and their associated tool results
 //   - Normalizes tool call IDs for cross-provider compatibility
+//   - Synthesizes missing tool_call IDs (fix-forward)
 //   - Inserts synthetic error tool results for orphaned tool calls
 //     (assistant tool_calls with no matching tool result before next turn)
+//   - Validates required fields and returns an error for unrecoverable input
+//     (e.g. assistant tool_call with empty function name)
 //
 // The original slice is not modified; a new slice is returned.
-func PrepareMessages(messages []Message) []Message {
+func PrepareMessages(messages []Message) ([]Message, error) {
 	if len(messages) == 0 {
-		return messages
+		return messages, nil
 	}
 
 	// idMap tracks original → normalized tool call ID mappings
@@ -227,7 +243,7 @@ func PrepareMessages(messages []Message) []Message {
 	var pendingToolCalls []ToolCall
 	existingResults := make(map[string]bool)
 
-	for _, msg := range messages {
+	for i, msg := range messages {
 		// Sanitize invalid UTF-8 sequences (including surrogate codepoints)
 		msg = sanitizeMessage(msg)
 		switch msg.Role {
@@ -245,18 +261,25 @@ func PrepareMessages(messages []Message) []Message {
 				continue
 			}
 
-			// Normalize tool call IDs
+			// Normalize tool call IDs; reject malformed calls loud.
 			if len(msg.ToolCalls) > 0 {
 				copied := msg
 				copied.ToolCalls = make([]ToolCall, len(msg.ToolCalls))
-				for i, tc := range msg.ToolCalls {
-					normalized := NormalizeToolCallID(tc.ID)
+				for j, tc := range msg.ToolCalls {
+					if strings.TrimSpace(tc.Function.Name) == "" {
+						return nil, fmt.Errorf("messages[%d].tool_calls[%d]: function name is required", i, j)
+					}
+					originalID := tc.ID
+					if originalID == "" {
+						originalID = synthesizeToolCallID()
+					}
+					normalized := NormalizeToolCallID(originalID)
 					if normalized != tc.ID {
 						idMap[tc.ID] = normalized
 					}
-					copied.ToolCalls[i] = tc
-					copied.ToolCalls[i].ID = normalized
-					pendingToolCalls = append(pendingToolCalls, copied.ToolCalls[i])
+					copied.ToolCalls[j] = tc
+					copied.ToolCalls[j].ID = normalized
+					pendingToolCalls = append(pendingToolCalls, copied.ToolCalls[j])
 				}
 				result = append(result, copied)
 			} else {
@@ -267,6 +290,10 @@ func PrepareMessages(messages []Message) []Message {
 			// Skip tool results for skipped error assistant messages
 			if skipToolIDs[msg.ToolCallID] {
 				continue
+			}
+
+			if msg.ToolCallID == "" {
+				return nil, fmt.Errorf("messages[%d]: tool message is missing tool_call_id", i)
 			}
 
 			// Normalize the tool_call_id reference to match the normalized ID
@@ -306,7 +333,7 @@ func PrepareMessages(messages []Message) []Message {
 	// Final flush for any remaining orphaned tool calls at end of conversation
 	result = flushOrphanedToolCalls(result, pendingToolCalls, existingResults)
 
-	return result
+	return result, nil
 }
 
 // flushOrphanedToolCalls appends synthetic error tool results for tool calls

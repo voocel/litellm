@@ -225,7 +225,11 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 		}
 	}
 
-	anthropicReq.System, anthropicReq.Messages = p.convertMessages(req)
+	system, messages, err := p.convertMessages(req)
+	if err != nil {
+		return nil, err
+	}
+	anthropicReq.System, anthropicReq.Messages = system, messages
 
 	body, err := json.Marshal(anthropicReq)
 	if err != nil {
@@ -313,13 +317,17 @@ func (p *AnthropicProvider) convertToolParameters(tool Tool) (map[string]any, er
 	return inputSchema, nil
 }
 
-func (p *AnthropicProvider) convertMessages(req *Request) (any, []anthropicMessage) {
+func (p *AnthropicProvider) convertMessages(req *Request) (any, []anthropicMessage, error) {
 	autoCache := resolveCacheRetention(req)
 
 	var systemContents []anthropicContent
 	var nonSystemMessages []Message
 
-	for _, msg := range req.Messages {
+	prepared, err := PrepareMessages(req.Messages)
+	if err != nil {
+		return nil, nil, fmt.Errorf("anthropic: %w", err)
+	}
+	for _, msg := range prepared {
 		if msg.Role == "system" {
 			systemContent := anthropicContent{Type: "text", Text: msg.Content}
 			if msg.CacheControl != nil {
@@ -390,7 +398,7 @@ func (p *AnthropicProvider) convertMessages(req *Request) (any, []anthropicMessa
 	// by a text "user") by concatenating their content arrays.
 	messages = mergeConsecutiveRoles(messages)
 
-	return system, messages
+	return system, messages, nil
 }
 
 func (p *AnthropicProvider) convertSingleMessage(msg Message, respFormat *ResponseFormat, isLast bool) anthropicMessage {

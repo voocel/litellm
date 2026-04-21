@@ -151,7 +151,11 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 		openaiReq.Tools = ConvertTools(req.Tools)
 	}
 
-	openaiReq.Messages = ConvertMessagesToOpenAI(req.Messages)
+	msgs, err := prepareOpenAIMessages(req.Messages)
+	if err != nil {
+		return nil, err
+	}
+	openaiReq.Messages = msgs
 
 	body, err := json.Marshal(openaiReq)
 	if err != nil {
@@ -211,16 +215,7 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 
 		// Extract reasoning content from multiple possible formats
 		if !isThinkingDisabled(req) {
-			if choice.ReasoningSummary != nil && choice.ReasoningSummary.Text != "" {
-				// OpenAI o-series / gpt-5: choice-level reasoning_summary
-				response.ReasoningContent = choice.ReasoningSummary.Text
-			} else if choice.Message.Reasoning != "" {
-				// Proxy / minimax format: message.reasoning
-				response.ReasoningContent = choice.Message.Reasoning
-			} else if choice.Message.ReasoningContent != "" {
-				// DeepSeek / GLM / Qwen format: message.reasoning_content
-				response.ReasoningContent = choice.Message.ReasoningContent
-			}
+			response.ReasoningContent = extractOpenAIReasoning(choice)
 		}
 
 		// Convert tool calls
@@ -301,7 +296,11 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	}
 
 	// Convert messages
-	openaiReq.Messages = ConvertMessagesToOpenAI(req.Messages)
+	msgs, err := prepareOpenAIMessages(req.Messages)
+	if err != nil {
+		return nil, err
+	}
+	openaiReq.Messages = msgs
 
 	body, err := json.Marshal(openaiReq)
 	if err != nil {
@@ -470,15 +469,7 @@ func (r *openaiStreamReader) Next() (*StreamChunk, error) {
 
 			// Handle reasoning streaming from multiple formats
 			if r.includeReasoning {
-				var reasoningText string
-				if choice.Delta.ReasoningSummary != nil && choice.Delta.ReasoningSummary.Text != "" {
-					reasoningText = choice.Delta.ReasoningSummary.Text
-				} else if choice.Delta.Reasoning != "" {
-					reasoningText = choice.Delta.Reasoning
-				} else if choice.Delta.ReasoningContent != "" {
-					reasoningText = choice.Delta.ReasoningContent
-				}
-				if reasoningText != "" {
+				if reasoningText := extractOpenAIDeltaReasoning(choice.Delta); reasoningText != "" {
 					pending = append(pending, &StreamChunk{
 						Provider:         r.provider,
 						Model:            chunk.Model,
@@ -799,8 +790,6 @@ func (p *OpenAIProvider) ensureStrictSchema(schema interface{}) interface{} {
 
 // ==================== Common conversion helpers (used by OpenAI-compatible providers) ====================
 
-// OpenAICompatMessage is a generic OpenAI-compatible message format
-// Used by DeepSeek/GLM/Qwen etc.; Content stays interface{} to allow flexible formats
 type OpenAICompatMessage struct {
 	Role             string           `json:"role"`
 	Content          interface{}      `json:"content,omitempty"` // string or array (needed by OpenRouter)
@@ -848,6 +837,38 @@ func ConvertMessagesToOpenAI(messages []Message) []openaiMessage {
 		result[i] = openaiMsg
 	}
 	return result
+}
+
+func prepareOpenAIMessages(messages []Message) ([]openaiMessage, error) {
+	prepared, err := PrepareMessages(messages)
+	if err != nil {
+		return nil, fmt.Errorf("openai: %w", err)
+	}
+	return ConvertMessagesToOpenAI(prepared), nil
+}
+
+func extractOpenAIReasoning(choice openaiChoice) string {
+	msg := map[string]any{
+		"reasoning":         choice.Message.Reasoning,
+		"reasoning_content": choice.Message.ReasoningContent,
+	}
+	if choice.ReasoningSummary != nil {
+		msg["reasoning_summary"] = map[string]any{"text": choice.ReasoningSummary.Text}
+	}
+	reasoning, _ := findReasoningIn(msg, "")
+	return reasoning
+}
+
+func extractOpenAIDeltaReasoning(delta openaiDelta) string {
+	msg := map[string]any{
+		"reasoning":         delta.Reasoning,
+		"reasoning_content": delta.ReasoningContent,
+	}
+	if delta.ReasoningSummary != nil {
+		msg["reasoning_summary"] = map[string]any{"text": delta.ReasoningSummary.Text}
+	}
+	reasoning, _ := findReasoningIn(msg, "")
+	return reasoning
 }
 
 // ConvertMessages converts generic Message into OpenAI-compatible format (Content as interface{})

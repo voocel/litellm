@@ -113,18 +113,22 @@ type Compat struct {
 }
 
 // defaultReasoningFields lists all known reasoning field names in probe order.
-var defaultReasoningFields = []string{"reasoning_content", "reasoning", "reasoning_text"}
+var defaultReasoningFields = []string{"reasoning_summary", "reasoning_content", "reasoning", "reasoning_text"}
 
 // reasoningFields returns the ordered list of fields to probe for reasoning content.
 // If ReasoningField is configured, it gets highest priority; remaining defaults follow.
 func (c *Compat) reasoningFields() []string {
-	if c.ReasoningField == "" {
+	return reasoningFields(c.ReasoningField)
+}
+
+func reasoningFields(preferred string) []string {
+	if preferred == "" {
 		return defaultReasoningFields
 	}
 	fields := make([]string, 0, len(defaultReasoningFields)+1)
-	fields = append(fields, c.ReasoningField)
+	fields = append(fields, preferred)
 	for _, f := range defaultReasoningFields {
-		if f != c.ReasoningField {
+		if f != preferred {
 			fields = append(fields, f)
 		}
 	}
@@ -134,9 +138,18 @@ func (c *Compat) reasoningFields() []string {
 // findReasoning probes a message/delta map for the first non-empty reasoning field.
 // Returns the value and the field name that matched ("" if none).
 func (c *Compat) findReasoning(m map[string]any) (value, field string) {
-	for _, f := range c.reasoningFields() {
+	return findReasoningIn(m, c.ReasoningField)
+}
+
+func findReasoningIn(m map[string]any, preferred string) (value, field string) {
+	for _, f := range reasoningFields(preferred) {
 		if v, ok := m[f].(string); ok && v != "" {
 			return v, f
+		}
+		if nested, ok := m[f].(map[string]any); ok {
+			if text, ok := nested["text"].(string); ok && text != "" {
+				return text, f
+			}
 		}
 	}
 	return "", ""
@@ -385,7 +398,10 @@ func (p *OpenAICompatProvider) buildRequestBody(req *Request, stream bool) ([]by
 	body["model"] = req.Model
 
 	// Messages — may need mutation for JSONSchemaToPrompt
-	messages := PrepareMessages(req.Messages)
+	messages, err := PrepareMessages(req.Messages)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", p.compat.ProviderName, err)
+	}
 	if c.JSONSchemaToPrompt && req.ResponseFormat != nil &&
 		req.ResponseFormat.Type == "json_schema" && req.ResponseFormat.JSONSchema != nil {
 		messages = p.injectJSONSchemaToMessages(messages, req.ResponseFormat.JSONSchema)
