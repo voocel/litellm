@@ -1,6 +1,7 @@
 package litellm
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -131,22 +132,9 @@ func CollectStream(stream StreamReader) (*Response, error) {
 // CollectStreamWithCallbacks consumes a StreamReader, calls callbacks for each chunk, and returns a unified Response.
 // Callers are responsible for closing the stream.
 func CollectStreamWithCallbacks(stream StreamReader, callbacks StreamCallbacks) (*Response, error) {
-	lc := newLifecycleTracker(&callbacks)
+	dispatcher := newStreamCallbackDispatcher(callbacks)
 	return CollectStreamWithHandler(stream, func(chunk *StreamChunk) {
-		lc.process(chunk)
-
-		if callbacks.OnChunk != nil {
-			callbacks.OnChunk(chunk)
-		}
-		if callbacks.OnContent != nil && chunk.Type == ChunkTypeContent && chunk.Content != "" {
-			callbacks.OnContent(chunk.Content)
-		}
-		if callbacks.OnReasoning != nil && chunk.ReasoningContent != "" {
-			callbacks.OnReasoning(chunk.ReasoningContent)
-		}
-		if callbacks.OnToolCall != nil && chunk.ToolCallDelta != nil {
-			callbacks.OnToolCall(chunk.ToolCallDelta)
-		}
+		dispatcher.process(chunk)
 	})
 }
 
@@ -157,15 +145,7 @@ func CollectStreamWithHandler(stream StreamReader, onChunk func(*StreamChunk)) (
 		return nil, fmt.Errorf("stream cannot be nil")
 	}
 
-	var (
-		contentBuilder       strings.Builder
-		refusalBuilder       strings.Builder
-		contentByOutputIndex = map[int]*strings.Builder{}
-		refusalByOutputIndex = map[int]*strings.Builder{}
-		reasoningContent     strings.Builder
-		toolAcc              = NewToolCallAccumulator()
-		resp                 Response
-	)
+	collector := newStreamCollector()
 
 	for {
 		chunk, err := stream.Next()
@@ -179,125 +159,190 @@ func CollectStreamWithHandler(stream StreamReader, onChunk func(*StreamChunk)) (
 		if onChunk != nil {
 			onChunk(chunk)
 		}
-
-		if resp.Provider == "" && chunk.Provider != "" {
-			resp.Provider = chunk.Provider
-		}
-		if chunk.Model != "" {
-			resp.Model = chunk.Model
-		}
-		if resp.FinishReason == "" && chunk.FinishReason != "" {
-			resp.FinishReason = chunk.FinishReason
-		}
-
-		if chunk.Content != "" {
-			switch chunk.Type {
-			case ChunkTypeContent:
-				if chunk.OutputIndex != nil {
-					builder := contentByOutputIndex[*chunk.OutputIndex]
-					if builder == nil {
-						builder = &strings.Builder{}
-						contentByOutputIndex[*chunk.OutputIndex] = builder
-					}
-					builder.WriteString(chunk.Content)
-				} else {
-					contentBuilder.WriteString(chunk.Content)
-				}
-			case "refusal":
-				if chunk.OutputIndex != nil {
-					builder := refusalByOutputIndex[*chunk.OutputIndex]
-					if builder == nil {
-						builder = &strings.Builder{}
-						refusalByOutputIndex[*chunk.OutputIndex] = builder
-					}
-					builder.WriteString(chunk.Content)
-				} else {
-					refusalBuilder.WriteString(chunk.Content)
-				}
-			}
-		}
-
-		if chunk.ReasoningContent != "" {
-			if reasoningContent.Len() > 0 {
-				reasoningContent.WriteString("\n")
-			}
-			reasoningContent.WriteString(chunk.ReasoningContent)
-		}
-
-		if chunk.ToolCallDelta != nil {
-			toolAcc.Apply(chunk.ToolCallDelta)
-		}
-
-		if chunk.Usage != nil {
-			resp.Usage = *chunk.Usage
-		}
+		collector.applyChunk(chunk)
 
 		if chunk.Done {
 			break
 		}
 	}
+	return collector.buildResponse()
+}
 
-	if len(contentByOutputIndex) > 0 || len(refusalByOutputIndex) > 0 {
-		indices := make([]int, 0, len(contentByOutputIndex)+len(refusalByOutputIndex))
-		for index := range contentByOutputIndex {
-			indices = append(indices, index)
-		}
-		for index := range refusalByOutputIndex {
-			indices = append(indices, index)
-		}
-		sort.Ints(indices)
-		var merged strings.Builder
-		seen := map[int]bool{}
-		for _, index := range indices {
-			if seen[index] {
-				continue
-			}
-			seen[index] = true
-			if builder := contentByOutputIndex[index]; builder != nil && builder.Len() > 0 {
-				merged.WriteString(builder.String())
-				continue
-			}
-			if builder := refusalByOutputIndex[index]; builder != nil {
-				merged.WriteString(builder.String())
-			}
-		}
-		merged.WriteString(contentBuilder.String())
-		resp.Content = merged.String()
-	} else {
-		resp.Content = contentBuilder.String()
+type streamCollector struct {
+	contentBuilder       strings.Builder
+	refusalBuilder       strings.Builder
+	contentByOutputIndex map[int]*strings.Builder
+	refusalByOutputIndex map[int]*strings.Builder
+	reasoningContent     strings.Builder
+	toolAcc              *ToolCallAccumulator
+	resp                 Response
+}
+
+func newStreamCollector() *streamCollector {
+	return &streamCollector{
+		contentByOutputIndex: make(map[int]*strings.Builder),
+		refusalByOutputIndex: make(map[int]*strings.Builder),
+		toolAcc:              NewToolCallAccumulator(),
 	}
-	if resp.Content == "" && refusalBuilder.Len() > 0 {
-		resp.Content = refusalBuilder.String()
+}
+
+func (c *streamCollector) applyChunk(chunk *StreamChunk) {
+	if chunk == nil {
+		return
 	}
 
-	if reasoningContent.Len() > 0 {
-		resp.ReasoningContent = reasoningContent.String()
+	if c.resp.Provider == "" && chunk.Provider != "" {
+		c.resp.Provider = chunk.Provider
+	}
+	if chunk.Model != "" {
+		c.resp.Model = chunk.Model
+	}
+	if c.resp.FinishReason == "" && chunk.FinishReason != "" {
+		c.resp.FinishReason = chunk.FinishReason
 	}
 
-	resp.ToolCalls = toolAcc.Build()
-	if err := validateToolCalls(resp.Provider, resp.ToolCalls); err != nil {
+	c.collectContent(chunk)
+	c.collectReasoning(chunk)
+	c.collectToolCall(chunk)
+
+	if chunk.Usage != nil {
+		c.resp.Usage = *chunk.Usage
+	}
+}
+
+func (c *streamCollector) collectContent(chunk *StreamChunk) {
+	if chunk.Content == "" {
+		return
+	}
+
+	switch chunk.Type {
+	case ChunkTypeContent:
+		c.outputBuilder(chunk.OutputIndex, c.contentByOutputIndex, &c.contentBuilder).WriteString(chunk.Content)
+	case "refusal":
+		c.outputBuilder(chunk.OutputIndex, c.refusalByOutputIndex, &c.refusalBuilder).WriteString(chunk.Content)
+	}
+}
+
+func (c *streamCollector) collectReasoning(chunk *StreamChunk) {
+	if chunk.ReasoningContent == "" {
+		return
+	}
+	if c.reasoningContent.Len() > 0 {
+		c.reasoningContent.WriteString("\n")
+	}
+	c.reasoningContent.WriteString(chunk.ReasoningContent)
+}
+
+func (c *streamCollector) collectToolCall(chunk *StreamChunk) {
+	if chunk.ToolCallDelta != nil {
+		c.toolAcc.Apply(chunk.ToolCallDelta)
+	}
+}
+
+func (c *streamCollector) outputBuilder(index *int, byIndex map[int]*strings.Builder, fallback *strings.Builder) *strings.Builder {
+	if index == nil {
+		return fallback
+	}
+
+	builder := byIndex[*index]
+	if builder == nil {
+		builder = &strings.Builder{}
+		byIndex[*index] = builder
+	}
+	return builder
+}
+
+func (c *streamCollector) buildResponse() (*Response, error) {
+	c.resp.Content = c.mergedContent()
+	if c.reasoningContent.Len() > 0 {
+		c.resp.ReasoningContent = c.reasoningContent.String()
+	}
+
+	c.resp.ToolCalls = c.toolAcc.Build()
+	if err := validateToolCalls(c.resp.Provider, c.resp.ToolCalls); err != nil {
 		return nil, err
 	}
 
-	// A stream that ends with a valid finish reason (stop, end_turn, etc.)
-	// but no output is a legitimate model decision — not an error.
-	// Only treat it as a transient network issue when the stream produced
-	// zero output AND has no finish reason (i.e. the stream was truncated).
-	if resp.Content == "" && resp.ReasoningContent == "" && len(resp.ToolCalls) == 0 && resp.FinishReason == "" {
-		return nil, providers.NewNetworkError(resp.Provider,
+	if c.resp.Content == "" && c.resp.ReasoningContent == "" && len(c.resp.ToolCalls) == 0 && c.resp.FinishReason == "" {
+		return nil, providers.NewNetworkError(c.resp.Provider,
 			"stream completed but produced no output (0 content, 0 reasoning, 0 tool calls, no finish reason)", nil)
 	}
 
-	return &resp, nil
+	return &c.resp, nil
 }
 
-// ---------------------------------------------------------------------------
-// lifecycleTracker — emits start/end callbacks for content block transitions
-// ---------------------------------------------------------------------------
+func (c *streamCollector) mergedContent() string {
+	if len(c.contentByOutputIndex) == 0 && len(c.refusalByOutputIndex) == 0 {
+		if c.contentBuilder.Len() == 0 && c.refusalBuilder.Len() > 0 {
+			return c.refusalBuilder.String()
+		}
+		return c.contentBuilder.String()
+	}
+
+	indices := make([]int, 0, len(c.contentByOutputIndex)+len(c.refusalByOutputIndex))
+	for index := range c.contentByOutputIndex {
+		indices = append(indices, index)
+	}
+	for index := range c.refusalByOutputIndex {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+
+	var merged strings.Builder
+	seen := make(map[int]bool, len(indices))
+	for _, index := range indices {
+		if seen[index] {
+			continue
+		}
+		seen[index] = true
+		if builder := c.contentByOutputIndex[index]; builder != nil && builder.Len() > 0 {
+			merged.WriteString(builder.String())
+			continue
+		}
+		if builder := c.refusalByOutputIndex[index]; builder != nil {
+			merged.WriteString(builder.String())
+		}
+	}
+
+	merged.WriteString(c.contentBuilder.String())
+	if merged.Len() == 0 && c.refusalBuilder.Len() > 0 {
+		return c.refusalBuilder.String()
+	}
+	return merged.String()
+}
+
+type streamCallbackDispatcher struct {
+	callbacks StreamCallbacks
+	lifecycle *lifecycleTracker
+}
+
+func newStreamCallbackDispatcher(callbacks StreamCallbacks) *streamCallbackDispatcher {
+	return &streamCallbackDispatcher{
+		callbacks: callbacks,
+		lifecycle: newLifecycleTracker(&callbacks),
+	}
+}
+
+func (d *streamCallbackDispatcher) process(chunk *StreamChunk) {
+	d.lifecycle.process(chunk)
+
+	if d.callbacks.OnChunk != nil {
+		d.callbacks.OnChunk(chunk)
+	}
+	if d.callbacks.OnContent != nil && chunk.Type == ChunkTypeContent && chunk.Content != "" {
+		d.callbacks.OnContent(chunk.Content)
+	}
+	if d.callbacks.OnReasoning != nil && chunk.ReasoningContent != "" {
+		d.callbacks.OnReasoning(chunk.ReasoningContent)
+	}
+	if d.callbacks.OnToolCall != nil && chunk.ToolCallDelta != nil {
+		d.callbacks.OnToolCall(chunk.ToolCallDelta)
+	}
+}
 
 type lifecycleTracker struct {
 	cb          *StreamCallbacks
-	active      string // "", "content", "reasoning"
+	active      string
 	contentAcc  strings.Builder
 	reasonAcc   strings.Builder
 	toolStarted map[int]bool
@@ -374,7 +419,6 @@ func (t *lifecycleTracker) process(chunk *StreamChunk) {
 		}
 
 	case "reasoning_done":
-		// OpenAI Responses API signals reasoning complete explicitly.
 		if t.active == "reasoning" {
 			t.closeActive()
 		}
@@ -414,4 +458,40 @@ func (t *lifecycleTracker) finish() {
 			}
 		}
 	}
+}
+
+type hookedStreamReader struct {
+	ctx    context.Context
+	meta   CallMeta
+	hooks  []Hook
+	stream StreamReader
+}
+
+func newHookedStreamReader(ctx context.Context, meta CallMeta, hooks []Hook, stream StreamReader) StreamReader {
+	if stream == nil || len(hooks) == 0 {
+		return stream
+	}
+	return &hookedStreamReader{
+		ctx:    ctx,
+		meta:   meta,
+		hooks:  hooks,
+		stream: stream,
+	}
+}
+
+func (r *hookedStreamReader) Next() (*StreamChunk, error) {
+	chunk, err := r.stream.Next()
+	if err != nil {
+		return nil, err
+	}
+	if chunk != nil {
+		for _, h := range r.hooks {
+			h.OnStreamChunk(r.ctx, r.meta, chunk)
+		}
+	}
+	return chunk, nil
+}
+
+func (r *hookedStreamReader) Close() error {
+	return r.stream.Close()
 }

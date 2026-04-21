@@ -5,16 +5,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
-	"time"
-
-	"github.com/voocel/litellm/providers"
 )
 
 // Client is a minimal, predictable client bound to a single Provider.
 type Client struct {
 	provider Provider
 	defaults DefaultConfig
+	hooks    []Hook
 	debug    bool
 	debugOut io.Writer
 }
@@ -127,67 +124,20 @@ func (c *Client) ProviderName() string {
 
 // Chat executes a non-streaming request.
 func (c *Client) Chat(ctx context.Context, req *Request) (*Response, error) {
-	if req == nil {
-		return nil, NewError(ErrorTypeValidation, "request cannot be nil")
-	}
-	if req.Model == "" {
-		return nil, NewError(ErrorTypeValidation, "model cannot be empty")
-	}
-	if len(req.Messages) == 0 {
-		return nil, NewError(ErrorTypeValidation, "messages cannot be empty")
-	}
-
-	reqCopy := *req
-	c.applyDefaults(&reqCopy)
-	if err := validateRequestMessages(c.provider.Name(), reqCopy.Messages); err != nil {
-		return nil, err
-	}
-
-	c.debugRequest(&reqCopy, false)
-	start := time.Now()
-
-	resp, err := c.provider.Chat(ctx, &reqCopy)
-
-	c.debugResponse(resp, err, time.Since(start))
-
-	if err != nil {
-		return nil, WrapError(err, c.provider.Name())
-	}
-	if err := validateToolCalls(c.provider.Name(), resp.ToolCalls); err != nil {
-		return nil, err
-	}
-	return resp, nil
+	return c.executeRequestCall(ctx, req, requestCallOptions{
+		operation: "chat",
+	}, func(ctx context.Context, prepared *Request) (*Response, error) {
+		return c.provider.Chat(ctx, prepared)
+	})
 }
 
 // Stream executes a streaming request.
 func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error) {
-	if req == nil {
-		return nil, NewError(ErrorTypeValidation, "request cannot be nil")
-	}
-	if req.Model == "" {
-		return nil, NewError(ErrorTypeValidation, "model cannot be empty")
-	}
-	if len(req.Messages) == 0 {
-		return nil, NewError(ErrorTypeValidation, "messages cannot be empty")
-	}
-
-	reqCopy := *req
-	c.applyDefaults(&reqCopy)
-	if err := validateRequestMessages(c.provider.Name(), reqCopy.Messages); err != nil {
-		return nil, err
-	}
-
-	c.debugRequest(&reqCopy, true)
-	start := time.Now()
-
-	stream, err := c.provider.Stream(ctx, &reqCopy)
-	if err != nil {
-		c.debugStreamError(err, time.Since(start))
-		return nil, WrapError(err, c.provider.Name())
-	}
-
-	c.debugStreamReady(time.Since(start))
-	return stream, nil
+	return c.executeRequestStreamCall(ctx, req, requestCallOptions{
+		operation: "stream",
+	}, func(ctx context.Context, prepared *Request) (StreamReader, error) {
+		return c.provider.Stream(ctx, prepared)
+	})
 }
 
 // ListModels returns the list of available models for the bound provider (if supported).
@@ -212,250 +162,18 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 
 // Responses executes an OpenAI Responses API request on an OpenAI provider.
 func (c *Client) Responses(ctx context.Context, req *OpenAIResponsesRequest) (*Response, error) {
-	if req == nil {
-		return nil, NewError(ErrorTypeValidation, "responses request cannot be nil")
-	}
-	if req.Model == "" {
-		return nil, NewError(ErrorTypeValidation, "model cannot be empty")
-	}
-	if len(req.Messages) == 0 {
-		return nil, NewError(ErrorTypeValidation, "messages cannot be empty")
-	}
-
-	reqCopy := *req
-	c.applyResponsesDefaults(&reqCopy)
-	if err := validateRequestMessages(c.provider.Name(), reqCopy.Messages); err != nil {
-		return nil, err
-	}
-
-	c.debugResponsesRequest(&reqCopy)
-	start := time.Now()
-
-	provider, ok := c.provider.(interface {
-		Responses(context.Context, *OpenAIResponsesRequest) (*Response, error)
+	return c.executeResponsesCall(ctx, req, responsesCallOptions{
+		operation: "responses",
+	}, func(ctx context.Context, provider responsesProvider, prepared *OpenAIResponsesRequest) (*Response, error) {
+		return provider.Responses(ctx, prepared)
 	})
-	if !ok {
-		return nil, NewError(ErrorTypeValidation, "responses API is only supported by the OpenAI provider")
-	}
-
-	resp, err := provider.Responses(ctx, &reqCopy)
-
-	c.debugResponse(resp, err, time.Since(start))
-
-	if err != nil {
-		return nil, WrapError(err, c.provider.Name())
-	}
-	if err := validateToolCalls(c.provider.Name(), resp.ToolCalls); err != nil {
-		return nil, err
-	}
-	return resp, nil
 }
 
 // ResponsesStream executes a streaming OpenAI Responses API request.
 func (c *Client) ResponsesStream(ctx context.Context, req *OpenAIResponsesRequest) (StreamReader, error) {
-	if req == nil {
-		return nil, NewError(ErrorTypeValidation, "responses request cannot be nil")
-	}
-	if req.Model == "" {
-		return nil, NewError(ErrorTypeValidation, "model cannot be empty")
-	}
-	if len(req.Messages) == 0 {
-		return nil, NewError(ErrorTypeValidation, "messages cannot be empty")
-	}
-
-	reqCopy := *req
-	c.applyResponsesDefaults(&reqCopy)
-	if err := validateRequestMessages(c.provider.Name(), reqCopy.Messages); err != nil {
-		return nil, err
-	}
-
-	c.debugResponsesRequest(&reqCopy)
-	start := time.Now()
-
-	provider, ok := c.provider.(interface {
-		ResponsesStream(context.Context, *OpenAIResponsesRequest) (StreamReader, error)
+	return c.executeResponsesStreamCall(ctx, req, responsesCallOptions{
+		operation: "responses_stream",
+	}, func(ctx context.Context, provider responsesStreamProvider, prepared *OpenAIResponsesRequest) (StreamReader, error) {
+		return provider.ResponsesStream(ctx, prepared)
 	})
-	if !ok {
-		return nil, NewError(ErrorTypeValidation, "responses API is only supported by the OpenAI provider")
-	}
-
-	stream, err := provider.ResponsesStream(ctx, &reqCopy)
-	if err != nil {
-		c.debugStreamError(err, time.Since(start))
-		return nil, WrapError(err, c.provider.Name())
-	}
-
-	c.debugStreamReady(time.Since(start))
-	return stream, nil
-}
-
-// applyDefaults applies defaults when request fields are unset.
-func (c *Client) applyDefaults(req *Request) {
-	if req.MaxTokens == nil {
-		maxTokens := c.defaults.MaxTokens
-		req.MaxTokens = &maxTokens
-	}
-	if req.Temperature == nil {
-		temperature := c.defaults.Temperature
-		req.Temperature = &temperature
-	}
-	if req.TopP == nil {
-		topP := c.defaults.TopP
-		req.TopP = &topP
-	}
-}
-
-func (c *Client) applyResponsesDefaults(req *OpenAIResponsesRequest) {
-	if req.MaxOutputTokens == nil {
-		maxTokens := c.defaults.MaxTokens
-		req.MaxOutputTokens = &maxTokens
-	}
-	if req.Temperature == nil {
-		temperature := c.defaults.Temperature
-		req.Temperature = &temperature
-	}
-	if req.TopP == nil {
-		topP := c.defaults.TopP
-		req.TopP = &topP
-	}
-}
-
-// debugLog writes a debug message if debug mode is enabled.
-func (c *Client) debugLog(format string, args ...any) {
-	if !c.debug || c.debugOut == nil {
-		return
-	}
-	fmt.Fprintf(c.debugOut, "[litellm:%s] "+format+"\n", append([]any{c.provider.Name()}, args...)...)
-}
-
-// debugRequest logs request details.
-func (c *Client) debugRequest(req *Request, stream bool) {
-	if !c.debug {
-		return
-	}
-	mode := "chat"
-	if stream {
-		mode = "stream"
-	}
-	c.debugLog("→ %s model=%s messages=%d", mode, req.Model, len(req.Messages))
-	if req.MaxTokens != nil {
-		c.debugLog("  max_tokens=%d", *req.MaxTokens)
-	}
-	if req.Temperature != nil {
-		c.debugLog("  temperature=%.2f", *req.Temperature)
-	}
-	if len(req.Tools) > 0 {
-		toolNames := make([]string, len(req.Tools))
-		for i, t := range req.Tools {
-			toolNames[i] = t.Function.Name
-		}
-		c.debugLog("  tools=[%s]", strings.Join(toolNames, ", "))
-	}
-}
-
-// debugResponse logs response details.
-func (c *Client) debugResponse(resp *Response, err error, duration time.Duration) {
-	if !c.debug {
-		return
-	}
-	if err != nil {
-		c.debugLog("← error (%v): %v", duration.Round(time.Millisecond), err)
-		return
-	}
-	c.debugLog("← ok (%v) tokens=%d (prompt=%d, completion=%d)",
-		duration.Round(time.Millisecond),
-		resp.Usage.TotalTokens,
-		resp.Usage.PromptTokens,
-		resp.Usage.CompletionTokens,
-	)
-	if resp.FinishReason != "" {
-		c.debugLog("  finish_reason=%s", resp.FinishReason)
-	}
-	if len(resp.ToolCalls) > 0 {
-		c.debugLog("  tool_calls=%d", len(resp.ToolCalls))
-	}
-}
-
-// debugStreamError logs stream error.
-func (c *Client) debugStreamError(err error, duration time.Duration) {
-	if !c.debug {
-		return
-	}
-	c.debugLog("← stream error (%v): %v", duration.Round(time.Millisecond), err)
-}
-
-// debugStreamReady logs stream ready.
-func (c *Client) debugStreamReady(duration time.Duration) {
-	if !c.debug {
-		return
-	}
-	c.debugLog("← stream ready (%v)", duration.Round(time.Millisecond))
-}
-
-// debugResponsesRequest logs OpenAI Responses API request details.
-func (c *Client) debugResponsesRequest(req *OpenAIResponsesRequest) {
-	if !c.debug {
-		return
-	}
-	c.debugLog("→ responses model=%s messages=%d", req.Model, len(req.Messages))
-	if req.MaxOutputTokens != nil {
-		c.debugLog("  max_output_tokens=%d", *req.MaxOutputTokens)
-	}
-	if req.ReasoningEffort != "" {
-		c.debugLog("  reasoning_effort=%s", req.ReasoningEffort)
-	}
-}
-
-func validateToolCalls(provider string, toolCalls []ToolCall) error {
-	if len(toolCalls) == 0 {
-		return nil
-	}
-
-	seen := make(map[string]string, len(toolCalls))
-	for _, toolCall := range toolCalls {
-		if toolCall.ID == "" {
-			continue
-		}
-		if prev, ok := seen[toolCall.ID]; ok {
-			message := fmt.Sprintf("invalid tool calls: duplicate tool_call.id %q", toolCall.ID)
-			if prev != "" && toolCall.Function.Name != "" && prev != toolCall.Function.Name {
-				message = fmt.Sprintf("%s reused by tools %q and %q", message, prev, toolCall.Function.Name)
-			}
-			if provider != "" {
-				return NewValidationError(provider, message)
-			}
-			return NewError(ErrorTypeValidation, message)
-		}
-		seen[toolCall.ID] = toolCall.Function.Name
-	}
-
-	return nil
-}
-
-func validateRequestMessages(provider string, messages []Message) error {
-	for i, msg := range messages {
-		if msg.Role != "assistant" || msg.IsError || len(msg.ToolCalls) == 0 {
-			continue
-		}
-
-		seen := make(map[string]string, len(msg.ToolCalls))
-		for _, toolCall := range msg.ToolCalls {
-			normalizedID := providers.NormalizeToolCallID(toolCall.ID)
-			if normalizedID == "" {
-				continue
-			}
-			if prev, ok := seen[normalizedID]; ok {
-				message := fmt.Sprintf("invalid request messages: assistant message %d has duplicate tool_call.id %q", i, normalizedID)
-				if prev != "" && toolCall.Function.Name != "" && prev != toolCall.Function.Name {
-					message = fmt.Sprintf("%s reused by tools %q and %q", message, prev, toolCall.Function.Name)
-				}
-				if provider != "" {
-					return NewValidationError(provider, message)
-				}
-				return NewError(ErrorTypeValidation, message)
-			}
-			seen[normalizedID] = toolCall.Function.Name
-		}
-	}
-	return nil
 }
