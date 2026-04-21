@@ -129,11 +129,11 @@ func main() {
 	}
 	defer stream.Close()
 
-resp, err := litellm.CollectStream(stream)
-if err != nil {
-	log.Fatal(err)
-}
-fmt.Println(resp.Content)
+	resp, err := litellm.CollectStream(stream)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(resp.Content)
 }
 ```
 
@@ -169,6 +169,7 @@ fmt.Println(resp.Content)
 - `CollectStream(stream)` collects a stream into a unified `Response`.
 - `CollectStreamWithHandler(stream, onChunk)` collects and also handles each chunk.
 - `CollectStreamWithCallbacks(stream, callbacks)` adds content/reasoning/tool callbacks.
+- `WithHook(h)` / `WithHooks(...)` observe requests, responses, and stream chunks without changing control flow.
 - `Request.Thinking` controls thinking output when explicitly set; otherwise behavior is provider-specific.
 - `ListModels(ctx)` lists available models for the current provider (only some providers; fields are best‑effort).
 
@@ -192,6 +193,42 @@ if err != nil {
 }
 fmt.Print(resp.Content)
 ```
+
+### Hooks
+
+Use hooks when you want lightweight observability around requests without modifying provider behavior.
+
+```go
+client, err := litellm.NewWithProvider(
+	"openai",
+	litellm.ProviderConfig{APIKey: os.Getenv("OPENAI_API_KEY")},
+	litellm.WithHook(litellm.HookFuncs{
+		BeforeRequestFunc: func(ctx context.Context, meta litellm.CallMeta) {
+			log.Printf("→ call=%s %s provider=%s model=%s", meta.CallID, meta.Operation, meta.Provider, meta.Model)
+		},
+		AfterResponseFunc: func(ctx context.Context, meta litellm.CallMeta, resp *litellm.Response, err error) {
+			if err != nil {
+				log.Printf("← call=%s %s error=%v", meta.CallID, meta.Operation, err)
+				return
+			}
+			log.Printf("← call=%s %s duration=%s", meta.CallID, meta.Operation, meta.Duration)
+		},
+		OnStreamChunkFunc: func(ctx context.Context, meta litellm.CallMeta, chunk *litellm.StreamChunk) {
+			if chunk.Type == litellm.ChunkTypeContent && chunk.Content != "" {
+				fmt.Print(chunk.Content)
+			}
+		},
+	}),
+)
+if err != nil {
+	log.Fatal(err)
+}
+```
+
+Notes:
+- Hooks are observational. They do not modify requests, responses, or stream flow.
+- `CallMeta.CallID` is stable for the lifetime of a single call and can be used to correlate hook events.
+- For streaming calls, `AfterResponse` runs when the stream is established; `resp` is `nil` in that case.
 
 ## Advanced Features (optional)
 

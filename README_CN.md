@@ -129,11 +129,11 @@ func main() {
 	}
 	defer stream.Close()
 
-resp, err := litellm.CollectStream(stream)
-if err != nil {
-	log.Fatal(err)
-}
-fmt.Println(resp.Content)
+	resp, err := litellm.CollectStream(stream)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(resp.Content)
 }
 ```
 
@@ -169,6 +169,7 @@ fmt.Println(resp.Content)
 - `CollectStream(stream)` 将流式结果收集为统一的 `Response`。
 - `CollectStreamWithHandler(stream, onChunk)` 收集时也会处理每个 chunk。
 - `CollectStreamWithCallbacks(stream, callbacks)` 提供内容/思考/工具回调。
+- `WithHook(h)` / `WithHooks(...)` 可观察请求、响应和流式 chunk，但不改变执行流程。
 - `Request.Thinking` 在显式设置时控制思考输出；未设置时行为由具体 Provider 决定。
 - `ListModels(ctx)` 列出当前 Provider 可用模型（仅部分 Provider 支持，字段为 best-effort）。
 
@@ -192,6 +193,42 @@ if err != nil {
 }
 fmt.Print(resp.Content)
 ```
+
+### Hooks
+
+当你需要对请求执行过程做轻量观测，但又不想修改 Provider 行为时，可以使用 hooks。
+
+```go
+client, err := litellm.NewWithProvider(
+	"openai",
+	litellm.ProviderConfig{APIKey: os.Getenv("OPENAI_API_KEY")},
+	litellm.WithHook(litellm.HookFuncs{
+		BeforeRequestFunc: func(ctx context.Context, meta litellm.CallMeta) {
+			log.Printf("→ call=%s %s provider=%s model=%s", meta.CallID, meta.Operation, meta.Provider, meta.Model)
+		},
+		AfterResponseFunc: func(ctx context.Context, meta litellm.CallMeta, resp *litellm.Response, err error) {
+			if err != nil {
+				log.Printf("← call=%s %s error=%v", meta.CallID, meta.Operation, err)
+				return
+			}
+			log.Printf("← call=%s %s duration=%s", meta.CallID, meta.Operation, meta.Duration)
+		},
+		OnStreamChunkFunc: func(ctx context.Context, meta litellm.CallMeta, chunk *litellm.StreamChunk) {
+			if chunk.Type == litellm.ChunkTypeContent && chunk.Content != "" {
+				fmt.Print(chunk.Content)
+			}
+		},
+	}),
+)
+if err != nil {
+	log.Fatal(err)
+}
+```
+
+说明：
+- hooks 只做观测，不修改请求、响应或流式控制。
+- `CallMeta.CallID` 在一次调用生命周期内保持稳定，可用于关联前后 hook 事件。
+- 对流式调用来说，`AfterResponse` 会在 stream 建立成功时触发，此时 `resp` 为 `nil`。
 
 ## 高级能力（可选）
 
