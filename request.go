@@ -290,6 +290,14 @@ func WithOnPayload(fn func(provider string, payload []byte)) RequestOption {
 	}
 }
 
+// WithOnWarning sets a hook for portability warnings, such as an unsupported
+// option being omitted for a provider instead of failing the request.
+func WithOnWarning(fn func(provider string, message string)) RequestOption {
+	return func(r *Request) {
+		r.OnWarning = fn
+	}
+}
+
 // WithCacheRetention configures automatic prompt caching placement.
 // Supported values:
 //   - "none":  disable auto-caching

@@ -191,14 +191,20 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 	if req.MaxTokens != nil {
 		maxTokens = *req.MaxTokens
 	}
+	outputConfig, err := convertAnthropicOutputConfig(req.ResponseFormat)
+	if err != nil {
+		return nil, err
+	}
 
 	anthropicReq := anthropicRequest{
 		Model:         req.Model,
 		MaxTokens:     maxTokens,
 		Stream:        stream,
 		Temperature:   req.Temperature,
+		TopP:          req.TopP,
 		StopSequences: req.Stop,
 		ToolChoice:    req.ToolChoice,
+		OutputConfig:  outputConfig,
 	}
 
 	thinking, err := resolveAnthropicThinking(req, maxTokens)
@@ -221,6 +227,7 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 				Description:  tool.Function.Description,
 				InputSchema:  inputSchema,
 				DeferLoading: tool.DeferLoading,
+				Strict:       tool.Function.Strict,
 			})
 		}
 	}
@@ -245,6 +252,34 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 
 	p.setHeaders(httpReq, req)
 	return httpReq, nil
+}
+
+func convertAnthropicOutputConfig(format *ResponseFormat) (*anthropicOutputConfig, error) {
+	if format == nil {
+		return nil, nil
+	}
+
+	switch format.Type {
+	case "json_object":
+		return &anthropicOutputConfig{
+			Format: &anthropicOutputFormat{
+				Type:   "json_schema",
+				Schema: map[string]any{"type": "object", "additionalProperties": true},
+			},
+		}, nil
+	case "json_schema":
+		if format.JSONSchema == nil || format.JSONSchema.Schema == nil {
+			return nil, fmt.Errorf("anthropic: response_format json_schema requires json_schema.schema")
+		}
+		return &anthropicOutputConfig{
+			Format: &anthropicOutputFormat{
+				Type:   "json_schema",
+				Schema: format.JSONSchema.Schema,
+			},
+		}, nil
+	default:
+		return nil, fmt.Errorf("anthropic: unsupported response_format type %q", format.Type)
+	}
 }
 
 func resolveAnthropicThinking(req *Request, maxTokens int) (*ThinkingConfig, error) {
@@ -351,8 +386,6 @@ func (p *AnthropicProvider) convertMessages(req *Request) (any, []anthropicMessa
 	messages := make([]anthropicMessage, 0, len(nonSystemMessages))
 	for i := 0; i < len(nonSystemMessages); i++ {
 		msg := nonSystemMessages[i]
-		isLast := i == len(nonSystemMessages)-1
-
 		// Batch consecutive tool result messages into a single user message.
 		// Keep all tool_result blocks contiguous at the start of the user
 		// message, then append any sibling text from tool_reference results.
@@ -385,7 +418,7 @@ func (p *AnthropicProvider) convertMessages(req *Request) (any, []anthropicMessa
 			continue
 		}
 
-		messages = append(messages, p.convertSingleMessage(msg, req.ResponseFormat, isLast))
+		messages = append(messages, p.convertSingleMessage(msg))
 	}
 
 	// Auto-place cache_control on the last user message's last content block
@@ -401,7 +434,7 @@ func (p *AnthropicProvider) convertMessages(req *Request) (any, []anthropicMessa
 	return system, messages, nil
 }
 
-func (p *AnthropicProvider) convertSingleMessage(msg Message, respFormat *ResponseFormat, isLast bool) anthropicMessage {
+func (p *AnthropicProvider) convertSingleMessage(msg Message) anthropicMessage {
 	role := msg.Role
 	// Anthropic only allows "user" or "assistant". Map "tool" → "user".
 	if role == "tool" {
@@ -410,9 +443,6 @@ func (p *AnthropicProvider) convertSingleMessage(msg Message, respFormat *Respon
 	anthropicMsg := anthropicMessage{Role: role}
 
 	content := msg.Content
-	if respFormat != nil && isLast && msg.Role == "user" {
-		content = p.addStructuredOutputInstructions(content, respFormat)
-	}
 
 	// Multi-content (text + images): prefer Contents over Content for non-tool messages.
 	if len(msg.Contents) > 0 && msg.ToolCallID == "" {
@@ -573,23 +603,6 @@ func resolveAnthropicBetaHeader(extra map[string]any) string {
 		return strings.Join(values, ",")
 	default:
 		return ""
-	}
-}
-
-// addStructuredOutputInstructions adds JSON formatting instructions for structured output
-func (p *AnthropicProvider) addStructuredOutputInstructions(content string, format *ResponseFormat) string {
-	switch format.Type {
-	case "json_object":
-		return content + "\n\nPlease respond with a valid JSON object only."
-	case "json_schema":
-		if format.JSONSchema != nil {
-			schemaJSON, _ := json.Marshal(format.JSONSchema.Schema)
-			return fmt.Sprintf("%s\n\nPlease respond with a valid JSON object that strictly follows this schema:\n%s\n\nRespond with JSON only, no additional text.",
-				content, string(schemaJSON))
-		}
-		return content + "\n\nPlease respond with a valid JSON object only."
-	default:
-		return content
 	}
 }
 
@@ -785,16 +798,27 @@ func (r *anthropicStreamReader) Close() error {
 
 // Anthropic API request/response structures
 type anthropicRequest struct {
-	Model         string             `json:"model"`
-	System        any                `json:"system,omitempty"` // System prompt (can be string or array of content blocks)
-	MaxTokens     int                `json:"max_tokens"`
-	Messages      []anthropicMessage `json:"messages"`
-	Stream        bool               `json:"stream,omitempty"`
-	Temperature   *float64           `json:"temperature,omitempty"`
-	Tools         []anthropicTool    `json:"tools,omitempty"`
-	ToolChoice    any                `json:"tool_choice,omitempty"`    // How the model should use the provided tools
-	StopSequences []string           `json:"stop_sequences,omitempty"` // Custom text sequences that will cause the model to stop generating
-	Thinking      *ThinkingConfig    `json:"thinking,omitempty"`
+	Model         string                 `json:"model"`
+	System        any                    `json:"system,omitempty"` // System prompt (can be string or array of content blocks)
+	MaxTokens     int                    `json:"max_tokens"`
+	Messages      []anthropicMessage     `json:"messages"`
+	Stream        bool                   `json:"stream,omitempty"`
+	Temperature   *float64               `json:"temperature,omitempty"`
+	TopP          *float64               `json:"top_p,omitempty"`
+	Tools         []anthropicTool        `json:"tools,omitempty"`
+	ToolChoice    any                    `json:"tool_choice,omitempty"`    // How the model should use the provided tools
+	StopSequences []string               `json:"stop_sequences,omitempty"` // Custom text sequences that will cause the model to stop generating
+	Thinking      *ThinkingConfig        `json:"thinking,omitempty"`
+	OutputConfig  *anthropicOutputConfig `json:"output_config,omitempty"`
+}
+
+type anthropicOutputConfig struct {
+	Format *anthropicOutputFormat `json:"format,omitempty"`
+}
+
+type anthropicOutputFormat struct {
+	Type   string `json:"type"`
+	Schema any    `json:"schema,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -874,7 +898,7 @@ type anthropicImageSource struct {
 	Type      string `json:"type"`                 // "base64" or "url"
 	MediaType string `json:"media_type,omitempty"` // e.g. "image/jpeg"
 	Data      string `json:"data,omitempty"`       // base64-encoded data
-	URL       string `json:"url,omitempty"`         // image URL
+	URL       string `json:"url,omitempty"`        // image URL
 }
 
 // anthropicCacheControl represents Anthropic's cache control structure
@@ -887,6 +911,7 @@ type anthropicTool struct {
 	Description  string         `json:"description"`
 	InputSchema  map[string]any `json:"input_schema"`
 	DeferLoading bool           `json:"defer_loading,omitempty"`
+	Strict       *bool          `json:"strict,omitempty"`
 }
 
 type anthropicResponse struct {

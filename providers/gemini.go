@@ -68,56 +68,12 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 		Contents: make([]geminiContent, 0),
 	}
 
-	thinking := normalizeThinking(req)
-	if thinking != nil && thinking.Type != "enabled" && thinking.Type != "disabled" {
-		return nil, fmt.Errorf("gemini: thinking type must be enabled or disabled")
+	generationConfig, err := p.buildGenerationConfig(req)
+	if err != nil {
+		return nil, err
 	}
-
-	// Set generation configuration
-	if req.Temperature != nil || req.MaxTokens != nil || req.ResponseFormat != nil || len(req.Stop) > 0 || thinking != nil {
-		geminiReq.GenerationConfig = &geminiGenerationConfig{
-			Temperature:     req.Temperature,
-			MaxOutputTokens: req.MaxTokens,
-			StopSequences:   req.Stop, // Map Stop to stopSequences for Gemini
-		}
-		if thinking != nil {
-			includeThoughts := thinking.Type != "disabled"
-			geminiReq.GenerationConfig.ThinkingConfig = &geminiThinkingConfig{
-				ThinkingLevel:   thinking.Level,
-				IncludeThoughts: &includeThoughts,
-				ThinkingBudget:  thinking.BudgetTokens,
-			}
-		}
-
-		// Handle response format
-		if req.ResponseFormat != nil {
-			switch req.ResponseFormat.Type {
-			case "json_object":
-				geminiReq.GenerationConfig.ResponseMimeType = "application/json"
-			case "json_schema":
-				geminiReq.GenerationConfig.ResponseMimeType = "application/json"
-				if req.ResponseFormat.JSONSchema != nil && req.ResponseFormat.JSONSchema.Schema != nil {
-					if schema, ok := req.ResponseFormat.JSONSchema.Schema.(map[string]any); ok {
-						geminiReq.GenerationConfig.ResponseSchema = &geminiResponseSchema{
-							Type:        "object",
-							Description: req.ResponseFormat.JSONSchema.Description,
-						}
-						if props, ok := schema["properties"].(map[string]any); ok {
-							geminiReq.GenerationConfig.ResponseSchema.Properties = props
-						}
-						if required, ok := schema["required"].([]any); ok {
-							reqFields := make([]string, len(required))
-							for i, field := range required {
-								if fieldStr, ok := field.(string); ok {
-									reqFields[i] = fieldStr
-								}
-							}
-							geminiReq.GenerationConfig.ResponseSchema.Required = reqFields
-						}
-					}
-				}
-			}
-		}
+	if generationConfig != nil {
+		geminiReq.GenerationConfig = generationConfig
 	}
 
 	contents, systemMessage, err := p.buildContents(req)
@@ -134,29 +90,12 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 
 	// Convert tool definitions
 	if len(req.Tools) > 0 {
-		tool := geminiTool{
-			FunctionDeclarations: make([]geminiFunctionDeclaration, 0, len(req.Tools)),
+		warnIgnoredStrictTools(req, "gemini", req.Tools)
+		tools, err := p.convertTools(req.Tools)
+		if err != nil {
+			return nil, err
 		}
-		for _, t := range req.Tools {
-			var params map[string]any
-			if p, ok := t.Function.Parameters.(map[string]any); ok {
-				params = p
-			} else {
-				if jsonBytes, err := json.Marshal(t.Function.Parameters); err == nil {
-					if err := json.Unmarshal(jsonBytes, &params); err != nil {
-						// Skip tools with invalid parameters
-						continue
-					}
-				}
-			}
-
-			tool.FunctionDeclarations = append(tool.FunctionDeclarations, geminiFunctionDeclaration{
-				Name:        t.Function.Name,
-				Description: t.Function.Description,
-				Parameters:  params,
-			})
-		}
-		geminiReq.Tools = []geminiTool{tool}
+		geminiReq.Tools = tools
 
 		// Configure tool calling mode based on ToolChoice
 		if req.ToolChoice != nil {
@@ -262,31 +201,22 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	if err := p.validateExtra(req); err != nil {
 		return nil, err
 	}
+	if err := p.BaseProvider.ValidateRequest(req); err != nil {
+		return nil, err
+	}
 
 	geminiReq := geminiRequest{
 		Contents: make([]geminiContent, 0),
 	}
 
-	thinking := normalizeThinking(req)
-	if thinking != nil && thinking.Type != "enabled" && thinking.Type != "disabled" {
-		return nil, fmt.Errorf("gemini: thinking type must be enabled or disabled")
-	}
 	includeReasoning := !isThinkingDisabled(req)
 
-	if req.Temperature != nil || req.MaxTokens != nil || len(req.Stop) > 0 || thinking != nil {
-		geminiReq.GenerationConfig = &geminiGenerationConfig{
-			Temperature:     req.Temperature,
-			MaxOutputTokens: req.MaxTokens,
-			StopSequences:   req.Stop, // Map Stop to stopSequences for Gemini
-		}
-		if thinking != nil {
-			includeThoughts := thinking.Type != "disabled"
-			geminiReq.GenerationConfig.ThinkingConfig = &geminiThinkingConfig{
-				ThinkingLevel:   thinking.Level,
-				IncludeThoughts: &includeThoughts,
-				ThinkingBudget:  thinking.BudgetTokens,
-			}
-		}
+	generationConfig, err := p.buildGenerationConfig(req)
+	if err != nil {
+		return nil, err
+	}
+	if generationConfig != nil {
+		geminiReq.GenerationConfig = generationConfig
 	}
 
 	contents, systemMessage, err := p.buildContents(req)
@@ -298,6 +228,18 @@ func (p *GeminiProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	if systemMessage != "" {
 		geminiReq.SystemInstruction = &geminiContent{
 			Parts: []geminiPart{{Text: systemMessage}},
+		}
+	}
+
+	if len(req.Tools) > 0 {
+		warnIgnoredStrictTools(req, "gemini", req.Tools)
+		tools, err := p.convertTools(req.Tools)
+		if err != nil {
+			return nil, err
+		}
+		geminiReq.Tools = tools
+		if req.ToolChoice != nil {
+			geminiReq.ToolConfig = p.convertToolChoice(req.ToolChoice)
 		}
 	}
 
@@ -547,6 +489,99 @@ func (p *GeminiProvider) generateToolCallID() string {
 	timestamp := time.Now().Unix()
 	counter := geminiToolCallCounter.Add(1)
 	return fmt.Sprintf("call_%d_%d", timestamp, counter)
+}
+
+func (p *GeminiProvider) buildGenerationConfig(req *Request) (*geminiGenerationConfig, error) {
+	thinking := normalizeThinking(req)
+	if thinking != nil && thinking.Type != "enabled" && thinking.Type != "disabled" {
+		return nil, fmt.Errorf("gemini: thinking type must be enabled or disabled")
+	}
+	if req.Temperature == nil && req.MaxTokens == nil && req.TopP == nil && req.ResponseFormat == nil && len(req.Stop) == 0 && thinking == nil {
+		return nil, nil
+	}
+
+	cfg := &geminiGenerationConfig{
+		Temperature:     req.Temperature,
+		MaxOutputTokens: req.MaxTokens,
+		TopP:            req.TopP,
+		StopSequences:   req.Stop,
+	}
+	if thinking != nil {
+		includeThoughts := thinking.Type != "disabled"
+		cfg.ThinkingConfig = &geminiThinkingConfig{
+			ThinkingLevel:   thinking.Level,
+			IncludeThoughts: &includeThoughts,
+			ThinkingBudget:  thinking.BudgetTokens,
+		}
+	}
+	if err := p.applyResponseFormat(cfg, req.ResponseFormat); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func (p *GeminiProvider) applyResponseFormat(cfg *geminiGenerationConfig, format *ResponseFormat) error {
+	if format == nil {
+		return nil
+	}
+
+	switch format.Type {
+	case "json_object":
+		cfg.ResponseMimeType = "application/json"
+	case "json_schema":
+		if format.JSONSchema == nil || format.JSONSchema.Schema == nil {
+			return fmt.Errorf("gemini: response_format json_schema requires json_schema.schema")
+		}
+		cfg.ResponseMimeType = "application/json"
+		cfg.ResponseJsonSchema = format.JSONSchema.Schema
+	default:
+		return fmt.Errorf("gemini: unsupported response_format type %q", format.Type)
+	}
+	return nil
+}
+
+func (p *GeminiProvider) convertTools(tools []Tool) ([]geminiTool, error) {
+	tool := geminiTool{
+		FunctionDeclarations: make([]geminiFunctionDeclaration, 0, len(tools)),
+	}
+	for _, t := range tools {
+		params, err := geminiToolParameters(t)
+		if err != nil {
+			return nil, err
+		}
+		tool.FunctionDeclarations = append(tool.FunctionDeclarations, geminiFunctionDeclaration{
+			Name:        t.Function.Name,
+			Description: t.Function.Description,
+			Parameters:  params,
+		})
+	}
+	return []geminiTool{tool}, nil
+}
+
+func geminiToolParameters(tool Tool) (map[string]any, error) {
+	if tool.Function.Parameters == nil {
+		return nil, nil
+	}
+	if params, ok := tool.Function.Parameters.(map[string]any); ok {
+		return params, nil
+	}
+	jsonBytes, err := json.Marshal(tool.Function.Parameters)
+	if err != nil {
+		return nil, fmt.Errorf("gemini: failed to marshal tool parameters for %q: %w", tool.Function.Name, err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(jsonBytes, &params); err != nil {
+		return nil, fmt.Errorf("gemini: invalid tool parameters for %q: %w", tool.Function.Name, err)
+	}
+	return params, nil
+}
+
+func warnIgnoredStrictTools(req *Request, provider string, tools []Tool) {
+	for _, tool := range tools {
+		if tool.Type == "function" && tool.Function.Strict != nil && *tool.Function.Strict {
+			notifyWarning(req, provider, "tool %q requested strict=true, but strict tool calling is not supported by this provider; strict was omitted", tool.Function.Name)
+		}
+	}
 }
 
 // convertToolChoice converts the unified ToolChoice to Gemini's toolConfig format
@@ -857,14 +892,15 @@ type geminiFunctionResponse struct {
 }
 
 type geminiGenerationConfig struct {
-	Temperature      *float64              `json:"temperature,omitempty"`
-	MaxOutputTokens  *int                  `json:"maxOutputTokens,omitempty"`
-	TopP             *float64              `json:"topP,omitempty"`
-	TopK             *int                  `json:"topK,omitempty"`
-	StopSequences    []string              `json:"stopSequences,omitempty"`
-	ResponseMimeType string                `json:"responseMimeType,omitempty"`
-	ResponseSchema   *geminiResponseSchema `json:"responseSchema,omitempty"`
-	ThinkingConfig   *geminiThinkingConfig `json:"thinkingConfig,omitempty"`
+	Temperature        *float64              `json:"temperature,omitempty"`
+	MaxOutputTokens    *int                  `json:"maxOutputTokens,omitempty"`
+	TopP               *float64              `json:"topP,omitempty"`
+	TopK               *int                  `json:"topK,omitempty"`
+	StopSequences      []string              `json:"stopSequences,omitempty"`
+	ResponseMimeType   string                `json:"responseMimeType,omitempty"`
+	ResponseSchema     *geminiResponseSchema `json:"responseSchema,omitempty"`
+	ResponseJsonSchema any                   `json:"responseJsonSchema,omitempty"`
+	ThinkingConfig     *geminiThinkingConfig `json:"thinkingConfig,omitempty"`
 }
 
 type geminiResponseSchema struct {

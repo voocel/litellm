@@ -87,6 +87,7 @@ type bedrockRequest struct {
 	System                       []bedrockSystemContent  `json:"system,omitempty"`
 	InferenceConfig              *bedrockInferenceConfig `json:"inferenceConfig,omitempty"`
 	ToolConfig                   *bedrockToolConfig      `json:"toolConfig,omitempty"`
+	OutputConfig                 *bedrockOutputConfig    `json:"outputConfig,omitempty"`
 	AdditionalModelRequestFields map[string]any          `json:"additionalModelRequestFields,omitempty"`
 }
 
@@ -146,7 +147,27 @@ type bedrockTool struct {
 type bedrockToolSpec struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	Strict      *bool  `json:"strict,omitempty"`
 	InputSchema any    `json:"inputSchema"`
+}
+
+type bedrockOutputConfig struct {
+	TextFormat *bedrockTextFormat `json:"textFormat,omitempty"`
+}
+
+type bedrockTextFormat struct {
+	Type      string                     `json:"type"`
+	Structure bedrockTextFormatStructure `json:"structure"`
+}
+
+type bedrockTextFormatStructure struct {
+	JSONSchema bedrockJSONSchema `json:"jsonSchema"`
+}
+
+type bedrockJSONSchema struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Schema      string `json:"schema"`
 }
 
 type bedrockResponse struct {
@@ -349,8 +370,13 @@ func (p *BedrockProvider) buildRequest(req *Request) (*bedrockRequest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bedrock: %w", err)
 	}
+	outputConfig, err := convertBedrockOutputConfig(req.ResponseFormat)
+	if err != nil {
+		return nil, err
+	}
 	bedrockReq := &bedrockRequest{
-		Messages: make([]bedrockMessage, 0, len(prepared)),
+		Messages:     make([]bedrockMessage, 0, len(prepared)),
+		OutputConfig: outputConfig,
 	}
 
 	for _, msg := range prepared {
@@ -441,11 +467,16 @@ func (p *BedrockProvider) buildRequest(req *Request) (*bedrockRequest, error) {
 			Tools: make([]bedrockTool, len(req.Tools)),
 		}
 		for i, tool := range req.Tools {
+			params := tool.Function.Parameters
+			if tool.Function.Strict != nil && *tool.Function.Strict {
+				params = cleanOpenAIStrictSchema(params)
+			}
 			bedrockReq.ToolConfig.Tools[i] = bedrockTool{
 				ToolSpec: &bedrockToolSpec{
 					Name:        tool.Function.Name,
 					Description: tool.Function.Description,
-					InputSchema: map[string]any{"json": tool.Function.Parameters},
+					Strict:      tool.Function.Strict,
+					InputSchema: map[string]any{"json": params},
 				},
 			}
 		}
@@ -455,6 +486,62 @@ func (p *BedrockProvider) buildRequest(req *Request) (*bedrockRequest, error) {
 	}
 
 	return bedrockReq, nil
+}
+
+func convertBedrockOutputConfig(format *ResponseFormat) (*bedrockOutputConfig, error) {
+	if format == nil {
+		return nil, nil
+	}
+
+	var schema any
+	name := ""
+	description := ""
+	switch format.Type {
+	case "json_object":
+		name = "json_object"
+		description = "Generic JSON object response"
+		schema = map[string]any{"type": "object", "additionalProperties": true}
+	case "json_schema":
+		if format.JSONSchema == nil || format.JSONSchema.Schema == nil {
+			return nil, fmt.Errorf("bedrock: response_format json_schema requires json_schema.schema")
+		}
+		name = format.JSONSchema.Name
+		description = format.JSONSchema.Description
+		schema = format.JSONSchema.Schema
+	default:
+		return nil, fmt.Errorf("bedrock: unsupported response_format type %q", format.Type)
+	}
+
+	schemaString, err := bedrockSchemaString(schema)
+	if err != nil {
+		return nil, err
+	}
+	return &bedrockOutputConfig{
+		TextFormat: &bedrockTextFormat{
+			Type: "json_schema",
+			Structure: bedrockTextFormatStructure{
+				JSONSchema: bedrockJSONSchema{
+					Name:        name,
+					Description: description,
+					Schema:      schemaString,
+				},
+			},
+		},
+	}, nil
+}
+
+func bedrockSchemaString(schema any) (string, error) {
+	if s, ok := schema.(string); ok {
+		if !json.Valid([]byte(s)) {
+			return "", fmt.Errorf("bedrock: response_format json_schema.schema must be valid JSON")
+		}
+		return s, nil
+	}
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return "", fmt.Errorf("bedrock: marshal response_format schema: %w", err)
+	}
+	return string(data), nil
 }
 
 func (p *BedrockProvider) parseResponse(resp *bedrockResponse, model string) *Response {
@@ -488,7 +575,6 @@ func (p *BedrockProvider) parseResponse(resp *bedrockResponse, model string) *Re
 
 	return response
 }
-
 
 // AWS Signature V4 implementation
 func (p *BedrockProvider) signRequest(req *http.Request, payload []byte) error {

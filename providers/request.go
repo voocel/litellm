@@ -67,11 +67,10 @@ type FunctionDef struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Parameters  any    `json:"parameters"`
-	// Strict enables OpenAI-style strict tool calling (Structured Outputs for
-	// function arguments). When set, the schema is normalised
-	// (additionalProperties:false on every object) and the flag is forwarded
-	// to OpenAI Chat as `tools[i].function.strict`; Responses API uses its
-	// flat function tool `strict` field.
+	// Strict enables provider-native strict tool calling (Structured Outputs
+	// for function arguments). OpenAI-compatible Chat APIs use
+	// `tools[i].function.strict`; OpenAI Responses uses its flat function tool
+	// `strict` field; Anthropic and Bedrock use their native tool strict fields.
 	//
 	// Caller responsibilities for strict mode (per OpenAI spec):
 	//   - every property must be listed in `required`; use a `["string","null"]`
@@ -79,8 +78,8 @@ type FunctionDef struct {
 	//   - <= 5000 total object properties, <= 10 nesting levels
 	//   - keywords like format/pattern/minLength/maximum are best-effort only
 	//
-	// nil leaves the provider default (Chat Completions defaults to non-strict;
-	// Responses API normalises into strict).
+	// nil leaves the provider default. Providers without documented strict tool
+	// support omit the flag for cross-model portability.
 	// See https://platform.openai.com/docs/guides/function-calling
 	Strict *bool `json:"strict,omitempty"`
 }
@@ -126,6 +125,10 @@ type Request struct {
 	// OnPayload is called with the serialized JSON body before sending
 	// the HTTP request. Useful for debugging and logging API calls.
 	OnPayload func(provider string, payload []byte) `json:"-"`
+
+	// OnWarning is called when a provider adapter keeps the request portable by
+	// omitting or reducing an unsupported option instead of failing the call.
+	OnWarning func(provider string, message string) `json:"-"`
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +201,36 @@ func validateThinking(thinking *ThinkingConfig) error {
 		return nil
 	}
 	return fmt.Errorf("thinking type must be enabled or disabled")
+}
+
+func allFunctionToolsStrict(tools []Tool) bool {
+	hasFunctionTool := false
+	for _, tool := range tools {
+		if tool.Type != "function" {
+			continue
+		}
+		hasFunctionTool = true
+		if tool.Function.Strict == nil || !*tool.Function.Strict {
+			return false
+		}
+	}
+	return hasFunctionTool
+}
+
+func anyFunctionToolStrict(tools []Tool) bool {
+	for _, tool := range tools {
+		if tool.Type == "function" && tool.Function.Strict != nil && *tool.Function.Strict {
+			return true
+		}
+	}
+	return false
+}
+
+func notifyWarning(req *Request, provider string, format string, args ...any) {
+	if req == nil || req.OnWarning == nil {
+		return
+	}
+	req.OnWarning(provider, fmt.Sprintf(format, args...))
 }
 
 // ---------------------------------------------------------------------------

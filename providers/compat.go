@@ -111,6 +111,11 @@ type Compat struct {
 	// Leave false for providers that reject unknown OpenAI-only fields.
 	SupportsStrictTools bool
 
+	// RequireAllToolsStrict marks providers whose strict mode is request-wide.
+	// Strict is forwarded only when every function tool opts in; otherwise it is
+	// omitted for portability.
+	RequireAllToolsStrict bool
+
 	// SkipAPIKeyValidation skips the API key check.  Used by local
 	// providers like Ollama that don't require authentication.
 	SkipAPIKeyValidation bool
@@ -440,6 +445,7 @@ func (p *OpenAICompatProvider) buildRequestBody(req *Request, stream bool) ([]by
 	if !c.OmitStop && len(req.Stop) > 0 {
 		stops := req.Stop
 		if c.MaxStopSequences > 0 && len(stops) > c.MaxStopSequences {
+			notifyWarning(req, c.ProviderName, "stop has %d sequence(s), provider supports at most %d; extra sequences were omitted", len(stops), c.MaxStopSequences)
 			stops = stops[:c.MaxStopSequences]
 		}
 		body["stop"] = stops
@@ -447,10 +453,17 @@ func (p *OpenAICompatProvider) buildRequestBody(req *Request, stream bool) ([]by
 
 	// Tools
 	if len(req.Tools) > 0 {
+		supportsStrict := c.SupportsStrictTools
+		if c.RequireAllToolsStrict && anyFunctionToolStrict(req.Tools) && !allFunctionToolsStrict(req.Tools) {
+			supportsStrict = false
+			notifyWarning(req, c.ProviderName, "tool strict was omitted because this provider requires every function tool to set strict=true")
+		}
 		if c.CustomToolConverter != nil {
 			body["tools"] = c.CustomToolConverter(req.Tools)
 		} else {
-			tools, err := convertOpenAITools(req.Tools, c.SupportsStrictTools)
+			tools, err := convertOpenAITools(req.Tools, supportsStrict, func(toolName string) {
+				notifyWarning(req, c.ProviderName, "tool %q requested strict=true, but strict tool calling is not enabled for this provider; strict was omitted", toolName)
+			})
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", p.compat.ProviderName, err)
 			}

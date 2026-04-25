@@ -1,5 +1,7 @@
 package providers
 
+import "strings"
+
 func init() {
 	RegisterBuiltin("deepseek", func(cfg ProviderConfig) Provider {
 		return NewDeepSeek(cfg)
@@ -8,6 +10,7 @@ func init() {
 
 // NewDeepSeek creates a new DeepSeek provider.
 func NewDeepSeek(config ProviderConfig) *OpenAICompatProvider {
+	supportsStrict := strings.HasSuffix(strings.TrimSuffix(config.BaseURL, "/"), "/beta")
 	return NewOpenAICompat(config, Compat{
 		ProviderName:              "deepseek",
 		DefaultBaseURL:            "https://api.deepseek.com",
@@ -16,6 +19,8 @@ func NewDeepSeek(config ProviderConfig) *OpenAICompatProvider {
 		HasCacheTokens:            true,
 		// DeepSeek supports tools[i].function.strict on its beta endpoint.
 		// Callers should set BaseURL to https://api.deepseek.com/beta for it.
-		SupportsStrictTools: true,
+		// Its beta strict mode requires every function tool to set strict=true.
+		SupportsStrictTools:   supportsStrict,
+		RequireAllToolsStrict: true,
 	})
 }

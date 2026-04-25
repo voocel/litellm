@@ -148,7 +148,7 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 
 	// Convert tool definitions
 	if len(req.Tools) > 0 {
-		tools, err := convertOpenAITools(req.Tools, true)
+		tools, err := convertOpenAITools(req.Tools, true, nil)
 		if err != nil {
 			return nil, fmt.Errorf("openai: %w", err)
 		}
@@ -291,7 +291,7 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 
 	// Convert tool definitions
 	if len(req.Tools) > 0 {
-		tools, err := convertOpenAITools(req.Tools, true)
+		tools, err := convertOpenAITools(req.Tools, true, nil)
 		if err != nil {
 			return nil, fmt.Errorf("openai: %w", err)
 		}
@@ -1012,7 +1012,7 @@ func ConvertMessages(messages []Message) []OpenAICompatMessage {
 // object) and the strict flag is forwarded as `tools[i].function.strict`.
 // See https://platform.openai.com/docs/guides/function-calling
 func ConvertTools(tools []Tool) []openaiTool {
-	result, err := convertOpenAITools(tools, true)
+	result, err := convertOpenAITools(tools, true, nil)
 	if err == nil {
 		return result
 	}
@@ -1035,7 +1035,7 @@ func ConvertTools(tools []Tool) []openaiTool {
 	return result
 }
 
-func convertOpenAITools(tools []Tool, supportsStrict bool) ([]openaiTool, error) {
+func convertOpenAITools(tools []Tool, supportsStrict bool, onStrictOmitted func(toolName string)) ([]openaiTool, error) {
 	result := make([]openaiTool, len(tools))
 	for i, tool := range tools {
 		var function *openaiToolFunction
@@ -1043,15 +1043,14 @@ func convertOpenAITools(tools []Tool, supportsStrict bool) ([]openaiTool, error)
 			params := tool.Function.Parameters
 			strict := tool.Function.Strict
 			if strict != nil && *strict {
-				if !supportsStrict {
-					return nil, fmt.Errorf("tool %q requested strict=true, but this provider does not support strict tool calling", tool.Function.Name)
-				}
-				if params != nil {
+				if supportsStrict && params != nil {
 					normalised, err := normalizeOpenAIStrictSchema(params)
 					if err != nil {
 						return nil, fmt.Errorf("tool %q strict schema invalid: %w", tool.Function.Name, err)
 					}
 					params = normalised
+				} else if !supportsStrict && onStrictOmitted != nil {
+					onStrictOmitted(tool.Function.Name)
 				}
 			}
 			if !supportsStrict {
