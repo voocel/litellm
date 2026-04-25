@@ -55,8 +55,8 @@ type Compat struct {
 	JSONSchemaToPrompt bool
 
 	// ThinkingMapper converts ThinkingConfig into provider-specific request
-	// body fields.  Returns nil to skip.  If nil, uses default
-	// {"thinking":{"type":"enabled/disabled"}} format.
+	// body fields. Returns nil to skip. If nil, thinking is omitted and a
+	// portability warning is emitted.
 	ThinkingMapper func(thinking *ThinkingConfig, model string) map[string]any
 
 	// ResponseFormatMapper converts ResponseFormat to the provider-specific
@@ -483,8 +483,7 @@ func (p *OpenAICompatProvider) buildRequestBody(req *Request, stream bool) ([]by
 				}
 			}
 		} else {
-			// Default: {"thinking": {"type": "enabled/disabled"}}
-			body["thinking"] = map[string]string{"type": thinking.Type}
+			notifyWarning(req, c.ProviderName, "thinking was omitted because this provider has no configured thinking mapper")
 		}
 	}
 
