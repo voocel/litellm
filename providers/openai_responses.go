@@ -83,9 +83,9 @@ type responsesAPIRequest struct {
 	Truncation string `json:"truncation,omitempty"`
 
 	// Tool configuration
-	Tools             []openaiTool `json:"tools,omitempty"`
-	ToolChoice        any          `json:"tool_choice,omitempty"`
-	ParallelToolCalls *bool        `json:"parallel_tool_calls,omitempty"`
+	Tools             []responsesAPITool `json:"tools,omitempty"`
+	ToolChoice        any                `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool              `json:"parallel_tool_calls,omitempty"`
 
 	// Reasoning configuration (for gpt-5 and o-series models)
 	Reasoning *responsesAPIReasoning `json:"reasoning,omitempty"`
@@ -124,6 +124,17 @@ type responsesAPIJSONSchemaSpec struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Schema      any    `json:"schema"`
+	Strict      *bool  `json:"strict,omitempty"`
+}
+
+// responsesAPITool is the official Responses API function tool shape.
+// Unlike Chat Completions, function tools are flat:
+// {type:"function", name, description, parameters, strict}.
+type responsesAPITool struct {
+	Type        string `json:"type"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Parameters  any    `json:"parameters,omitempty"`
 	Strict      *bool  `json:"strict,omitempty"`
 }
 
@@ -336,23 +347,13 @@ func (p *OpenAIProvider) buildResponsesAPIRequest(req *OpenAIResponsesRequest) (
 		}
 	}
 
-	// Responses API supports tools
+	// Responses API uses a flat function tool shape, unlike Chat Completions.
 	if len(req.Tools) > 0 {
-		responsesReq.Tools = make([]openaiTool, len(req.Tools))
-		for i, tool := range req.Tools {
-			var function *openaiToolFunction
-			if tool.Type == "function" {
-				function = &openaiToolFunction{
-					Name:        tool.Function.Name,
-					Description: tool.Function.Description,
-					Parameters:  tool.Function.Parameters,
-				}
-			}
-			responsesReq.Tools[i] = openaiTool{
-				Type:     tool.Type,
-				Function: function,
-			}
+		tools, err := convertResponsesAPITools(req.Tools)
+		if err != nil {
+			return responsesAPIRequest{}, fmt.Errorf("openai: %w", err)
 		}
+		responsesReq.Tools = tools
 	}
 
 	if req.ToolChoice != nil {
@@ -374,6 +375,37 @@ func (p *OpenAIProvider) buildResponsesAPIRequest(req *OpenAIResponsesRequest) (
 	}
 
 	return responsesReq, nil
+}
+
+func convertResponsesAPITools(tools []Tool) ([]responsesAPITool, error) {
+	result := make([]responsesAPITool, len(tools))
+	for i, tool := range tools {
+		if tool.Type != "function" {
+			return nil, fmt.Errorf("responses API only supports generic function tools, got %q", tool.Type)
+		}
+		if tool.Function.Name == "" {
+			return nil, fmt.Errorf("responses function tool name is required")
+		}
+
+		params := tool.Function.Parameters
+		strictEnabled := tool.Function.Strict == nil || *tool.Function.Strict
+		if strictEnabled && params != nil {
+			normalised, err := normalizeOpenAIStrictSchema(params)
+			if err != nil {
+				return nil, fmt.Errorf("tool %q strict schema invalid: %w", tool.Function.Name, err)
+			}
+			params = normalised
+		}
+
+		result[i] = responsesAPITool{
+			Type:        "function",
+			Name:        tool.Function.Name,
+			Description: tool.Function.Description,
+			Parameters:  params,
+			Strict:      tool.Function.Strict,
+		}
+	}
+	return result, nil
 }
 
 func tryConvertMessagesToResponsesInputString(messages []Message) (string, bool) {

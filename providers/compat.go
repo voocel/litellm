@@ -107,6 +107,10 @@ type Compat struct {
 	// DataPrefix is the SSE data line prefix.  Default: "data: ".
 	DataPrefix string
 
+	// SupportsStrictTools forwards tools[i].function.strict when true.
+	// Leave false for providers that reject unknown OpenAI-only fields.
+	SupportsStrictTools bool
+
 	// SkipAPIKeyValidation skips the API key check.  Used by local
 	// providers like Ollama that don't require authentication.
 	SkipAPIKeyValidation bool
@@ -446,7 +450,11 @@ func (p *OpenAICompatProvider) buildRequestBody(req *Request, stream bool) ([]by
 		if c.CustomToolConverter != nil {
 			body["tools"] = c.CustomToolConverter(req.Tools)
 		} else {
-			body["tools"] = ConvertTools(req.Tools)
+			tools, err := convertOpenAITools(req.Tools, c.SupportsStrictTools)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", p.compat.ProviderName, err)
+			}
+			body["tools"] = tools
 		}
 	}
 	if req.ToolChoice != nil {

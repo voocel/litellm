@@ -148,7 +148,11 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 
 	// Convert tool definitions
 	if len(req.Tools) > 0 {
-		openaiReq.Tools = ConvertTools(req.Tools)
+		tools, err := convertOpenAITools(req.Tools, true)
+		if err != nil {
+			return nil, fmt.Errorf("openai: %w", err)
+		}
+		openaiReq.Tools = tools
 	}
 
 	msgs, err := prepareOpenAIMessages(req.Messages)
@@ -287,7 +291,11 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 
 	// Convert tool definitions
 	if len(req.Tools) > 0 {
-		openaiReq.Tools = ConvertTools(req.Tools)
+		tools, err := convertOpenAITools(req.Tools, true)
+		if err != nil {
+			return nil, fmt.Errorf("openai: %w", err)
+		}
+		openaiReq.Tools = tools
 	}
 
 	// Set tool choice
@@ -638,6 +646,7 @@ type openaiToolFunction struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Parameters  any    `json:"parameters"`
+	Strict      *bool  `json:"strict,omitempty"`
 }
 
 type openaiToolCall struct {
@@ -753,34 +762,120 @@ func (p *OpenAIProvider) convertResponseFormat(rf *ResponseFormat) *openaiRespon
 
 // cleanSchemaForOpenAI removes unsupported validation rules and ensures OpenAI compatibility
 func (p *OpenAIProvider) cleanSchemaForOpenAI(schema interface{}) interface{} {
+	return cleanOpenAIStrictSchema(schema)
+}
+
+// cleanOpenAIStrictSchema is the receiver-free implementation of OpenAI's
+// strict-mode schema normalisation:
+//   - drops keywords OpenAI rejects (examples / default / const)
+//   - sets additionalProperties:false on every object (required by strict mode)
+//
+// Note this only normalises what we can do safely. Strict mode also requires
+// every property to be listed in `required`; we do NOT auto-add required entries
+// because that changes user-visible semantics. Callers must supply schemas where
+// optional fields use `["type","null"]` unions per the OpenAI spec.
+func cleanOpenAIStrictSchema(schema any) any {
 	switch s := schema.(type) {
-	case map[string]interface{}:
-		result := make(map[string]interface{}, len(s))
+	case map[string]any:
+		result := make(map[string]any, len(s))
 		for k, v := range s {
-			// Skip unsupported OpenAI schema properties
 			if k == "examples" || k == "default" || k == "const" {
 				continue
 			}
-			result[k] = p.cleanSchemaForOpenAI(v)
+			result[k] = cleanOpenAIStrictSchema(v)
 		}
-
-		// Add additionalProperties: false for objects in strict mode
-		if result["type"] == "object" {
-			if _, hasAdditionalProps := result["additionalProperties"]; !hasAdditionalProps {
+		if schemaTypeIncludesObject(result["type"]) {
+			if _, ok := result["additionalProperties"]; !ok {
 				result["additionalProperties"] = false
 			}
 		}
-
 		return result
-	case []interface{}:
-		cleaned := make([]interface{}, len(s))
+	case []any:
+		cleaned := make([]any, len(s))
 		for i, v := range s {
-			cleaned[i] = p.cleanSchemaForOpenAI(v)
+			cleaned[i] = cleanOpenAIStrictSchema(v)
 		}
 		return cleaned
 	default:
 		return schema
 	}
+}
+
+func normalizeOpenAIStrictSchema(schema any) (any, error) {
+	cleaned := cleanOpenAIStrictSchema(schema)
+	if err := validateOpenAIStrictSchema(cleaned, "schema"); err != nil {
+		return nil, err
+	}
+	return cleaned, nil
+}
+
+func validateOpenAIStrictSchema(schema any, path string) error {
+	switch s := schema.(type) {
+	case map[string]any:
+		if schemaTypeIncludesObject(s["type"]) {
+			if v, ok := s["additionalProperties"]; !ok || v != false {
+				return fmt.Errorf("%s: object schemas used with strict=true require additionalProperties:false", path)
+			}
+			props, _ := s["properties"].(map[string]any)
+			if len(props) > 0 {
+				required := requiredFieldSet(s["required"])
+				for name := range props {
+					if _, ok := required[name]; !ok {
+						return fmt.Errorf("%s.properties.%s must be listed in required when strict=true", path, name)
+					}
+				}
+			}
+		}
+		for key, value := range s {
+			if err := validateOpenAIStrictSchema(value, path+"."+key); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for i, value := range s {
+			if err := validateOpenAIStrictSchema(value, fmt.Sprintf("%s[%d]", path, i)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func schemaTypeIncludesObject(value any) bool {
+	switch v := value.(type) {
+	case string:
+		return v == "object"
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok && s == "object" {
+				return true
+			}
+		}
+	case []string:
+		for _, item := range v {
+			if item == "object" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func requiredFieldSet(value any) map[string]struct{} {
+	result := make(map[string]struct{})
+	switch required := value.(type) {
+	case []any:
+		for _, item := range required {
+			if s, ok := item.(string); ok {
+				result[s] = struct{}{}
+			}
+		}
+	case []string:
+		for _, item := range required {
+			result[item] = struct{}{}
+		}
+	}
+	return result
 }
 
 // ensureStrictSchema recursively adds additionalProperties: false to all objects for OpenAI strict mode
@@ -910,9 +1005,21 @@ func ConvertMessages(messages []Message) []OpenAICompatMessage {
 	return result
 }
 
-// ConvertTools converts generic Tool into OpenAI format; shared by all OpenAI-compatible providers
+// ConvertTools converts generic Tool into Chat Completions tool format.
+//
+// When Tool.Function.Strict is non-nil and true, the parameters schema is
+// normalised for OpenAI strict-mode (additionalProperties:false on every
+// object) and the strict flag is forwarded as `tools[i].function.strict`.
+// See https://platform.openai.com/docs/guides/function-calling
 func ConvertTools(tools []Tool) []openaiTool {
-	result := make([]openaiTool, len(tools))
+	result, err := convertOpenAITools(tools, true)
+	if err == nil {
+		return result
+	}
+
+	// Keep this legacy helper side-effect free and non-failing. Provider call
+	// paths use convertOpenAITools directly so invalid strict schemas surface.
+	result = make([]openaiTool, len(tools))
 	for i, tool := range tools {
 		var function *openaiToolFunction
 		if tool.Type == "function" {
@@ -920,6 +1027,41 @@ func ConvertTools(tools []Tool) []openaiTool {
 				Name:        tool.Function.Name,
 				Description: tool.Function.Description,
 				Parameters:  tool.Function.Parameters,
+				Strict:      tool.Function.Strict,
+			}
+		}
+		result[i] = openaiTool{Type: tool.Type, Function: function}
+	}
+	return result
+}
+
+func convertOpenAITools(tools []Tool, supportsStrict bool) ([]openaiTool, error) {
+	result := make([]openaiTool, len(tools))
+	for i, tool := range tools {
+		var function *openaiToolFunction
+		if tool.Type == "function" {
+			params := tool.Function.Parameters
+			strict := tool.Function.Strict
+			if strict != nil && *strict {
+				if !supportsStrict {
+					return nil, fmt.Errorf("tool %q requested strict=true, but this provider does not support strict tool calling", tool.Function.Name)
+				}
+				if params != nil {
+					normalised, err := normalizeOpenAIStrictSchema(params)
+					if err != nil {
+						return nil, fmt.Errorf("tool %q strict schema invalid: %w", tool.Function.Name, err)
+					}
+					params = normalised
+				}
+			}
+			if !supportsStrict {
+				strict = nil
+			}
+			function = &openaiToolFunction{
+				Name:        tool.Function.Name,
+				Description: tool.Function.Description,
+				Parameters:  params,
+				Strict:      strict,
 			}
 		}
 		result[i] = openaiTool{
@@ -927,7 +1069,7 @@ func ConvertTools(tools []Tool) []openaiTool {
 			Function: function,
 		}
 	}
-	return result
+	return result, nil
 }
 
 func buildOpenAIContentParts(msg Message) []openaiContentPart {

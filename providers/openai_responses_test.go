@@ -1,6 +1,8 @@
 package providers
 
-import "testing"
+import (
+	"testing"
+)
 
 // Core OpenAI Responses API contract per
 // https://platform.openai.com/docs/api-reference/responses :
@@ -9,6 +11,7 @@ import "testing"
 //   - tool_calls     → {type: function_call, call_id, name, arguments}
 //   - tool result    → {type: function_call_output, call_id, output}
 //   - role=tool never appears as a message role
+//
 // A single full conversation exercises every item type and their ordering.
 func TestResponsesInputConvertsAllItemTypes(t *testing.T) {
 	items := convertMessagesToResponsesInput([]Message{
@@ -52,5 +55,31 @@ func TestResponsesInputConvertsAllItemTypes(t *testing.T) {
 	}
 	if fo.Role == "tool" {
 		t.Fatalf("role=tool must never leak into input items")
+	}
+}
+
+func TestResponsesToolsNilStrictUsesResponsesStrictDefault(t *testing.T) {
+	tools, err := convertResponsesAPITools([]Tool{{
+		Type: "function",
+		Function: FunctionDef{
+			Name: "get_weather",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"city": map[string]any{"type": "string"},
+				},
+				"required": []any{"city"},
+			},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("convertResponsesAPITools: %v", err)
+	}
+	if tools[0].Strict != nil {
+		t.Fatalf("strict should be omitted so Responses API default applies: %v", tools[0].Strict)
+	}
+	params := tools[0].Parameters.(map[string]any)
+	if params["additionalProperties"] != false {
+		t.Fatalf("nil strict should still normalise schema for Responses default strict=true: %v", params)
 	}
 }

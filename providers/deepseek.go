@@ -14,5 +14,8 @@ func NewDeepSeek(config ProviderConfig) *OpenAICompatProvider {
 		ModelFromResponse:         true,
 		HasCompletionTokenDetails: true,
 		HasCacheTokens:            true,
+		// DeepSeek supports tools[i].function.strict on its beta endpoint.
+		// Callers should set BaseURL to https://api.deepseek.com/beta for it.
+		SupportsStrictTools: true,
 	})
 }

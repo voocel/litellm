@@ -67,6 +67,22 @@ type FunctionDef struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Parameters  any    `json:"parameters"`
+	// Strict enables OpenAI-style strict tool calling (Structured Outputs for
+	// function arguments). When set, the schema is normalised
+	// (additionalProperties:false on every object) and the flag is forwarded
+	// to OpenAI Chat as `tools[i].function.strict`; Responses API uses its
+	// flat function tool `strict` field.
+	//
+	// Caller responsibilities for strict mode (per OpenAI spec):
+	//   - every property must be listed in `required`; use a `["string","null"]`
+	//     union to express optional fields
+	//   - <= 5000 total object properties, <= 10 nesting levels
+	//   - keywords like format/pattern/minLength/maximum are best-effort only
+	//
+	// nil leaves the provider default (Chat Completions defaults to non-strict;
+	// Responses API normalises into strict).
+	// See https://platform.openai.com/docs/guides/function-calling
+	Strict *bool `json:"strict,omitempty"`
 }
 
 type ResponseFormat struct {
