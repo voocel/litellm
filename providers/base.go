@@ -31,18 +31,24 @@ type ResilienceConfig struct {
 	Jitter         bool          `json:"jitter"`
 	RequestTimeout time.Duration `json:"request_timeout"`
 	ConnectTimeout time.Duration `json:"connect_timeout"`
+	// StreamIdleTimeout aborts a streaming response if no chunk arrives
+	// within this window. Guards against silent connection stalls that
+	// RequestTimeout cannot detect (server keeps the TCP connection open
+	// but stops emitting tokens). 0 disables the watchdog.
+	StreamIdleTimeout time.Duration `json:"stream_idle_timeout"`
 }
 
 // DefaultResilienceConfig returns default resilience configuration for providers
 func DefaultResilienceConfig() ResilienceConfig {
 	return ResilienceConfig{
-		MaxRetries:     0,
-		InitialDelay:   1 * time.Second,
-		MaxDelay:       30 * time.Second,
-		Multiplier:     2.0,
-		Jitter:         true,
-		RequestTimeout: 10 * time.Minute,
-		ConnectTimeout: 10 * time.Second,
+		MaxRetries:        0,
+		InitialDelay:      1 * time.Second,
+		MaxDelay:          30 * time.Second,
+		Multiplier:        2.0,
+		Jitter:            true,
+		RequestTimeout:    10 * time.Minute,
+		ConnectTimeout:    10 * time.Second,
+		StreamIdleTimeout: 90 * time.Second,
 	}
 }
 

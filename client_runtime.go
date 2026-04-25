@@ -189,7 +189,9 @@ func (c *Client) executeRequestStreamCall(
 	c.debugRequest(prepared, opts.operation)
 	start := meta.StartedAt
 
-	stream, err := invoke(ctx, prepared)
+	streamCtx, watchdogCancel, idleTimeout := c.resolveStreamWatchdog(ctx)
+	stream, err := invoke(streamCtx, prepared)
+	stream = c.attachStreamWatchdog(stream, err, watchdogCancel, idleTimeout)
 	return c.finalizeStreamCall(ctx, meta, stream, err, time.Since(start))
 }
 
@@ -239,7 +241,9 @@ func (c *Client) executeResponsesStreamCall(
 	c.debugResponsesRequest(prepared, opts.operation)
 	start := meta.StartedAt
 
-	stream, err := invoke(ctx, provider, prepared)
+	streamCtx, watchdogCancel, idleTimeout := c.resolveStreamWatchdog(ctx)
+	stream, err := invoke(streamCtx, provider, prepared)
+	stream = c.attachStreamWatchdog(stream, err, watchdogCancel, idleTimeout)
 	return c.finalizeStreamCall(ctx, meta, stream, err, time.Since(start))
 }
 
