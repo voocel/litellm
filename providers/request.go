@@ -13,13 +13,14 @@ import (
 // ---------------------------------------------------------------------------
 
 type Message struct {
-	Role         string           `json:"role"`
-	Content      string           `json:"content"`
-	Contents     []MessageContent `json:"contents,omitempty"`
-	ToolCalls    []ToolCall       `json:"tool_calls,omitempty"`
-	ToolCallID   string           `json:"tool_call_id,omitempty"`
-	IsError      bool             `json:"is_error,omitempty"` // tool result error flag (Anthropic)
-	CacheControl *CacheControl    `json:"cache_control,omitempty"`
+	Role             string           `json:"role"`
+	Content          string           `json:"content"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	Contents         []MessageContent `json:"contents,omitempty"`
+	ToolCalls        []ToolCall       `json:"tool_calls,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
+	IsError          bool             `json:"is_error,omitempty"` // tool result error flag (Anthropic)
+	CacheControl     *CacheControl    `json:"cache_control,omitempty"`
 }
 
 type MessageContent struct {

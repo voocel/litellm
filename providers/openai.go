@@ -970,8 +970,9 @@ func ConvertMessages(messages []Message) []OpenAICompatMessage {
 	result := make([]OpenAICompatMessage, len(messages))
 	for i, msg := range messages {
 		compatMsg := OpenAICompatMessage{
-			Role:       msg.Role,
-			ToolCallID: msg.ToolCallID,
+			Role:             msg.Role,
+			ToolCallID:       msg.ToolCallID,
+			ReasoningContent: msg.ReasoningContent,
 		}
 
 		// Tool result messages require plain string content per OpenAI spec.

@@ -20,13 +20,24 @@ func init() {
 // AnthropicProvider implements Anthropic Claude API integration
 type AnthropicProvider struct {
 	*BaseProvider
+	deepSeekCompat bool
 }
 
 // NewAnthropic creates a new Anthropic provider
 func NewAnthropic(config ProviderConfig) *AnthropicProvider {
-	baseProvider := NewBaseProvider("anthropic", config)
+	return newAnthropicProvider("anthropic", config, false)
+}
+
+// NewDeepSeekAnthropic creates a DeepSeek provider using its Anthropic-compatible API.
+func NewDeepSeekAnthropic(config ProviderConfig) *AnthropicProvider {
+	return newAnthropicProvider("deepseek-anthropic", config, true)
+}
+
+func newAnthropicProvider(name string, config ProviderConfig, deepSeekCompat bool) *AnthropicProvider {
+	baseProvider := NewBaseProvider(name, config)
 	return &AnthropicProvider{
-		BaseProvider: baseProvider,
+		BaseProvider:   baseProvider,
+		deepSeekCompat: deepSeekCompat,
 	}
 }
 
@@ -44,12 +55,12 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, NewHTTPError("anthropic", resp.StatusCode, string(body))
+		return nil, NewHTTPError(p.Name(), resp.StatusCode, string(body))
 	}
 
 	var anthropicResp anthropicResponse
 	if err := json.NewDecoder(resp.Body).Decode(&anthropicResp); err != nil {
-		return nil, fmt.Errorf("anthropic: decode response: %w", err)
+		return nil, fmt.Errorf("%s: decode response: %w", p.Name(), err)
 	}
 
 	// Process response
@@ -62,7 +73,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 			CacheReadInputTokens:     anthropicResp.Usage.CacheReadInputTokens,
 		},
 		Model:        anthropicResp.Model,
-		Provider:     "anthropic",
+		Provider:     p.Name(),
 		FinishReason: NormalizeFinishReason(anthropicResp.StopReason),
 	}
 
@@ -121,13 +132,13 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (StreamRea
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, NewHTTPError("anthropic", resp.StatusCode, string(body))
+		return nil, NewHTTPError(p.Name(), resp.StatusCode, string(body))
 	}
 
 	return &anthropicStreamReader{
 		resp:             resp,
 		scanner:          bufio.NewScanner(resp.Body),
-		provider:         "anthropic",
+		provider:         p.Name(),
 		includeReasoning: !isThinkingDisabled(req),
 	}, nil
 }
@@ -140,7 +151,7 @@ func (p *AnthropicProvider) ListModels(ctx context.Context) ([]ModelInfo, error)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", p.buildURL("/v1/models"), nil)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic: create models request: %w", err)
+		return nil, fmt.Errorf("%s: create models request: %w", p.Name(), err)
 	}
 	p.setModelHeaders(httpReq)
 
@@ -152,12 +163,12 @@ func (p *AnthropicProvider) ListModels(ctx context.Context) ([]ModelInfo, error)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, NewHTTPError("anthropic", resp.StatusCode, string(body))
+		return nil, NewHTTPError(p.Name(), resp.StatusCode, string(body))
 	}
 
 	var payload anthropicModelList
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("anthropic: decode models response: %w", err)
+		return nil, fmt.Errorf("%s: decode models response: %w", p.Name(), err)
 	}
 
 	models := make([]ModelInfo, 0, len(payload.Data))
@@ -169,7 +180,7 @@ func (p *AnthropicProvider) ListModels(ctx context.Context) ([]ModelInfo, error)
 		models = append(models, ModelInfo{
 			ID:       item.ID,
 			Name:     name,
-			Provider: "anthropic",
+			Provider: p.Name(),
 		})
 	}
 
@@ -207,12 +218,22 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 		OutputConfig:  outputConfig,
 	}
 
-	thinking, err := resolveAnthropicThinking(req, maxTokens)
-	if err != nil {
-		return nil, err
-	}
-	if thinking != nil {
-		anthropicReq.Thinking = thinking
+	if p.deepSeekCompat {
+		anthropicReq.Thinking = resolveDeepSeekAnthropicThinking(req)
+		if effort := deepSeekThinkingEffortFromRequest(req); effort != "" {
+			if anthropicReq.OutputConfig == nil {
+				anthropicReq.OutputConfig = &anthropicOutputConfig{}
+			}
+			anthropicReq.OutputConfig.Effort = effort
+		}
+	} else {
+		thinking, err := resolveAnthropicThinking(req, maxTokens)
+		if err != nil {
+			return nil, err
+		}
+		if thinking != nil {
+			anthropicReq.Thinking = thinking
+		}
 	}
 
 	if len(req.Tools) > 0 {
@@ -240,14 +261,14 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 
 	body, err := json.Marshal(anthropicReq)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
+		return nil, fmt.Errorf("%s: marshal request: %w", p.Name(), err)
 	}
 
 	p.NotifyPayload(req, body)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.buildURL("/v1/messages"), bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("anthropic: create request: %w", err)
+		return nil, fmt.Errorf("%s: create request: %w", p.Name(), err)
 	}
 
 	p.setHeaders(httpReq, req)
@@ -638,7 +659,7 @@ func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
 
 		var chunk anthropicStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			return nil, fmt.Errorf("anthropic: failed to parse stream chunk: %w", err)
+			return nil, fmt.Errorf("%s: failed to parse stream chunk: %w", r.provider, err)
 		}
 
 		switch chunk.Type {
@@ -778,9 +799,9 @@ func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
 
 		case "error":
 			if chunk.Error != nil {
-				return nil, fmt.Errorf("anthropic: stream error: [%s] %s", chunk.Error.Type, chunk.Error.Message)
+				return nil, fmt.Errorf("%s: stream error: [%s] %s", r.provider, chunk.Error.Type, chunk.Error.Message)
 			}
-			return nil, fmt.Errorf("anthropic: unknown stream error")
+			return nil, fmt.Errorf("%s: unknown stream error", r.provider)
 		}
 	}
 
@@ -814,6 +835,7 @@ type anthropicRequest struct {
 
 type anthropicOutputConfig struct {
 	Format *anthropicOutputFormat `json:"format,omitempty"`
+	Effort string                 `json:"effort,omitempty"`
 }
 
 type anthropicOutputFormat struct {
