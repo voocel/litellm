@@ -44,3 +44,40 @@ func TestCompatOmitsThinkingWithoutMapper(t *testing.T) {
 		t.Fatalf("expected thinking omission warning, got %+v", warnings)
 	}
 }
+
+func TestCompatDefaultBaseURLIsApplied(t *testing.T) {
+	p := NewOpenAICompat(ProviderConfig{}, Compat{
+		ProviderName:   "custom-compatible",
+		DefaultBaseURL: "https://api.example.test/v1",
+	})
+
+	if got := p.Config().BaseURL; got != "https://api.example.test/v1" {
+		t.Fatalf("base URL = %q, want %q", got, "https://api.example.test/v1")
+	}
+}
+
+func TestCompatThinkingTypeIsCaseInsensitive(t *testing.T) {
+	p := NewQwen(ProviderConfig{})
+	body, err := p.buildRequestBody(&Request{
+		Model:    "qwen-plus",
+		Messages: []Message{{Role: "user", Content: "hi"}},
+		Thinking: &ThinkingConfig{
+			Type:  "Enabled",
+			Level: "high",
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequestBody failed: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	if got["enable_thinking"] != true {
+		t.Fatalf("enable_thinking = %#v, want true; body=%+v", got["enable_thinking"], got)
+	}
+	if got["thinking_budget"] != float64(16384) {
+		t.Fatalf("thinking_budget = %#v, want 16384; body=%+v", got["thinking_budget"], got)
+	}
+}

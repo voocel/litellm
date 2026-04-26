@@ -493,7 +493,7 @@ func (p *GeminiProvider) generateToolCallID() string {
 
 func (p *GeminiProvider) buildGenerationConfig(req *Request) (*geminiGenerationConfig, error) {
 	thinking := normalizeThinking(req)
-	if thinking != nil && thinking.Type != "enabled" && thinking.Type != "disabled" {
+	if thinking != nil && !isThinkingEnabledConfig(thinking) && !isThinkingDisabledConfig(thinking) {
 		return nil, fmt.Errorf("gemini: thinking type must be enabled or disabled")
 	}
 	if req.Temperature == nil && req.MaxTokens == nil && req.TopP == nil && req.ResponseFormat == nil && len(req.Stop) == 0 && thinking == nil {
@@ -507,7 +507,7 @@ func (p *GeminiProvider) buildGenerationConfig(req *Request) (*geminiGenerationC
 		StopSequences:   req.Stop,
 	}
 	if thinking != nil {
-		includeThoughts := thinking.Type != "disabled"
+		includeThoughts := !isThinkingDisabledConfig(thinking)
 		cfg.ThinkingConfig = &geminiThinkingConfig{
 			ThinkingLevel:   thinking.Level,
 			IncludeThoughts: &includeThoughts,

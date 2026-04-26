@@ -14,7 +14,7 @@ func NewQwen(config ProviderConfig) *OpenAICompatProvider {
 		ModelFromResponse:         true,
 		HasCompletionTokenDetails: true,
 		ThinkingMapper: func(thinking *ThinkingConfig, model string) map[string]any {
-			if thinking == nil || thinking.Type != "enabled" {
+			if !isThinkingEnabledConfig(thinking) {
 				return nil
 			}
 			m := map[string]any{"enable_thinking": true}

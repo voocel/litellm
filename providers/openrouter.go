@@ -19,7 +19,7 @@ func NewOpenRouter(config ProviderConfig) *OpenAICompatProvider {
 		// OpenRouter uses {"reasoning": {"effort": ...}} OR {"reasoning": {"max_tokens": ...}},
 		// but NOT both simultaneously.
 		ThinkingMapper: func(thinking *ThinkingConfig, _ string) map[string]any {
-			if thinking.Type != "enabled" {
+			if !isThinkingEnabledConfig(thinking) {
 				return nil
 			}
 			reasoning := map[string]any{}

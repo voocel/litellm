@@ -301,10 +301,10 @@ func resolveAnthropicThinking(req *Request, maxTokens int) (*ThinkingConfig, err
 	if thinking == nil {
 		return nil, nil
 	}
-	if thinking.Type != "enabled" && thinking.Type != "disabled" {
+	if !isThinkingEnabledConfig(thinking) && !isThinkingDisabledConfig(thinking) {
 		return nil, fmt.Errorf("anthropic: thinking type must be enabled or disabled")
 	}
-	if thinking.Type == "disabled" {
+	if isThinkingDisabledConfig(thinking) {
 		return thinking, nil
 	}
 

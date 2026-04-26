@@ -153,7 +153,7 @@ func LevelToBudget(level string) int {
 // otherwise derived from Level via LevelToBudget.
 // Returns nil if neither is set or the level is unknown.
 func ResolveBudgetTokens(thinking *ThinkingConfig) *int {
-	if thinking == nil || thinking.Type != "enabled" {
+	if !isThinkingEnabledConfig(thinking) {
 		return nil
 	}
 	if thinking.BudgetTokens != nil {
@@ -174,6 +174,7 @@ func normalizeThinking(req *Request) *ThinkingConfig {
 	if thinkingType == "" {
 		thinkingType = "enabled"
 	}
+	thinkingType = strings.ToLower(thinkingType)
 
 	return &ThinkingConfig{
 		Type:         thinkingType,
@@ -187,6 +188,14 @@ func isThinkingDisabled(req *Request) bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(req.Thinking.Type), "disabled")
+}
+
+func isThinkingEnabledConfig(thinking *ThinkingConfig) bool {
+	return thinking != nil && strings.EqualFold(strings.TrimSpace(thinking.Type), "enabled")
+}
+
+func isThinkingDisabledConfig(thinking *ThinkingConfig) bool {
+	return thinking != nil && strings.EqualFold(strings.TrimSpace(thinking.Type), "disabled")
 }
 
 func validateThinking(thinking *ThinkingConfig) error {

@@ -213,6 +213,9 @@ type OpenAICompatProvider struct {
 
 // NewOpenAICompat creates a new OpenAI-compatible provider.
 func NewOpenAICompat(config ProviderConfig, compat Compat) *OpenAICompatProvider {
+	if config.BaseURL == "" && compat.DefaultBaseURL != "" {
+		config.BaseURL = compat.DefaultBaseURL
+	}
 	return &OpenAICompatProvider{
 		BaseProvider: NewBaseProvider(compat.ProviderName, config),
 		compat:       compat,

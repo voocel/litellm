@@ -17,7 +17,7 @@ func NewGrok(config ProviderConfig) *OpenAICompatProvider {
 		// Grok uses top-level reasoning_effort ("low"/"medium"/"high").
 		// Only sent when Level is explicitly set; models default to their own behavior.
 		ThinkingMapper: func(thinking *ThinkingConfig, _ string) map[string]any {
-			if thinking.Type != "enabled" || thinking.Level == "" {
+			if !isThinkingEnabledConfig(thinking) || thinking.Level == "" {
 				return nil
 			}
 			return map[string]any{"reasoning_effort": thinking.Level}

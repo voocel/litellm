@@ -336,7 +336,7 @@ func (p *OpenAIProvider) buildResponsesAPIRequest(req *OpenAIResponsesRequest) (
 	}
 	if req.Thinking != nil {
 		thinking := normalizeThinking(&Request{Thinking: req.Thinking})
-		if thinking.Type == "disabled" {
+		if isThinkingDisabledConfig(thinking) {
 			responsesReq.Reasoning = &responsesAPIReasoning{
 				Effort: "none",
 			}
