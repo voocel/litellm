@@ -18,6 +18,7 @@ type (
 	ResponseFormat         = providers.ResponseFormat
 	JSONSchema             = providers.JSONSchema
 	OpenAIResponsesRequest = providers.OpenAIResponsesRequest
+	OpenAIResponsesTool    = providers.OpenAIResponsesTool
 	ThinkingConfig         = providers.ThinkingConfig
 
 	Request  = providers.Request

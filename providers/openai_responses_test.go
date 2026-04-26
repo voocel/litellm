@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -81,5 +82,145 @@ func TestResponsesToolsNilStrictUsesResponsesStrictDefault(t *testing.T) {
 	params := tools[0].Parameters.(map[string]any)
 	if params["additionalProperties"] != false {
 		t.Fatalf("nil strict should still normalise schema for Responses default strict=true: %v", params)
+	}
+}
+
+func TestResponsesBuildRequestMapsGPT55OfficialFields(t *testing.T) {
+	p := NewOpenAI(ProviderConfig{APIKey: "test"})
+	maxOutputTokens := 1200
+	maxToolCalls := 4
+	topLogprobs := 2
+	parallelToolCalls := true
+	store := true
+	background := false
+
+	req, err := p.buildResponsesAPIRequest(&OpenAIResponsesRequest{
+		Model: "gpt-5.5",
+		Messages: []Message{
+			{Role: "developer", Content: "Follow the contract."},
+			{Role: "user", Content: "Search and summarize."},
+		},
+		Instructions:         "Be concise.",
+		PreviousResponseID:   "resp_previous",
+		MaxOutputTokens:      &maxOutputTokens,
+		MaxToolCalls:         &maxToolCalls,
+		Include:              []string{"reasoning.encrypted_content"},
+		TopLogprobs:          &topLogprobs,
+		TextVerbosity:        "low",
+		Truncation:           "auto",
+		OpenAITools:          []OpenAIResponsesTool{{"type": "web_search_preview"}},
+		ParallelToolCalls:    &parallelToolCalls,
+		ReasoningEffort:      "xhigh",
+		ReasoningSummary:     "auto",
+		PromptCacheKey:       "workflow-v1",
+		PromptCacheRetention: "24h",
+		Metadata:             map[string]string{"tenant": "acme"},
+		SafetyIdentifier:     "user-123",
+		ServiceTier:          "flex",
+		Store:                &store,
+		Background:           &background,
+		Prompt:               map[string]any{"id": "pmpt_123"},
+	})
+	if err != nil {
+		t.Fatalf("buildResponsesAPIRequest: %v", err)
+	}
+
+	if req.Model != "gpt-5.5" {
+		t.Fatalf("model = %q, want gpt-5.5", req.Model)
+	}
+	if req.Instructions != "Be concise.\nFollow the contract." {
+		t.Fatalf("instructions = %q", req.Instructions)
+	}
+	if req.PreviousResponseID != "resp_previous" {
+		t.Fatalf("previous_response_id = %q", req.PreviousResponseID)
+	}
+	if req.MaxOutputTokens == nil || *req.MaxOutputTokens != maxOutputTokens {
+		t.Fatalf("max_output_tokens = %v", req.MaxOutputTokens)
+	}
+	if req.MaxToolCalls == nil || *req.MaxToolCalls != maxToolCalls {
+		t.Fatalf("max_tool_calls = %v", req.MaxToolCalls)
+	}
+	if len(req.Include) != 1 || req.Include[0] != "reasoning.encrypted_content" {
+		t.Fatalf("include = %#v", req.Include)
+	}
+	if req.TopLogprobs == nil || *req.TopLogprobs != topLogprobs {
+		t.Fatalf("top_logprobs = %v", req.TopLogprobs)
+	}
+	if req.Text == nil || req.Text.Verbosity != "low" {
+		t.Fatalf("text verbosity = %#v", req.Text)
+	}
+	if req.Truncation != "auto" {
+		t.Fatalf("truncation = %q", req.Truncation)
+	}
+	if req.ParallelToolCalls == nil || !*req.ParallelToolCalls {
+		t.Fatalf("parallel_tool_calls = %v", req.ParallelToolCalls)
+	}
+	if req.Reasoning == nil || req.Reasoning.Effort != "xhigh" || req.Reasoning.Summary != "auto" {
+		t.Fatalf("reasoning = %#v", req.Reasoning)
+	}
+	if req.PromptCacheKey != "workflow-v1" || req.PromptCacheRetention != "24h" {
+		t.Fatalf("prompt cache fields not mapped: %#v", req)
+	}
+	if req.Metadata["tenant"] != "acme" || req.SafetyIdentifier != "user-123" {
+		t.Fatalf("metadata/safety fields not mapped: %#v", req)
+	}
+	if req.ServiceTier != "flex" || req.Store == nil || !*req.Store || req.Background == nil || *req.Background {
+		t.Fatalf("service fields not mapped: %#v", req)
+	}
+	if req.Prompt["id"] != "pmpt_123" {
+		t.Fatalf("prompt = %#v", req.Prompt)
+	}
+
+	toolsBody, err := json.Marshal(req.Tools)
+	if err != nil {
+		t.Fatalf("marshal tools: %v", err)
+	}
+	if string(toolsBody) != `[{"type":"web_search_preview"}]` {
+		t.Fatalf("tools json = %s", toolsBody)
+	}
+}
+
+func TestResponsesBuildRequestUsesThinkingLevelAsReasoningEffort(t *testing.T) {
+	p := NewOpenAI(ProviderConfig{APIKey: "test"})
+	req, err := p.buildResponsesAPIRequest(&OpenAIResponsesRequest{
+		Model:    "gpt-5.5",
+		Messages: []Message{{Role: "user", Content: "solve"}},
+		Thinking: &ThinkingConfig{Type: "enabled", Level: "high"},
+	})
+	if err != nil {
+		t.Fatalf("buildResponsesAPIRequest: %v", err)
+	}
+	if req.Reasoning == nil || req.Reasoning.Effort != "high" {
+		t.Fatalf("reasoning = %#v, want effort=high", req.Reasoning)
+	}
+}
+
+func TestResponsesOutputExtractsOfficialFunctionCall(t *testing.T) {
+	_, _, toolCalls, _ := extractResponsesOutputItems([]responsesAPIOutputItem{{
+		Type:      "function_call",
+		ID:        "fc_1",
+		CallID:    "call_1",
+		Name:      "get_weather",
+		Arguments: `{"city":"Boston"}`,
+	}}, "")
+
+	if len(toolCalls) != 1 {
+		t.Fatalf("tool calls = %d, want 1", len(toolCalls))
+	}
+	if toolCalls[0].ID != "call_1" || toolCalls[0].Function.Name != "get_weather" {
+		t.Fatalf("tool call malformed: %#v", toolCalls[0])
+	}
+}
+
+func TestResponsesRejectsConversationWithPreviousResponseID(t *testing.T) {
+	p := NewOpenAI(ProviderConfig{APIKey: "test"})
+	_, err := p.buildResponsesAPIRequest(&OpenAIResponsesRequest{
+		Model:              "gpt-5.5",
+		Messages:           []Message{{Role: "user", Content: "hello"}},
+		Conversation:       "conv_123",
+		PreviousResponseID: "resp_123",
+	})
+	if err == nil {
+		t.Fatal("expected mutual exclusion error")
 	}
 }

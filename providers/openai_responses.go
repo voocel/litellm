@@ -21,26 +21,57 @@ type OpenAIResponsesRequest struct {
 	// Use standard messages to build input items for Responses API.
 	Messages []Message `json:"messages"`
 
+	// Top-level instructions. System/developer messages are also extracted and
+	// combined into this field when building the official Responses payload.
+	Instructions string `json:"instructions,omitempty"`
+
+	// Conversation state. Conversation and PreviousResponseID are mutually
+	// exclusive per the official Responses API.
+	Conversation       any    `json:"conversation,omitempty"`
+	PreviousResponseID string `json:"previous_response_id,omitempty"`
+
 	// Output configuration
-	MaxOutputTokens *int `json:"max_output_tokens,omitempty"`
+	MaxOutputTokens *int     `json:"max_output_tokens,omitempty"`
+	MaxToolCalls    *int     `json:"max_tool_calls,omitempty"`
+	Include         []string `json:"include,omitempty"`
+	TopLogprobs     *int     `json:"top_logprobs,omitempty"`
 
 	// Sampling parameters
 	Temperature *float64 `json:"temperature,omitempty"`
 	TopP        *float64 `json:"top_p,omitempty"`
 
-	// Text format configuration (replaces response_format in Responses API)
+	// Text configuration. ResponseFormat maps to text.format; TextVerbosity
+	// maps to text.verbosity ("low", "medium", or "high").
 	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
+	TextVerbosity  string          `json:"text_verbosity,omitempty"`
+	Truncation     string          `json:"truncation,omitempty"` // "auto" or "disabled"
 
 	// Tool configuration
-	Tools      []Tool `json:"tools,omitempty"`
-	ToolChoice any    `json:"tool_choice,omitempty"`
+	Tools             []Tool                `json:"tools,omitempty"`
+	OpenAITools       []OpenAIResponsesTool `json:"openai_tools,omitempty"`
+	ToolChoice        any                   `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool                 `json:"parallel_tool_calls,omitempty"`
 
-	// Reasoning configuration (for gpt-5 and o-series models)
-	ReasoningEffort  string `json:"reasoning_effort,omitempty"`  // none, low, medium, high
+	// Reasoning configuration for Responses reasoning models.
+	ReasoningEffort  string `json:"reasoning_effort,omitempty"`  // none, low, medium, high, xhigh
 	ReasoningSummary string `json:"reasoning_summary,omitempty"` // auto, concise, detailed
 
 	// Unified thinking control (optional). If set, it maps to reasoning fields.
 	Thinking *ThinkingConfig `json:"thinking,omitempty"`
+
+	// Prompt caching and request metadata.
+	PromptCacheKey       string            `json:"prompt_cache_key,omitempty"`
+	PromptCacheRetention string            `json:"prompt_cache_retention,omitempty"`
+	Metadata             map[string]string `json:"metadata,omitempty"`
+	SafetyIdentifier     string            `json:"safety_identifier,omitempty"`
+
+	// Service configuration.
+	ServiceTier string `json:"service_tier,omitempty"` // auto, default, flex, priority
+	Background  *bool  `json:"background,omitempty"`
+	Store       *bool  `json:"store,omitempty"`
+
+	// Prompt template reference, passed through as the official prompt object.
+	Prompt map[string]any `json:"prompt,omitempty"`
 
 	// APIKey overrides the provider-level API key for this single request.
 	APIKey string `json:"-"`
@@ -49,6 +80,13 @@ type OpenAIResponsesRequest struct {
 	// the HTTP request. Useful for debugging and logging API calls.
 	OnPayload func(provider string, payload []byte) `json:"-"`
 }
+
+// OpenAIResponsesTool is an official Responses API tool object.
+//
+// Use this for OpenAI-hosted tools such as web_search_preview, file_search,
+// code_interpreter, image_generation, computer_use_preview, MCP, and tool
+// search. Generic function tools should normally use OpenAIResponsesRequest.Tools.
+type OpenAIResponsesTool map[string]any
 
 // responsesAPIRequest represents the request structure for OpenAI Responses API
 // See: https://platform.openai.com/docs/api-reference/responses/create
@@ -70,6 +108,7 @@ type responsesAPIRequest struct {
 	MaxOutputTokens *int     `json:"max_output_tokens,omitempty"`
 	MaxToolCalls    *int     `json:"max_tool_calls,omitempty"`
 	Include         []string `json:"include,omitempty"` // e.g., "message.output_text.logprobs", "reasoning.encrypted_content"
+	TopLogprobs     *int     `json:"top_logprobs,omitempty"`
 	Stream          *bool    `json:"stream,omitempty"`
 
 	// Sampling parameters
@@ -87,7 +126,7 @@ type responsesAPIRequest struct {
 	ToolChoice        any                `json:"tool_choice,omitempty"`
 	ParallelToolCalls *bool              `json:"parallel_tool_calls,omitempty"`
 
-	// Reasoning configuration (for gpt-5 and o-series models)
+	// Reasoning configuration for Responses reasoning models.
 	Reasoning *responsesAPIReasoning `json:"reasoning,omitempty"`
 
 	// Caching
@@ -110,7 +149,8 @@ type responsesAPIRequest struct {
 // responsesAPITextConfig configures text output format
 // See: https://platform.openai.com/docs/api-reference/responses/create
 type responsesAPITextConfig struct {
-	Format *responsesAPITextFormat `json:"format,omitempty"`
+	Format    *responsesAPITextFormat `json:"format,omitempty"`
+	Verbosity string                  `json:"verbosity,omitempty"` // low, medium, high
 }
 
 // responsesAPITextFormat specifies the text format type
@@ -127,21 +167,51 @@ type responsesAPIJSONSchemaSpec struct {
 	Strict      *bool  `json:"strict,omitempty"`
 }
 
-// responsesAPITool is the official Responses API function tool shape.
-// Unlike Chat Completions, function tools are flat:
+// responsesAPITool is an official Responses API tool object.
+// Function tools use the flat Responses shape:
 // {type:"function", name, description, parameters, strict}.
+// OpenAI-specific hosted tools are carried in Raw so the official tool object is
+// sent unchanged.
 type responsesAPITool struct {
-	Type        string `json:"type"`
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
-	Parameters  any    `json:"parameters,omitempty"`
-	Strict      *bool  `json:"strict,omitempty"`
+	Type        string         `json:"type"`
+	Name        string         `json:"name,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Parameters  any            `json:"parameters,omitempty"`
+	Strict      *bool          `json:"strict,omitempty"`
+	Raw         map[string]any `json:"-"`
+}
+
+func (t responsesAPITool) MarshalJSON() ([]byte, error) {
+	if t.Raw != nil {
+		raw := make(map[string]any, len(t.Raw))
+		for k, v := range t.Raw {
+			raw[k] = v
+		}
+		return json.Marshal(raw)
+	}
+
+	body := map[string]any{
+		"type": t.Type,
+	}
+	if t.Name != "" {
+		body["name"] = t.Name
+	}
+	if t.Description != "" {
+		body["description"] = t.Description
+	}
+	if t.Parameters != nil {
+		body["parameters"] = t.Parameters
+	}
+	if t.Strict != nil {
+		body["strict"] = *t.Strict
+	}
+	return json.Marshal(body)
 }
 
 // responsesAPIReasoning configures reasoning behavior for Responses API
 // See: https://platform.openai.com/docs/api-reference/responses/create
 type responsesAPIReasoning struct {
-	Effort  string `json:"effort,omitempty"`  // none, low, medium, high
+	Effort  string `json:"effort,omitempty"`  // none, low, medium, high, xhigh
 	Summary string `json:"summary,omitempty"` // auto, concise, detailed
 }
 
@@ -304,6 +374,10 @@ func (p *OpenAIProvider) ResponsesStream(ctx context.Context, req *OpenAIRespons
 
 // buildResponsesAPIRequest maps OpenAIResponsesRequest into the official Responses API payload.
 func (p *OpenAIProvider) buildResponsesAPIRequest(req *OpenAIResponsesRequest) (responsesAPIRequest, error) {
+	if err := validateOpenAIResponsesRequest(req); err != nil {
+		return responsesAPIRequest{}, err
+	}
+
 	responsesReq := responsesAPIRequest{
 		Model: req.Model,
 	}
@@ -313,6 +387,9 @@ func (p *OpenAIProvider) buildResponsesAPIRequest(req *OpenAIResponsesRequest) (
 		return responsesAPIRequest{}, fmt.Errorf("openai: %w", err)
 	}
 	instructions, filteredMessages := extractResponsesInstructions(prepared)
+	if req.Instructions != "" {
+		instructions = strings.TrimSpace(strings.Join([]string{req.Instructions, instructions}, "\n"))
+	}
 	if instructions != "" {
 		responsesReq.Instructions = instructions
 	}
@@ -340,9 +417,14 @@ func (p *OpenAIProvider) buildResponsesAPIRequest(req *OpenAIResponsesRequest) (
 			responsesReq.Reasoning = &responsesAPIReasoning{
 				Effort: "none",
 			}
-		} else if responsesReq.Reasoning == nil {
-			responsesReq.Reasoning = &responsesAPIReasoning{
-				Summary: "auto",
+		} else if isThinkingEnabledConfig(thinking) {
+			if responsesReq.Reasoning == nil {
+				responsesReq.Reasoning = &responsesAPIReasoning{
+					Summary: "auto",
+				}
+			}
+			if responsesReq.Reasoning.Effort == "" && thinking.Level != "" {
+				responsesReq.Reasoning.Effort = thinking.Level
 			}
 		}
 	}
@@ -355,10 +437,18 @@ func (p *OpenAIProvider) buildResponsesAPIRequest(req *OpenAIResponsesRequest) (
 		}
 		responsesReq.Tools = tools
 	}
+	if len(req.OpenAITools) > 0 {
+		openAITools, err := convertOpenAIResponsesTools(req.OpenAITools)
+		if err != nil {
+			return responsesAPIRequest{}, fmt.Errorf("openai: %w", err)
+		}
+		responsesReq.Tools = append(responsesReq.Tools, openAITools...)
+	}
 
 	if req.ToolChoice != nil {
 		responsesReq.ToolChoice = req.ToolChoice
 	}
+	responsesReq.ParallelToolCalls = req.ParallelToolCalls
 
 	// Convert response format to text.format structure for Responses API
 	responsesReq.Text = p.convertToTextFormat(req)
@@ -373,8 +463,67 @@ func (p *OpenAIProvider) buildResponsesAPIRequest(req *OpenAIResponsesRequest) (
 	if req.MaxOutputTokens != nil {
 		responsesReq.MaxOutputTokens = req.MaxOutputTokens
 	}
+	responsesReq.MaxToolCalls = req.MaxToolCalls
+	responsesReq.TopLogprobs = req.TopLogprobs
+	if len(req.Include) > 0 {
+		responsesReq.Include = append([]string(nil), req.Include...)
+	}
+	responsesReq.Truncation = req.Truncation
+	responsesReq.Conversation = req.Conversation
+	responsesReq.PreviousResponseID = req.PreviousResponseID
+	responsesReq.PromptCacheKey = req.PromptCacheKey
+	responsesReq.PromptCacheRetention = req.PromptCacheRetention
+	responsesReq.Metadata = req.Metadata
+	responsesReq.SafetyIdentifier = req.SafetyIdentifier
+	responsesReq.ServiceTier = req.ServiceTier
+	responsesReq.Background = req.Background
+	responsesReq.Store = req.Store
+	responsesReq.Prompt = req.Prompt
 
 	return responsesReq, nil
+}
+
+func validateOpenAIResponsesRequest(req *OpenAIResponsesRequest) error {
+	if req == nil {
+		return fmt.Errorf("openai: responses request cannot be nil")
+	}
+	if req.Conversation != nil && req.PreviousResponseID != "" {
+		return fmt.Errorf("openai: conversation and previous_response_id are mutually exclusive")
+	}
+	if err := validateOneOf("text_verbosity", req.TextVerbosity, "low", "medium", "high"); err != nil {
+		return fmt.Errorf("openai: %w", err)
+	}
+	if err := validateOneOf("truncation", req.Truncation, "auto", "disabled"); err != nil {
+		return fmt.Errorf("openai: %w", err)
+	}
+	if err := validateOneOf("reasoning_effort", req.ReasoningEffort, "none", "low", "medium", "high", "xhigh"); err != nil {
+		return fmt.Errorf("openai: %w", err)
+	}
+	if err := validateOneOf("reasoning_summary", req.ReasoningSummary, "auto", "concise", "detailed"); err != nil {
+		return fmt.Errorf("openai: %w", err)
+	}
+	if err := validateOneOf("service_tier", req.ServiceTier, "auto", "default", "flex", "priority"); err != nil {
+		return fmt.Errorf("openai: %w", err)
+	}
+	for i, tool := range req.OpenAITools {
+		toolType, ok := tool["type"].(string)
+		if !ok || strings.TrimSpace(toolType) == "" {
+			return fmt.Errorf("openai: openai_tools[%d].type is required", i)
+		}
+	}
+	return nil
+}
+
+func validateOneOf(field, value string, allowed ...string) error {
+	if value == "" {
+		return nil
+	}
+	for _, candidate := range allowed {
+		if value == candidate {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s must be one of %s, got %q", field, strings.Join(allowed, ", "), value)
 }
 
 func convertResponsesAPITools(tools []Tool) ([]responsesAPITool, error) {
@@ -404,6 +553,18 @@ func convertResponsesAPITools(tools []Tool) ([]responsesAPITool, error) {
 			Parameters:  params,
 			Strict:      tool.Function.Strict,
 		}
+	}
+	return result, nil
+}
+
+func convertOpenAIResponsesTools(tools []OpenAIResponsesTool) ([]responsesAPITool, error) {
+	result := make([]responsesAPITool, len(tools))
+	for i, tool := range tools {
+		raw := make(map[string]any, len(tool))
+		for k, v := range tool {
+			raw[k] = v
+		}
+		result[i] = responsesAPITool{Raw: raw}
 	}
 	return result, nil
 }
@@ -471,6 +632,10 @@ func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Open
 	}
 
 	responseContent, responseContents, toolCalls, reasoningContent := p.extractResponsesOutput(&responsesResp)
+	finishReason := NormalizeFinishReason(responsesResp.Status)
+	if len(toolCalls) > 0 {
+		finishReason = FinishReasonToolCall
+	}
 
 	response := &Response{
 		Content:   responseContent,
@@ -484,7 +649,7 @@ func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Open
 		Model:            responsesResp.Model,
 		Provider:         "openai",
 		ReasoningContent: reasoningContent,
-		FinishReason:     NormalizeFinishReason(responsesResp.Status),
+		FinishReason:     finishReason,
 	}
 
 	if responsesResp.Usage.OutputTokensDetails != nil {
@@ -510,7 +675,7 @@ func extractResponsesOutputItems(output []responsesAPIOutputItem, outputText str
 		switch outputItem.Type {
 		case "message":
 			messageContents = append(messageContents, convertResponsesContentToMessageContents(outputItem.Content)...)
-		case "tool_call":
+		case "function_call", "tool_call":
 			if outputItem.Name == "" && outputItem.Arguments == "" {
 				continue
 			}
@@ -559,15 +724,18 @@ func extractResponsesOutputItems(output []responsesAPIOutputItem, outputText str
 func (p *OpenAIProvider) convertToTextFormat(req *OpenAIResponsesRequest) *responsesAPITextConfig {
 	rf := req.ResponseFormat
 
-	if rf == nil {
+	if rf == nil && req.TextVerbosity == "" {
 		return nil
 	}
 
 	textConfig := &responsesAPITextConfig{
-		Format: &responsesAPITextFormat{
-			Type: rf.Type,
-		},
+		Verbosity: req.TextVerbosity,
 	}
+	if rf == nil {
+		return textConfig
+	}
+
+	textConfig.Format = &responsesAPITextFormat{Type: rf.Type}
 
 	// Convert json_schema format
 	if rf.Type == "json_schema" && rf.JSONSchema != nil {

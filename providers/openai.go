@@ -31,7 +31,7 @@ func NewOpenAI(config ProviderConfig) *OpenAIProvider {
 	}
 }
 
-// needsMaxCompletionTokens checks if the model requires max_completion_tokens instead of max_tokens
+// needsMaxCompletionTokens checks if the model requires max_completion_tokens instead of max_tokens.
 func (p *OpenAIProvider) needsMaxCompletionTokens(model string) bool {
 	modelLower := strings.ToLower(model)
 	// Strip provider prefix (e.g. "openai/gpt-5.4" -> "gpt-5.4")
@@ -39,22 +39,10 @@ func (p *OpenAIProvider) needsMaxCompletionTokens(model string) bool {
 		modelLower = after
 	}
 
-	// o-series reasoning models (o1, o3, o4)
-	if strings.HasPrefix(modelLower, "o1") ||
-		strings.HasPrefix(modelLower, "o3") ||
-		strings.HasPrefix(modelLower, "o4") {
-		return true
-	}
-
-	// GPT-5 series
-	if strings.HasPrefix(modelLower, "gpt-5") {
-		return true
-	}
-
-	return false
+	return strings.HasPrefix(modelLower, "gpt-5")
 }
 
-// isReasoningModel checks if the model supports advanced reasoning (o-series and GPT-5)
+// isReasoningModel checks if the model needs GPT-5 Chat Completions compatibility.
 func (p *OpenAIProvider) isReasoningModel(model string) bool {
 	return p.needsMaxCompletionTokens(model)
 }
@@ -78,7 +66,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req *Request) (*Response, err
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	if err := p.BaseProvider.ValidateExtra(req.Extra, nil); err != nil {
+	if err := validateOpenAIChatExtra(req.Extra); err != nil {
 		return nil, err
 	}
 
@@ -125,6 +113,9 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 	}
 
 	openaiReq.TopP = req.TopP
+	if err := applyOpenAIChatExtra(&openaiReq, req.Extra); err != nil {
+		return nil, err
+	}
 
 	// Resolve token parameters based on model type
 	maxTokens, maxCompletionTokens := p.resolveTokenParams(req)
@@ -245,7 +236,7 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	if err := p.BaseProvider.ValidateExtra(req.Extra, nil); err != nil {
+	if err := validateOpenAIChatExtra(req.Extra); err != nil {
 		return nil, err
 	}
 	if err := validateThinking(req.Thinking); err != nil {
@@ -283,6 +274,9 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		openaiReq.Temperature = req.Temperature
 	}
 	openaiReq.TopP = req.TopP
+	if err := applyOpenAIChatExtra(&openaiReq, req.Extra); err != nil {
+		return nil, err
+	}
 
 	// Set stop sequences (up to 4 sequences)
 	if len(req.Stop) > 0 {
@@ -558,14 +552,16 @@ type openaiRequest struct {
 	LogitBias        map[string]int `json:"logit_bias,omitempty"`        // Token ID to bias (-100 to 100)
 
 	// Output configuration
-	N        *int  `json:"n,omitempty"`        // Number of completions, default 1
-	Logprobs *bool `json:"logprobs,omitempty"` // Return log probabilities
+	N           *int  `json:"n,omitempty"`        // Number of completions, default 1
+	Logprobs    *bool `json:"logprobs,omitempty"` // Return log probabilities
+	TopLogprobs *int  `json:"top_logprobs,omitempty"`
+	Store       *bool `json:"store,omitempty"`
 
 	// Streaming
 	Stream        bool                 `json:"stream,omitempty"`
 	StreamOptions *openaiStreamOptions `json:"stream_options,omitempty"`
 
-	// Stop sequences (up to 4, not supported with o3/o4-mini)
+	// Stop sequences (up to 4)
 	Stop []string `json:"stop,omitempty"`
 
 	// Tool/Function calling
@@ -583,12 +579,14 @@ type openaiRequest struct {
 	Prediction *openaiPrediction `json:"prediction,omitempty"`
 
 	// Metadata and identification
-	Metadata map[string]string `json:"metadata,omitempty"` // Max 16 key-value pairs
+	Metadata    map[string]string `json:"metadata,omitempty"` // Max 16 key-value pairs
+	ServiceTier string            `json:"service_tier,omitempty"`
+	User        string            `json:"user,omitempty"`
 
 	// Output modalities (for audio-capable models)
 	Modalities []string `json:"modalities,omitempty"` // ["text"] or ["text", "audio"]
 
-	// Reasoning effort for reasoning models (o-series, GPT-5)
+	// Reasoning effort for GPT-5 Chat Completions compatibility.
 	ReasoningEffort string `json:"reasoning_effort,omitempty"` // "low", "medium", "high"
 
 	// Deprecated
