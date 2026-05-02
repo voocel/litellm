@@ -48,7 +48,7 @@ func DefaultResilienceConfig() ResilienceConfig {
 		Jitter:            true,
 		RequestTimeout:    10 * time.Minute,
 		ConnectTimeout:    10 * time.Second,
-		StreamIdleTimeout: 90 * time.Second,
+		StreamIdleTimeout: 120 * time.Second,
 	}
 }
 

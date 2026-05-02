@@ -75,7 +75,7 @@ func resolveDeepSeekAnthropicThinking(req *Request) *ThinkingConfig {
 
 func deepSeekThinkingEffortFromRequest(req *Request) string {
 	thinking := normalizeThinking(req)
-	if !isThinkingEnabledConfig(thinking) {
+	if thinking == nil || !isThinkingEnabledConfig(thinking) {
 		return ""
 	}
 	return deepSeekThinkingEffort(thinking.Level)
