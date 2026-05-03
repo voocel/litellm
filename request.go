@@ -46,10 +46,16 @@ type ProviderDescriptor struct {
 	Factory    ProviderFactory
 }
 
-// CacheControl type constants.
+// CacheControl type constants. Anthropic Messages API only defines "ephemeral";
+// retention is controlled via the optional ttl field ("5m" / "1h").
 const (
-	CacheTypeEphemeral  = "ephemeral"
-	CacheTypePersistent = "persistent"
+	CacheTypeEphemeral = "ephemeral"
+)
+
+// Cache TTL constants for Anthropic ephemeral cache_control.
+const (
+	CacheTTL5m = "5m"
+	CacheTTL1h = "1h"
 )
 
 // Stream chunk type constants.
@@ -300,16 +306,21 @@ func WithOnWarning(fn func(provider string, message string)) RequestOption {
 }
 
 // WithCacheRetention configures automatic prompt caching placement.
-// Supported values:
-//   - "none":  disable auto-caching
-//   - "short": ephemeral cache (~5 min, Anthropic default)
-//   - "long":  extended cache retention where supported
 //
-// When enabled, cache breakpoints are automatically placed on system messages
-// and the last user message. User-provided CacheControl on individual messages
-// takes precedence and is not overwritten.
+// Accepted values (case-insensitive, applied per-provider):
+//   - "none"             : disable auto-caching
+//   - "" / "short" / "5m": ephemeral cache, ~5-minute TTL (provider default)
+//   - "long" / "1h"      : ephemeral cache, 1-hour TTL where supported
 //
-// Currently supported by: Anthropic.
+// Provider behavior:
+//   - Anthropic / OpenRouter→Anthropic: places cache_control on system + last
+//     user-message content block; "1h" sets ttl="1h" per Anthropic API docs
+//     (no beta header required). User-provided CacheControl on individual
+//     messages takes precedence and is not overwritten.
+//   - OpenAI / Azure OpenAI: prefer prompt_cache_retention via Extra
+//     ("in_memory" or "24h"); cache_control breakpoints are not applicable.
+//
+// Other providers ignore this option.
 func WithCacheRetention(retention string) RequestOption {
 	return WithExtra("cache_retention", retention)
 }
@@ -362,17 +373,18 @@ func NewTool(name, description string, parameters any) Tool {
 	}
 }
 
-// NewEphemeralCache creates an ephemeral cache control (TTL is provider-defined, typically ~5 minutes).
+// NewEphemeralCache creates an ephemeral cache_control breakpoint with the
+// provider default TTL (~5 minutes for Anthropic).
 func NewEphemeralCache() *CacheControl {
 	return &CacheControl{Type: CacheTypeEphemeral}
 }
 
-// NewPersistentCache creates a persistent cache control with a custom TTL (seconds).
-func NewPersistentCache(ttlSeconds int) *CacheControl {
-	return &CacheControl{
-		Type: CacheTypePersistent,
-		TTL:  &ttlSeconds,
-	}
+// NewEphemeralCacheTTL creates an ephemeral cache_control breakpoint with an
+// explicit TTL. Per Anthropic Messages API, accepted values are "5m" (default)
+// and "1h"; other values are passed through as-is and may be rejected by the
+// provider.
+func NewEphemeralCacheTTL(ttl string) *CacheControl {
+	return &CacheControl{Type: CacheTypeEphemeral, TTL: ttl}
 }
 
 // NewThinkingEnabled enables thinking with an optional budget.

@@ -234,7 +234,22 @@ func CalculateCost(model string, usage Usage) (*CostResult, error) {
 		return nil, fmt.Errorf("pricing not found for model: %s", model)
 	}
 
-	inputCost := float64(usage.PromptTokens) * pricing.InputCostPerToken
+	// Per OpenAI-style semantic guaranteed by all providers in this package
+	// (anthropic / bedrock / openai / gemini / openrouter / compat):
+	//
+	//   PromptTokens = full input, INCLUDES CacheReadInputTokens
+	//   CacheCreationInputTokens is reported separately and NOT included
+	//
+	// Pricing must charge cached tokens only at the cache-read rate; charging
+	// PromptTokens at full input rate AND CacheReadInputTokens at cache-read
+	// rate would double-bill the cached portion.
+	nonCachedInput := usage.PromptTokens - usage.CacheReadInputTokens
+	if nonCachedInput < 0 {
+		// Defensive: a misbehaving provider could under-report PromptTokens.
+		// Fall back to the legacy semantic to keep the bill non-negative.
+		nonCachedInput = usage.PromptTokens
+	}
+	inputCost := float64(nonCachedInput) * pricing.InputCostPerToken
 	outputCost := float64(usage.CompletionTokens) * pricing.OutputCostPerToken
 
 	// Cache costs: use dedicated rates when available, fall back to input rate

@@ -201,6 +201,12 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 	if openaiResp.Usage.CompletionTokensDetails != nil {
 		response.Usage.ReasoningTokens = openaiResp.Usage.CompletionTokensDetails.ReasoningTokens
 	}
+	// Prompt-cache hits are reported in prompt_tokens_details.cached_tokens.
+	// OpenAI's prompt_tokens already includes the cached portion (unlike
+	// Anthropic's input_tokens), so we only need to surface the read count.
+	if openaiResp.Usage.PromptTokensDetails != nil {
+		response.Usage.CacheReadInputTokens = openaiResp.Usage.PromptTokensDetails.CachedTokens
+	}
 
 	if len(openaiResp.Choices) > 0 {
 		choice := openaiResp.Choices[0]
@@ -451,6 +457,9 @@ func (r *openaiStreamReader) Next() (*StreamChunk, error) {
 			}
 			if chunk.Usage.CompletionTokensDetails != nil {
 				streamChunk.Usage.ReasoningTokens = chunk.Usage.CompletionTokensDetails.ReasoningTokens
+			}
+			if chunk.Usage.PromptTokensDetails != nil {
+				streamChunk.Usage.CacheReadInputTokens = chunk.Usage.PromptTokensDetails.CachedTokens
 			}
 			r.done = true
 			return streamChunk, nil
@@ -703,7 +712,16 @@ type openaiUsage struct {
 	PromptTokens            int                            `json:"prompt_tokens"`
 	CompletionTokens        int                            `json:"completion_tokens"`
 	TotalTokens             int                            `json:"total_tokens"`
+	PromptTokensDetails     *openaiPromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
 	CompletionTokensDetails *openaiCompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+}
+
+// openaiPromptTokensDetails carries the prompt-cache hit count returned by
+// OpenAI's automatic prefix-cache. Per the prompt-caching API docs, only
+// cached_tokens is currently populated for caching purposes (audio_tokens is
+// reported separately for audio-capable models).
+type openaiPromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens,omitempty"`
 }
 
 type openaiCompletionTokensDetails struct {

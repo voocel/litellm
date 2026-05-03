@@ -299,12 +299,21 @@ type responsesAPIToolOutput struct {
 	Content string `json:"content,omitempty"`
 }
 
-// responsesAPIUsage represents token usage in Responses API
+// responsesAPIUsage represents token usage in Responses API.
+// Per the OpenAI Responses API schema, the field names use input_/output_
+// rather than the Chat Completions prompt_/completion_ naming.
 type responsesAPIUsage struct {
 	InputTokens         int                              `json:"input_tokens"`
 	OutputTokens        int                              `json:"output_tokens"`
 	TotalTokens         int                              `json:"total_tokens"`
+	InputTokensDetails  *responsesAPIInputTokensDetails  `json:"input_tokens_details,omitempty"`
 	OutputTokensDetails *responsesAPIOutputTokensDetails `json:"output_tokens_details,omitempty"`
+}
+
+// responsesAPIInputTokensDetails carries the prompt-cache hit count for the
+// Responses API. cached_tokens is a subset of input_tokens.
+type responsesAPIInputTokensDetails struct {
+	CachedTokens int `json:"cached_tokens,omitempty"`
 }
 
 // responsesAPIOutputTokensDetails contains detailed output token breakdown
@@ -655,6 +664,9 @@ func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Open
 	if responsesResp.Usage.OutputTokensDetails != nil {
 		response.Usage.ReasoningTokens = responsesResp.Usage.OutputTokensDetails.ReasoningTokens
 	}
+	if responsesResp.Usage.InputTokensDetails != nil {
+		response.Usage.CacheReadInputTokens = responsesResp.Usage.InputTokensDetails.CachedTokens
+	}
 
 	return response, nil
 }
@@ -774,6 +786,9 @@ func convertResponsesUsage(apiUsage responsesAPIUsage) *Usage {
 
 	if apiUsage.OutputTokensDetails != nil {
 		usage.ReasoningTokens = apiUsage.OutputTokensDetails.ReasoningTokens
+	}
+	if apiUsage.InputTokensDetails != nil {
+		usage.CacheReadInputTokens = apiUsage.InputTokensDetails.CachedTokens
 	}
 
 	return usage

@@ -38,9 +38,18 @@ type MessageImageURL struct {
 }
 
 // CacheControl defines prompt caching behavior for providers.
+//
+// Anthropic Messages API (per official docs):
+//
+//	{ "type": "ephemeral" }              // 5-minute cache (default)
+//	{ "type": "ephemeral", "ttl": "1h" } // 1-hour cache
+//
+// Mixed-TTL request rule: 1h breakpoints must precede 5m breakpoints.
+// OpenAI uses an automatic prefix cache instead of cache_control; configure
+// it via Request.Extra["prompt_cache_retention"] = "in_memory" | "24h".
 type CacheControl struct {
-	Type string `json:"type"`          // "ephemeral" or "persistent"
-	TTL  *int   `json:"ttl,omitempty"` // TTL in seconds (optional)
+	Type string `json:"type"`          // "ephemeral"
+	TTL  string `json:"ttl,omitempty"` // "" / "5m" / "1h" — Anthropic-style
 }
 
 type ToolCall struct {

@@ -1,5 +1,7 @@
 package providers
 
+import "strings"
+
 func init() {
 	RegisterBuiltin("openrouter", func(cfg ProviderConfig) Provider {
 		return NewOpenRouter(cfg)
@@ -40,7 +42,55 @@ func NewOpenRouter(config ProviderConfig) *OpenAICompatProvider {
 		},
 		CustomMessageConverter: convertOpenRouterMessages,
 		CleanSchema:            ensureStrictSchemaGeneric,
+		ExtraTransform:         openRouterExtraTransform,
 	})
+}
+
+// openRouterExtraTransform translates provider-agnostic Extra options into
+// OpenRouter-native request fields, then strips them from Extra so they don't
+// leak through verbatim.
+//
+// Currently handled:
+//   - "cache_retention": placed as top-level cache_control with optional ttl
+//     ("none" → omit; "" / "short" / "5m" → {"type":"ephemeral"}; "long" / "1h"
+//     → {"type":"ephemeral","ttl":"1h"}). Per OpenRouter docs, the top-level
+//     form is only honored for Anthropic-routed models, so the field is only
+//     emitted when the model id starts with "anthropic/". Other providers
+//     (OpenAI, Google, etc.) handle prompt caching automatically without any
+//     request-side marker.
+func openRouterExtraTransform(extra map[string]any, body map[string]any, req *Request) map[string]any {
+	if len(extra) == 0 {
+		return extra
+	}
+	out := make(map[string]any, len(extra))
+	for k, v := range extra {
+		if k == "cache_retention" {
+			retention, _ := v.(string)
+			if cc := resolveOpenRouterCacheControl(retention, req.Model); cc != nil {
+				body["cache_control"] = cc
+			}
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// resolveOpenRouterCacheControl maps the cache_retention string to OpenRouter's
+// top-level cache_control object. Returns nil when caching should be skipped
+// (disabled or routed to a provider that auto-caches without breakpoints).
+func resolveOpenRouterCacheControl(retention, model string) map[string]any {
+	if !strings.HasPrefix(strings.ToLower(model), "anthropic/") {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(retention)) {
+	case "none":
+		return nil
+	case "long", "1h":
+		return map[string]any{"type": "ephemeral", "ttl": "1h"}
+	default:
+		return map[string]any{"type": "ephemeral"}
+	}
 }
 
 // convertOpenRouterMessages handles Anthropic-style cache_control on messages.
@@ -57,11 +107,16 @@ func convertOpenRouterMessages(messages []Message) any {
 		if msg.Role == "tool" {
 			m.Content = msg.Content
 		} else if msg.CacheControl != nil {
+			// Forward TTL alongside Type. OpenRouter passes explicit
+			// breakpoints through to underlying providers verbatim, and
+			// Anthropic-family backends require ttl="1h" for the 1-hour
+			// cache tier — dropping it silently downgrades to 5 minutes.
 			m.Content = []openRouterContent{{
 				Type: "text",
 				Text: msg.Content,
 				CacheControl: &openRouterCacheControl{
 					Type: msg.CacheControl.Type,
+					TTL:  msg.CacheControl.TTL,
 				},
 			}}
 		} else if parts := buildOpenAIContentParts(msg); len(parts) > 0 {
@@ -132,4 +187,5 @@ type openRouterContent struct {
 
 type openRouterCacheControl struct {
 	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
 }

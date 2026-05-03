@@ -71,6 +71,17 @@ type Compat struct {
 	// CustomToolConverter replaces the default ConvertTools.
 	CustomToolConverter func(tools []Tool) any
 
+	// ExtraTransform lets a provider consume or rewrite keys from req.Extra
+	// before they are merged verbatim into the request body. Useful for
+	// translating provider-agnostic options (e.g. cache_retention) into
+	// provider-native fields (e.g. OpenRouter's top-level cache_control).
+	//
+	// It receives the full Extra map and the in-progress body, and returns
+	// the residual Extra (with handled keys removed). The body may be
+	// mutated in place. Returning nil is equivalent to consuming everything.
+	// When ExtraTransform itself is nil, Extra is merged verbatim.
+	ExtraTransform func(extra map[string]any, body map[string]any, req *Request) map[string]any
+
 	// CleanSchema recursively cleans JSON schemas for strict mode.
 	CleanSchema func(schema any) any
 
@@ -493,8 +504,13 @@ func (p *OpenAICompatProvider) buildRequestBody(req *Request, stream bool) ([]by
 	// Response format
 	p.applyResponseFormat(body, req)
 
-	// Provider-specific extra parameters — passthrough to API body
-	for k, v := range req.Extra {
+	// Provider-specific extra parameters — passthrough to API body, with an
+	// optional per-provider transform pass.
+	extra := req.Extra
+	if c.ExtraTransform != nil {
+		extra = c.ExtraTransform(extra, body, req)
+	}
+	for k, v := range extra {
 		body[k] = v
 	}
 
@@ -654,7 +670,8 @@ func parseUsage(raw json.RawMessage, c *Compat) Usage {
 		PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
 		PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
 		PromptTokensDetails   *struct {
-			CachedTokens int `json:"cached_tokens"`
+			CachedTokens     int `json:"cached_tokens"`
+			CacheWriteTokens int `json:"cache_write_tokens"`
 		} `json:"prompt_tokens_details,omitempty"`
 		CompletionTokensDetails *struct {
 			ReasoningTokens int `json:"reasoning_tokens"`
@@ -672,13 +689,26 @@ func parseUsage(raw json.RawMessage, c *Compat) Usage {
 		u.ReasoningTokens = std.CompletionTokensDetails.ReasoningTokens
 	}
 	if c.HasCacheTokens {
-		// DeepSeek: top-level prompt_cache_hit/miss_tokens
+		// DeepSeek (and lookalikes): top-level prompt_cache_hit_tokens /
+		// prompt_cache_miss_tokens. Per the DeepSeek API docs:
+		//   prompt_tokens = prompt_cache_hit_tokens + prompt_cache_miss_tokens
+		// hit_tokens are the cache reads; miss_tokens are simply the
+		// non-cached portion of the input (NOT a cache write — DeepSeek's
+		// context cache is automatic and has no write surcharge). Mapping
+		// miss → CacheCreationInputTokens would double-bill the miss portion
+		// downstream, so we leave CacheCreation at zero here.
 		u.CacheReadInputTokens = std.PromptCacheHitTokens
-		u.CacheCreationInputTokens = std.PromptCacheMissTokens
 	}
-	// Qwen/GLM/OpenAI style: prompt_tokens_details.cached_tokens
-	if std.PromptTokensDetails != nil && std.PromptTokensDetails.CachedTokens > 0 {
-		u.CacheReadInputTokens = std.PromptTokensDetails.CachedTokens
+	// Qwen / GLM / OpenAI / OpenRouter style: prompt_tokens_details.{cached_tokens,cache_write_tokens}.
+	// OpenRouter additionally reports cache_write_tokens for Anthropic-routed
+	// models so callers can attribute cache write costs.
+	if std.PromptTokensDetails != nil {
+		if std.PromptTokensDetails.CachedTokens > 0 {
+			u.CacheReadInputTokens = std.PromptTokensDetails.CachedTokens
+		}
+		if std.PromptTokensDetails.CacheWriteTokens > 0 {
+			u.CacheCreationInputTokens = std.PromptTokensDetails.CacheWriteTokens
+		}
 	}
 
 	return u

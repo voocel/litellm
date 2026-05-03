@@ -63,10 +63,18 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *Request) (*Response, 
 		return nil, fmt.Errorf("%s: decode response: %w", p.Name(), err)
 	}
 
-	// Process response
+	// Process response.
+	//
+	// Anthropic's wire-level input_tokens excludes cache_read_input_tokens
+	// (it is "tokens after the last cache breakpoint"). We surface PromptTokens
+	// in the OpenAI-compatible sense — input_tokens that *includes* cache
+	// reads — so downstream consumers can rely on a single invariant across
+	// providers: nonCachedInput = PromptTokens - CacheRead. CacheCreation is
+	// reported separately and is not folded into PromptTokens (matching the
+	// OpenAI prompt-cache convention where writes are implicit).
 	response := &Response{
 		Usage: Usage{
-			PromptTokens:             anthropicResp.Usage.InputTokens,
+			PromptTokens:             anthropicResp.Usage.InputTokens + anthropicResp.Usage.CacheReadInputTokens,
 			CompletionTokens:         anthropicResp.Usage.OutputTokens,
 			TotalTokens:              anthropicResp.Usage.InputTokens + anthropicResp.Usage.OutputTokens + anthropicResp.Usage.CacheReadInputTokens + anthropicResp.Usage.CacheCreationInputTokens,
 			CacheCreationInputTokens: anthropicResp.Usage.CacheCreationInputTokens,
@@ -387,7 +395,7 @@ func (p *AnthropicProvider) convertMessages(req *Request) (any, []anthropicMessa
 		if msg.Role == "system" {
 			systemContent := anthropicContent{Type: "text", Text: msg.Content}
 			if msg.CacheControl != nil {
-				systemContent.CacheControl = &anthropicCacheControl{Type: msg.CacheControl.Type}
+				systemContent.CacheControl = newAnthropicCacheControl(msg.CacheControl)
 			} else if autoCache != nil {
 				systemContent.CacheControl = autoCache
 			}
@@ -469,7 +477,7 @@ func (p *AnthropicProvider) convertSingleMessage(msg Message) anthropicMessage {
 	if len(msg.Contents) > 0 && msg.ToolCallID == "" {
 		var cc *anthropicCacheControl
 		if msg.CacheControl != nil {
-			cc = &anthropicCacheControl{Type: msg.CacheControl.Type}
+			cc = newAnthropicCacheControl(msg.CacheControl)
 		}
 		for i, c := range msg.Contents {
 			switch c.Type {
@@ -506,7 +514,7 @@ func (p *AnthropicProvider) convertSingleMessage(msg Message) anthropicMessage {
 	} else if content != "" && msg.ToolCallID == "" {
 		textContent := anthropicContent{Type: "text", Text: content}
 		if msg.CacheControl != nil {
-			textContent.CacheControl = &anthropicCacheControl{Type: msg.CacheControl.Type}
+			textContent.CacheControl = newAnthropicCacheControl(msg.CacheControl)
 		}
 		anthropicMsg.Content = []anthropicContent{textContent}
 	}
@@ -533,16 +541,34 @@ func (p *AnthropicProvider) convertSingleMessage(msg Message) anthropicMessage {
 	return anthropicMsg
 }
 
+// newAnthropicCacheControl converts a provider-agnostic CacheControl to the
+// Anthropic-native shape, preserving the optional TTL ("5m" / "1h").
+func newAnthropicCacheControl(cc *CacheControl) *anthropicCacheControl {
+	if cc == nil {
+		return nil
+	}
+	return &anthropicCacheControl{Type: cc.Type, TTL: cc.TTL}
+}
+
 // resolveCacheRetention returns the auto-cache control to apply, or nil if disabled.
-// Reads from req.Extra["cache_retention"]: "none" | "short" (default) | "long".
+//
+// Reads req.Extra["cache_retention"] (case-insensitive):
+//   - "none"                    → disable auto-cache (no breakpoint)
+//   - "" / "short" / "5m"       → 5-minute ephemeral (TTL omitted, server default)
+//   - "long" / "1h"             → 1-hour ephemeral (ttl="1h")
+//
+// Unknown values fall back to 5-minute. Per Anthropic Messages API docs,
+// no beta header is required for ttl="1h" — it ships in the standard API.
 func resolveCacheRetention(req *Request) *anthropicCacheControl {
-	retention := "short" // default: enable with ephemeral cache
+	retention := "short"
 	if v, ok := req.Extra["cache_retention"].(string); ok {
 		retention = v
 	}
-	switch strings.ToLower(retention) {
+	switch strings.ToLower(strings.TrimSpace(retention)) {
 	case "none":
 		return nil
+	case "long", "1h":
+		return &anthropicCacheControl{Type: "ephemeral", TTL: "1h"}
 	default:
 		return &anthropicCacheControl{Type: "ephemeral"}
 	}
@@ -665,12 +691,14 @@ func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
 		switch chunk.Type {
 		// === Message Lifecycle Events ===
 		case "message_start":
-			// Initialize usage from message_start (may be nil in extended thinking mode)
+			// Initialize usage from message_start (may be nil in extended thinking mode).
+			// PromptTokens follows the OpenAI convention (cache reads included);
+			// see the comment in (*AnthropicProvider).Chat.
 			if chunk.Message != nil {
 				r.model = chunk.Message.Model
 				if chunk.Message.Usage != nil {
 					r.usage = &Usage{
-						PromptTokens:             chunk.Message.Usage.InputTokens,
+						PromptTokens:             chunk.Message.Usage.InputTokens + chunk.Message.Usage.CacheReadInputTokens,
 						CompletionTokens:         chunk.Message.Usage.OutputTokens,
 						TotalTokens:              chunk.Message.Usage.InputTokens + chunk.Message.Usage.OutputTokens + chunk.Message.Usage.CacheReadInputTokens + chunk.Message.Usage.CacheCreationInputTokens,
 						CacheCreationInputTokens: chunk.Message.Usage.CacheCreationInputTokens,
@@ -681,17 +709,12 @@ func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
 			continue
 
 		case "message_delta":
-			// Update usage (cumulative) - may contain full usage info
+			// Update usage (cumulative) - may contain full usage info.
+			// Cache fields are updated first so PromptTokens can be recomputed
+			// in OpenAI-compatible form (input_tokens + cache_read).
 			if chunk.Usage != nil {
 				if r.usage == nil {
 					r.usage = &Usage{}
-				}
-				// message_delta usage is cumulative, so update all available fields
-				if chunk.Usage.InputTokens > 0 {
-					r.usage.PromptTokens = chunk.Usage.InputTokens
-				}
-				if chunk.Usage.OutputTokens > 0 {
-					r.usage.CompletionTokens = chunk.Usage.OutputTokens
 				}
 				if chunk.Usage.CacheCreationInputTokens > 0 {
 					r.usage.CacheCreationInputTokens = chunk.Usage.CacheCreationInputTokens
@@ -699,7 +722,13 @@ func (r *anthropicStreamReader) Next() (*StreamChunk, error) {
 				if chunk.Usage.CacheReadInputTokens > 0 {
 					r.usage.CacheReadInputTokens = chunk.Usage.CacheReadInputTokens
 				}
-				r.usage.TotalTokens = r.usage.PromptTokens + r.usage.CompletionTokens + r.usage.CacheReadInputTokens + r.usage.CacheCreationInputTokens
+				if chunk.Usage.InputTokens > 0 {
+					r.usage.PromptTokens = chunk.Usage.InputTokens + r.usage.CacheReadInputTokens
+				}
+				if chunk.Usage.OutputTokens > 0 {
+					r.usage.CompletionTokens = chunk.Usage.OutputTokens
+				}
+				r.usage.TotalTokens = r.usage.PromptTokens + r.usage.CompletionTokens + r.usage.CacheCreationInputTokens
 			}
 			// Return finish reason
 			if chunk.Delta != nil && chunk.Delta.StopReason != "" {
@@ -923,9 +952,16 @@ type anthropicImageSource struct {
 	URL       string `json:"url,omitempty"`        // image URL
 }
 
-// anthropicCacheControl represents Anthropic's cache control structure
+// anthropicCacheControl represents Anthropic's cache control structure.
+// Per the Anthropic Messages API:
+//   - Type is required and must be "ephemeral".
+//   - TTL is optional. Omit (or "5m") for the default 5-minute cache; set "1h"
+//     for 1-hour cache. No beta header is required for the 1-hour TTL.
+//
+// When mixing TTLs in a single request, 1h breakpoints must precede 5m ones.
 type anthropicCacheControl struct {
 	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
 }
 
 type anthropicTool struct {

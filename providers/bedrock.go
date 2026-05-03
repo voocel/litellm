@@ -96,11 +96,22 @@ type bedrockMessage struct {
 	Content []bedrockContent `json:"content"`
 }
 
+// bedrockContent is a Tagged Union: exactly one of the optional fields is set
+// per block. cachePoint is the Converse API's prompt-cache marker (distinct
+// from Anthropic's native cache_control on InvokeModel).
 type bedrockContent struct {
 	Text       string               `json:"text,omitempty"`
 	Image      *bedrockImageContent `json:"image,omitempty"`
 	ToolUse    *bedrockToolUse      `json:"toolUse,omitempty"`
 	ToolResult *bedrockToolResult   `json:"toolResult,omitempty"`
+	CachePoint *bedrockCachePoint   `json:"cachePoint,omitempty"`
+}
+
+// bedrockCachePoint is the Converse API cache marker. type is currently only
+// "default"; ttl is optional ("5m" default if omitted, "1h" for extended).
+type bedrockCachePoint struct {
+	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
 }
 
 type bedrockImageContent struct {
@@ -124,8 +135,11 @@ type bedrockToolResult struct {
 	Status    string           `json:"status,omitempty"`
 }
 
+// bedrockSystemContent is a Tagged Union for the Converse `system` array;
+// each block is either a text fragment or a cachePoint marker.
 type bedrockSystemContent struct {
-	Text string `json:"text"`
+	Text       string             `json:"text,omitempty"`
+	CachePoint *bedrockCachePoint `json:"cachePoint,omitempty"`
 }
 
 type bedrockInferenceConfig struct {
@@ -140,8 +154,11 @@ type bedrockToolConfig struct {
 	ToolChoice any           `json:"toolChoice,omitempty"`
 }
 
+// bedrockTool is a Tagged Union: a tool definition (toolSpec) or a cache
+// marker (cachePoint) terminating a cacheable tool prefix.
 type bedrockTool struct {
-	ToolSpec *bedrockToolSpec `json:"toolSpec,omitempty"`
+	ToolSpec   *bedrockToolSpec   `json:"toolSpec,omitempty"`
+	CachePoint *bedrockCachePoint `json:"cachePoint,omitempty"`
 }
 
 type bedrockToolSpec struct {
@@ -170,17 +187,26 @@ type bedrockJSONSchema struct {
 	Schema      string `json:"schema"`
 }
 
+// bedrockUsage represents the Bedrock Converse API usage object. AWS uses
+// camelCase here. CacheReadInputTokens / CacheWriteInputTokens are populated
+// when the Anthropic provider serves a prompt-cached request via Bedrock; they
+// remain zero on first-touch writes (the write count is reported on the
+// initial call) and zero on cache misses.
+type bedrockUsage struct {
+	InputTokens           int `json:"inputTokens"`
+	OutputTokens          int `json:"outputTokens"`
+	TotalTokens           int `json:"totalTokens"`
+	CacheReadInputTokens  int `json:"cacheReadInputTokens,omitempty"`
+	CacheWriteInputTokens int `json:"cacheWriteInputTokens,omitempty"`
+}
+
 type bedrockResponse struct {
 	Output struct {
 		Message bedrockMessage `json:"message"`
 	} `json:"output"`
-	StopReason string `json:"stopReason"`
-	Usage      struct {
-		InputTokens  int `json:"inputTokens"`
-		OutputTokens int `json:"outputTokens"`
-		TotalTokens  int `json:"totalTokens"`
-	} `json:"usage"`
-	Metrics struct {
+	StopReason string       `json:"stopReason"`
+	Usage      bedrockUsage `json:"usage"`
+	Metrics    struct {
 		LatencyMs int64 `json:"latencyMs"`
 	} `json:"metrics"`
 }
@@ -201,7 +227,7 @@ func (p *BedrockProvider) Chat(ctx context.Context, req *Request) (*Response, er
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	if err := p.BaseProvider.ValidateExtra(req.Extra, nil); err != nil {
+	if err := p.BaseProvider.ValidateExtra(req.Extra, []string{"cache_retention"}); err != nil {
 		return nil, err
 	}
 	if err := p.BaseProvider.ValidateRequest(req); err != nil {
@@ -253,7 +279,7 @@ func (p *BedrockProvider) Stream(ctx context.Context, req *Request) (StreamReade
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	if err := p.BaseProvider.ValidateExtra(req.Extra, nil); err != nil {
+	if err := p.BaseProvider.ValidateExtra(req.Extra, []string{"cache_retention"}); err != nil {
 		return nil, err
 	}
 	if err := p.BaseProvider.ValidateRequest(req); err != nil {
@@ -485,7 +511,55 @@ func (p *BedrockProvider) buildRequest(req *Request) (*bedrockRequest, error) {
 		}
 	}
 
+	// Apply auto cache_retention by appending Converse API cachePoint markers.
+	// Per AWS Bedrock docs, the Converse API uses "cachePoint": {"type":
+	// "default", "ttl": "5m"|"1h"} blocks placed at the END of the cacheable
+	// region (system / messages / toolConfig.tools), distinct from Anthropic
+	// InvokeModel's cache_control field.
+	if cp := resolveBedrockCachePoint(req); cp != nil {
+		applyBedrockCachePoints(bedrockReq, cp)
+	}
+
 	return bedrockReq, nil
+}
+
+// resolveBedrockCachePoint reads req.Extra["cache_retention"] and returns the
+// matching Converse cachePoint, or nil if caching is disabled. Mirrors
+// resolveCacheRetention's accepted values: "" / "short" / "5m" → 5m default
+// (TTL omitted); "long" / "1h" → 1h; "none" → disabled.
+func resolveBedrockCachePoint(req *Request) *bedrockCachePoint {
+	retention := "short"
+	if v, ok := req.Extra["cache_retention"].(string); ok {
+		retention = v
+	}
+	switch strings.ToLower(strings.TrimSpace(retention)) {
+	case "none":
+		return nil
+	case "long", "1h":
+		return &bedrockCachePoint{Type: "default", TTL: "1h"}
+	default:
+		return &bedrockCachePoint{Type: "default"}
+	}
+}
+
+// applyBedrockCachePoints appends a cachePoint after the last system block,
+// after the last user message's last content block, and (when tools exist)
+// after the last tool. The Converse API caches everything *up to* a cachePoint
+// in the same region; placing markers at the end of each cacheable segment
+// maximises prefix reuse.
+func applyBedrockCachePoints(req *bedrockRequest, cp *bedrockCachePoint) {
+	if len(req.System) > 0 {
+		req.System = append(req.System, bedrockSystemContent{CachePoint: cp})
+	}
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" && len(req.Messages[i].Content) > 0 {
+			req.Messages[i].Content = append(req.Messages[i].Content, bedrockContent{CachePoint: cp})
+			break
+		}
+	}
+	if req.ToolConfig != nil && len(req.ToolConfig.Tools) > 0 {
+		req.ToolConfig.Tools = append(req.ToolConfig.Tools, bedrockTool{CachePoint: cp})
+	}
 }
 
 func convertBedrockOutputConfig(format *ResponseFormat) (*bedrockOutputConfig, error) {
@@ -545,14 +619,20 @@ func bedrockSchemaString(schema any) (string, error) {
 }
 
 func (p *BedrockProvider) parseResponse(resp *bedrockResponse, model string) *Response {
+	// Bedrock's Converse API mirrors Anthropic's wire-level semantics:
+	// inputTokens excludes cacheReadInputTokens. We surface PromptTokens in
+	// the OpenAI-compatible sense (cache reads included) for cross-provider
+	// uniformity — see the comment in (*AnthropicProvider).Chat.
 	response := &Response{
 		Model:        model,
 		Provider:     "bedrock",
 		FinishReason: NormalizeFinishReason(resp.StopReason),
 		Usage: Usage{
-			PromptTokens:     resp.Usage.InputTokens,
-			CompletionTokens: resp.Usage.OutputTokens,
-			TotalTokens:      resp.Usage.TotalTokens,
+			PromptTokens:             resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens,
+			CompletionTokens:         resp.Usage.OutputTokens,
+			TotalTokens:              resp.Usage.TotalTokens,
+			CacheReadInputTokens:     resp.Usage.CacheReadInputTokens,
+			CacheCreationInputTokens: resp.Usage.CacheWriteInputTokens,
 		},
 	}
 
@@ -752,11 +832,7 @@ func (s *bedrockStreamReader) Next() (*StreamChunk, error) {
 
 		if data, ok := event["metadata"]; ok {
 			var meta struct {
-				Usage struct {
-					InputTokens  int `json:"inputTokens"`
-					OutputTokens int `json:"outputTokens"`
-					TotalTokens  int `json:"totalTokens"`
-				} `json:"usage"`
+				Usage bedrockUsage `json:"usage"`
 			}
 			if err := json.Unmarshal(data, &meta); err == nil {
 				s.done = true
@@ -766,9 +842,11 @@ func (s *bedrockStreamReader) Next() (*StreamChunk, error) {
 					Provider:     "bedrock",
 					Model:        s.model,
 					Usage: &Usage{
-						PromptTokens:     meta.Usage.InputTokens,
-						CompletionTokens: meta.Usage.OutputTokens,
-						TotalTokens:      meta.Usage.TotalTokens,
+						PromptTokens:             meta.Usage.InputTokens + meta.Usage.CacheReadInputTokens,
+						CompletionTokens:         meta.Usage.OutputTokens,
+						TotalTokens:              meta.Usage.TotalTokens,
+						CacheReadInputTokens:     meta.Usage.CacheReadInputTokens,
+						CacheCreationInputTokens: meta.Usage.CacheWriteInputTokens,
 					},
 				}, nil
 			}
