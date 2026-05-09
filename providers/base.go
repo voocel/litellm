@@ -52,10 +52,32 @@ func DefaultResilienceConfig() ResilienceConfig {
 	}
 }
 
-// ResolveResilienceConfig applies defaults when config is empty.
+// ResolveResilienceConfig applies defaults to unset fields whose zero values
+// are never useful at runtime. Jitter=false and StreamIdleTimeout=0 are kept as
+// explicit opt-outs when callers provide a partial config.
 func ResolveResilienceConfig(config ResilienceConfig) ResilienceConfig {
+	defaults := DefaultResilienceConfig()
+
 	if config == (ResilienceConfig{}) {
-		return DefaultResilienceConfig()
+		return defaults
+	}
+	if config.InitialDelay <= 0 {
+		config.InitialDelay = defaults.InitialDelay
+	}
+	if config.MaxDelay <= 0 {
+		config.MaxDelay = defaults.MaxDelay
+	}
+	if config.Multiplier <= 0 {
+		config.Multiplier = defaults.Multiplier
+	}
+	if config.RequestTimeout <= 0 {
+		config.RequestTimeout = defaults.RequestTimeout
+	}
+	if config.ConnectTimeout <= 0 {
+		config.ConnectTimeout = defaults.ConnectTimeout
+	}
+	if config.StreamIdleTimeout < 0 {
+		config.StreamIdleTimeout = 0
 	}
 	return config
 }
