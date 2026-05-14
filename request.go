@@ -305,18 +305,26 @@ func WithOnWarning(fn func(provider string, message string)) RequestOption {
 	}
 }
 
-// WithCacheRetention configures automatic prompt caching placement.
+// WithCacheRetention enables automatic prompt-caching placement.
+//
+// Default behavior (option unset): no automatic caching — callers are
+// expected to attach cache_control to specific messages themselves. This is
+// opt-in by design so application frameworks can control exactly which
+// segments use the scarce per-request marker budget (Anthropic caps at 4).
 //
 // Accepted values (case-insensitive, applied per-provider):
-//   - "none"             : disable auto-caching
-//   - "" / "short" / "5m": ephemeral cache, ~5-minute TTL (provider default)
+//   - "" / "none"        : disable auto-caching (default)
+//   - "short" / "5m"     : ephemeral cache, ~5-minute TTL (provider default)
 //   - "long" / "1h"      : ephemeral cache, 1-hour TTL where supported
 //
-// Provider behavior:
-//   - Anthropic / OpenRouter→Anthropic: places cache_control on system + last
-//     user-message content block; "1h" sets ttl="1h" per Anthropic API docs
-//     (no beta header required). User-provided CacheControl on individual
-//     messages takes precedence and is not overwritten.
+// Provider behavior when enabled:
+//   - Anthropic / OpenRouter→Anthropic: places cache_control on each system
+//     content block that doesn't already carry one, and on the last user
+//     message's last content block. User-provided CacheControl on individual
+//     messages always takes precedence.
+//   - Bedrock (Anthropic models, Converse API): appends cachePoint markers
+//     after the last system block, last user message content block, and
+//     tools section.
 //   - OpenAI / Azure OpenAI: prefer prompt_cache_retention via Extra
 //     ("in_memory" or "24h"); cache_control breakpoints are not applicable.
 //

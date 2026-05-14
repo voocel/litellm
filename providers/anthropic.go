@@ -475,19 +475,11 @@ func (p *AnthropicProvider) convertSingleMessage(msg Message) anthropicMessage {
 
 	// Multi-content (text + images): prefer Contents over Content for non-tool messages.
 	if len(msg.Contents) > 0 && msg.ToolCallID == "" {
-		var cc *anthropicCacheControl
-		if msg.CacheControl != nil {
-			cc = newAnthropicCacheControl(msg.CacheControl)
-		}
-		for i, c := range msg.Contents {
+		for _, c := range msg.Contents {
 			switch c.Type {
 			case "text", "", "input_text":
 				if c.Text != "" {
-					tc := anthropicContent{Type: "text", Text: c.Text}
-					if cc != nil && i == len(msg.Contents)-1 {
-						tc.CacheControl = cc
-					}
-					anthropicMsg.Content = append(anthropicMsg.Content, tc)
+					anthropicMsg.Content = append(anthropicMsg.Content, anthropicContent{Type: "text", Text: c.Text})
 				}
 			case "image_url", "input_image":
 				if c.ImageURL == nil || c.ImageURL.URL == "" {
@@ -505,18 +497,11 @@ func (p *AnthropicProvider) convertSingleMessage(msg Message) anthropicMessage {
 						Source: &anthropicImageSource{Type: "url", URL: c.ImageURL.URL},
 					}
 				}
-				if cc != nil && i == len(msg.Contents)-1 {
-					ic.CacheControl = cc
-				}
 				anthropicMsg.Content = append(anthropicMsg.Content, ic)
 			}
 		}
 	} else if content != "" && msg.ToolCallID == "" {
-		textContent := anthropicContent{Type: "text", Text: content}
-		if msg.CacheControl != nil {
-			textContent.CacheControl = newAnthropicCacheControl(msg.CacheControl)
-		}
-		anthropicMsg.Content = []anthropicContent{textContent}
+		anthropicMsg.Content = []anthropicContent{{Type: "text", Text: content}}
 	}
 
 	for _, toolCall := range msg.ToolCalls {
@@ -538,6 +523,13 @@ func (p *AnthropicProvider) convertSingleMessage(msg Message) anthropicMessage {
 		}
 	}
 
+	// Attach cache_control once to the last content block. Works uniformly for
+	// text, image, tool_use, and tool_result — the caller picks which message
+	// gets the marker; we just place it where Anthropic expects.
+	if msg.CacheControl != nil && len(anthropicMsg.Content) > 0 {
+		anthropicMsg.Content[len(anthropicMsg.Content)-1].CacheControl = newAnthropicCacheControl(msg.CacheControl)
+	}
+
 	return anthropicMsg
 }
 
@@ -553,24 +545,34 @@ func newAnthropicCacheControl(cc *CacheControl) *anthropicCacheControl {
 // resolveCacheRetention returns the auto-cache control to apply, or nil if disabled.
 //
 // Reads req.Extra["cache_retention"] (case-insensitive):
-//   - "none"                    → disable auto-cache (no breakpoint)
-//   - "" / "short" / "5m"       → 5-minute ephemeral (TTL omitted, server default)
+//   - unset / "" / "none"       → disable auto-cache (no breakpoint, default)
+//   - "short" / "5m"            → 5-minute ephemeral (TTL omitted, server default)
 //   - "long" / "1h"             → 1-hour ephemeral (ttl="1h")
 //
-// Unknown values fall back to 5-minute. Per Anthropic Messages API docs,
+// Unknown values fall back to disabled. Per Anthropic Messages API docs,
 // no beta header is required for ttl="1h" — it ships in the standard API.
+//
+// Default is "none" (opt-in): cache strategy is the caller's responsibility.
+// Application frameworks (agentcore, custom harnesses) need precise control
+// over which segments get cache_control — a library-side default that
+// auto-marks system + last user message uses up scarce marker budget
+// (Anthropic caps at 4) before the caller can place markers where they
+// actually want them. Use WithCacheRetention("short"|"long") when explicit
+// caching is desired.
 func resolveCacheRetention(req *Request) *anthropicCacheControl {
-	retention := "short"
+	retention := "none"
 	if v, ok := req.Extra["cache_retention"].(string); ok {
 		retention = v
 	}
 	switch strings.ToLower(strings.TrimSpace(retention)) {
-	case "none":
+	case "", "none":
 		return nil
 	case "long", "1h":
 		return &anthropicCacheControl{Type: "ephemeral", TTL: "1h"}
-	default:
+	case "short", "5m":
 		return &anthropicCacheControl{Type: "ephemeral"}
+	default:
+		return nil
 	}
 }
 

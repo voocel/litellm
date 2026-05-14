@@ -525,20 +525,25 @@ func (p *BedrockProvider) buildRequest(req *Request) (*bedrockRequest, error) {
 
 // resolveBedrockCachePoint reads req.Extra["cache_retention"] and returns the
 // matching Converse cachePoint, or nil if caching is disabled. Mirrors
-// resolveCacheRetention's accepted values: "" / "short" / "5m" → 5m default
-// (TTL omitted); "long" / "1h" → 1h; "none" → disabled.
+// resolveCacheRetention's opt-in semantics: unset / "" / "none" → disabled
+// (default); "short" / "5m" → 5m default (TTL omitted); "long" / "1h" → 1h.
+//
+// See resolveCacheRetention in anthropic.go for the rationale behind the
+// opt-in default — cache strategy belongs to the caller, not the SDK.
 func resolveBedrockCachePoint(req *Request) *bedrockCachePoint {
-	retention := "short"
+	retention := "none"
 	if v, ok := req.Extra["cache_retention"].(string); ok {
 		retention = v
 	}
 	switch strings.ToLower(strings.TrimSpace(retention)) {
-	case "none":
+	case "", "none":
 		return nil
 	case "long", "1h":
 		return &bedrockCachePoint{Type: "default", TTL: "1h"}
-	default:
+	case "short", "5m":
 		return &bedrockCachePoint{Type: "default"}
+	default:
+		return nil
 	}
 }
 
