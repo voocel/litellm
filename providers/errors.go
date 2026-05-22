@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -274,6 +275,15 @@ func GetRetryAfter(err error) int {
 func WrapError(err error, provider string) error {
 	if err == nil {
 		return nil
+	}
+
+	// Context cancellation and deadline are caller-driven control signals,
+	// not provider failures. Wrapping them as NetworkError flips their
+	// Retryable bit to true and misleads upstream retry loops into emitting
+	// pointless EventRetry on a dead context. Pass through unchanged so
+	// errors.Is(err, context.Canceled) keeps working at every layer.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
 	}
 
 	var e *LiteLLMError
