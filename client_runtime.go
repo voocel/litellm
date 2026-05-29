@@ -282,6 +282,13 @@ func (c *Client) finalizeResponseCall(ctx context.Context, meta CallMeta, resp *
 		c.notifyAfterResponse(ctx, meta, nil, err)
 		return nil, err
 	}
+	if resp.Provider == "" {
+		resp.Provider = meta.Provider
+	}
+	if resp.Model == "" {
+		resp.Model = meta.Model
+	}
+	resp.Usage.StampModel(resp.Provider, resp.Model)
 	c.notifyAfterResponse(ctx, meta, resp, nil)
 	return resp, nil
 }

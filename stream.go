@@ -206,7 +206,10 @@ func (c *streamCollector) applyChunk(chunk *StreamChunk) {
 	c.collectToolCall(chunk)
 
 	if chunk.Usage != nil {
-		c.resp.Usage = *chunk.Usage
+		usage := *chunk.Usage
+		usage.StampModel(chunk.Provider, chunk.Model)
+		usage.StampModel(c.resp.Provider, c.resp.Model)
+		c.resp.Usage = usage
 	}
 }
 
@@ -262,6 +265,7 @@ func (c *streamCollector) buildResponse() (*Response, error) {
 	if err := validateToolCalls(c.resp.Provider, c.resp.ToolCalls); err != nil {
 		return nil, err
 	}
+	c.resp.Usage.StampModel(c.resp.Provider, c.resp.Model)
 
 	if c.resp.Content == "" && c.resp.ReasoningContent == "" && len(c.resp.ToolCalls) == 0 && c.resp.FinishReason == "" {
 		return nil, providers.NewNetworkError(c.resp.Provider,
@@ -468,7 +472,7 @@ type hookedStreamReader struct {
 }
 
 func newHookedStreamReader(ctx context.Context, meta CallMeta, hooks []Hook, stream StreamReader) StreamReader {
-	if stream == nil || len(hooks) == 0 {
+	if stream == nil {
 		return stream
 	}
 	return &hookedStreamReader{
@@ -485,6 +489,12 @@ func (r *hookedStreamReader) Next() (*StreamChunk, error) {
 		return nil, err
 	}
 	if chunk != nil {
+		if chunk.Provider == "" {
+			chunk.Provider = r.meta.Provider
+		}
+		if chunk.Model == "" {
+			chunk.Model = r.meta.Model
+		}
 		for _, h := range r.hooks {
 			h.OnStreamChunk(r.ctx, r.meta, chunk)
 		}

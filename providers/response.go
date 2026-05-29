@@ -5,6 +5,9 @@ package providers
 // ---------------------------------------------------------------------------
 
 type Usage struct {
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
@@ -13,6 +16,32 @@ type Usage struct {
 	// Cache-related token statistics
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"` // Tokens written to cache
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`     // Tokens read from cache
+}
+
+// StampModel records the provider/model that produced this usage while
+// preserving provider-specific values if they were already set.
+func (u *Usage) StampModel(provider, model string) {
+	if u == nil {
+		return
+	}
+	if !u.HasTokens() {
+		return
+	}
+	if u.Provider == "" {
+		u.Provider = provider
+	}
+	if u.Model == "" {
+		u.Model = model
+	}
+}
+
+func (u Usage) HasTokens() bool {
+	return u.PromptTokens > 0 ||
+		u.CompletionTokens > 0 ||
+		u.TotalTokens > 0 ||
+		u.ReasoningTokens > 0 ||
+		u.CacheCreationInputTokens > 0 ||
+		u.CacheReadInputTokens > 0
 }
 
 type Response struct {
