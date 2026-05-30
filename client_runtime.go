@@ -165,7 +165,7 @@ func (c *Client) executeRequestCall(
 	}
 
 	meta := c.newCallMeta(opts.operation, prepared.Model, false)
-	c.notifyBeforeRequest(ctx, meta)
+	c.notifyBeforeRequest(ctx, meta, prepared)
 	c.debugRequest(prepared, opts.operation)
 	start := meta.StartedAt
 
@@ -185,7 +185,7 @@ func (c *Client) executeRequestStreamCall(
 	}
 
 	meta := c.newCallMeta(opts.operation, prepared.Model, true)
-	c.notifyBeforeRequest(ctx, meta)
+	c.notifyBeforeRequest(ctx, meta, prepared)
 	c.debugRequest(prepared, opts.operation)
 	start := meta.StartedAt
 
@@ -212,7 +212,7 @@ func (c *Client) executeResponsesCall(
 	}
 
 	meta := c.newCallMeta(opts.operation, prepared.Model, false)
-	c.notifyBeforeRequest(ctx, meta)
+	c.notifyBeforeRequest(ctx, meta, nil)
 	c.debugResponsesRequest(prepared, opts.operation)
 	start := meta.StartedAt
 
@@ -237,7 +237,7 @@ func (c *Client) executeResponsesStreamCall(
 	}
 
 	meta := c.newCallMeta(opts.operation, prepared.Model, true)
-	c.notifyBeforeRequest(ctx, meta)
+	c.notifyBeforeRequest(ctx, meta, nil)
 	c.debugResponsesRequest(prepared, opts.operation)
 	start := meta.StartedAt
 
@@ -340,9 +340,9 @@ func (c *Client) attachErrorModel(err error, model string) error {
 	return err
 }
 
-func (c *Client) notifyBeforeRequest(ctx context.Context, meta CallMeta) {
+func (c *Client) notifyBeforeRequest(ctx context.Context, meta CallMeta, req *Request) {
 	for _, h := range c.hooks {
-		h.BeforeRequest(ctx, meta)
+		h.BeforeRequest(ctx, meta, req)
 	}
 }
 

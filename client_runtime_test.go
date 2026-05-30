@@ -139,7 +139,7 @@ func TestClientChatHooks(t *testing.T) {
 	var afterResp *Response
 
 	client, err := New(provider, WithHook(HookFuncs{
-		BeforeRequestFunc: func(ctx context.Context, meta CallMeta) {
+		BeforeRequestFunc: func(ctx context.Context, meta CallMeta, req *Request) {
 			beforeCalled++
 			beforeMeta = meta
 		},
@@ -197,9 +197,11 @@ func TestClientStreamHooks(t *testing.T) {
 	var afterResp *Response
 	var beforeCalled int
 	var afterCalled int
+	var endCalled int
+	var endErr error
 
 	client, err := New(provider, WithHook(HookFuncs{
-		BeforeRequestFunc: func(ctx context.Context, meta CallMeta) {
+		BeforeRequestFunc: func(ctx context.Context, meta CallMeta, req *Request) {
 			beforeCalled++
 			beforeMeta = meta
 		},
@@ -214,6 +216,10 @@ func TestClientStreamHooks(t *testing.T) {
 		OnStreamChunkFunc: func(ctx context.Context, meta CallMeta, chunk *StreamChunk) {
 			chunkMetas = append(chunkMetas, meta)
 			chunkContents = append(chunkContents, chunk.Content)
+		},
+		OnStreamEndFunc: func(ctx context.Context, meta CallMeta, err error) {
+			endCalled++
+			endErr = err
 		},
 	}))
 	if err != nil {
@@ -256,6 +262,89 @@ func TestClientStreamHooks(t *testing.T) {
 	}
 	if resp.Content != "ab" {
 		t.Fatalf("stream response content = %q, want %q", resp.Content, "ab")
+	}
+	if endCalled != 1 {
+		t.Fatalf("OnStreamEnd called %d times, want 1", endCalled)
+	}
+	if endErr != nil {
+		t.Fatalf("OnStreamEnd err = %v, want nil on clean completion", endErr)
+	}
+}
+
+// errorAfterStream emits its chunks then aborts with a non-EOF error, modeling a
+// provider failure / idle timeout mid-stream.
+type errorAfterStream struct {
+	chunks []*StreamChunk
+	index  int
+	err    error
+	closed bool
+}
+
+func (s *errorAfterStream) Next() (*StreamChunk, error) {
+	if s.index >= len(s.chunks) {
+		return nil, s.err
+	}
+	chunk := s.chunks[s.index]
+	s.index++
+	return chunk, nil
+}
+
+func (s *errorAfterStream) Close() error {
+	s.closed = true
+	return nil
+}
+
+// TestClientStreamHookEndsOnError verifies the terminal hook fires exactly once
+// with the abort error when a stream dies before a Done chunk — the path that
+// previously leaked: no Done chunk, so OnStreamChunk never finalizes.
+func TestClientStreamHookEndsOnError(t *testing.T) {
+	boom := errors.New("stream blew up")
+	provider := &pipelineTestProvider{
+		name: "hook-test",
+		streamFunc: func(ctx context.Context, req *Request) (StreamReader, error) {
+			return &errorAfterStream{
+				chunks: []*StreamChunk{{Type: ChunkTypeContent, Content: "partial"}},
+				err:    boom,
+			}, nil
+		},
+	}
+
+	var endCalled int
+	var endErr error
+	var sawDone bool
+
+	client, err := New(provider, WithHook(HookFuncs{
+		OnStreamChunkFunc: func(ctx context.Context, meta CallMeta, chunk *StreamChunk) {
+			if chunk.Done {
+				sawDone = true
+			}
+		},
+		OnStreamEndFunc: func(ctx context.Context, meta CallMeta, err error) {
+			endCalled++
+			endErr = err
+		},
+	}))
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	stream, err := client.Stream(context.Background(), NewRequest("stream-model", "go"))
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if _, err := CollectStream(stream); !errors.Is(err, boom) {
+		t.Fatalf("CollectStream err = %v, want %v", err, boom)
+	}
+	_ = stream.Close()
+
+	if sawDone {
+		t.Fatal("test setup invalid: stream should abort without a Done chunk")
+	}
+	if endCalled != 1 {
+		t.Fatalf("OnStreamEnd called %d times, want exactly 1", endCalled)
+	}
+	if !errors.Is(endErr, boom) {
+		t.Fatalf("OnStreamEnd err = %v, want %v", endErr, boom)
 	}
 }
 
@@ -337,7 +426,7 @@ func TestClientResponsesHooks(t *testing.T) {
 	var afterResp *Response
 
 	client, err := New(provider, WithHook(HookFuncs{
-		BeforeRequestFunc: func(ctx context.Context, meta CallMeta) {
+		BeforeRequestFunc: func(ctx context.Context, meta CallMeta, req *Request) {
 			beforeCalled++
 			beforeMeta = meta
 		},
@@ -400,7 +489,7 @@ func TestClientResponsesStreamHooks(t *testing.T) {
 	var afterCalled int
 
 	client, err := New(provider, WithHook(HookFuncs{
-		BeforeRequestFunc: func(ctx context.Context, meta CallMeta) {
+		BeforeRequestFunc: func(ctx context.Context, meta CallMeta, req *Request) {
 			beforeCalled++
 			beforeMeta = meta
 		},

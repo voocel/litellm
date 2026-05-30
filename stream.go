@@ -2,9 +2,12 @@ package litellm
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/voocel/litellm/providers"
 )
@@ -469,6 +472,7 @@ type hookedStreamReader struct {
 	meta   CallMeta
 	hooks  []Hook
 	stream StreamReader
+	ended  sync.Once
 }
 
 func newHookedStreamReader(ctx context.Context, meta CallMeta, hooks []Hook, stream StreamReader) StreamReader {
@@ -486,6 +490,12 @@ func newHookedStreamReader(ctx context.Context, meta CallMeta, hooks []Hook, str
 func (r *hookedStreamReader) Next() (*StreamChunk, error) {
 	chunk, err := r.stream.Next()
 	if err != nil {
+		// A clean EOF carries no error semantics; anything else aborted the stream.
+		if errors.Is(err, io.EOF) {
+			r.notifyEnd(nil)
+		} else {
+			r.notifyEnd(err)
+		}
 		return nil, err
 	}
 	if chunk != nil {
@@ -503,5 +513,18 @@ func (r *hookedStreamReader) Next() (*StreamChunk, error) {
 }
 
 func (r *hookedStreamReader) Close() error {
+	r.notifyEnd(nil)
 	return r.stream.Close()
+}
+
+// notifyEnd delivers the stream-termination signal to every hook exactly once,
+// regardless of whether the stream ended via error, EOF, or caller Close. This
+// is what lets hooks finalize state (e.g. close an observability span) even when
+// the stream aborts before a final Done chunk.
+func (r *hookedStreamReader) notifyEnd(err error) {
+	r.ended.Do(func() {
+		for _, h := range r.hooks {
+			h.OnStreamEnd(r.ctx, r.meta, err)
+		}
+	})
 }
