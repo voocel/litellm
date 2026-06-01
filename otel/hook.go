@@ -30,6 +30,11 @@ type callState struct {
 type OTelHook struct {
 	tracer         trace.Tracer
 	captureContent bool
+	// attrFn, when set, is invoked once per call in BeforeRequest; the
+	// attributes it returns are added to that call's generation span. It lets
+	// the embedder attach trace-level metadata (session id, user id, …) that
+	// the gen_ai.* conventions don't cover, reading from the call's context.
+	attrFn func(ctx context.Context) []attribute.KeyValue
 
 	mu    sync.Mutex
 	spans map[string]*callState
@@ -45,6 +50,11 @@ func (h *OTelHook) BeforeRequest(ctx context.Context, meta litellm.CallMeta, req
 		attribute.String(attrSystem, meta.Provider),
 		attribute.String(attrRequestModel, meta.Model),
 	)
+	if h.attrFn != nil {
+		if extra := h.attrFn(ctx); len(extra) > 0 {
+			span.SetAttributes(extra...)
+		}
+	}
 	if h.captureContent && req != nil && len(req.Messages) > 0 {
 		if data, err := json.Marshal(req.Messages); err == nil {
 			span.SetAttributes(attribute.String(attrPrompt, string(data)))

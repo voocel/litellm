@@ -212,6 +212,47 @@ func TestStreamEndAfterDoneIsNoop(t *testing.T) {
 	}
 }
 
+// TestWithSpanAttributes verifies the resolver's attributes land on the
+// generation span and that it can read per-call values from the context.
+func TestWithSpanAttributes(t *testing.T) {
+	type ctxKey struct{}
+	resolver := func(ctx context.Context) []attribute.KeyValue {
+		sid, _ := ctx.Value(ctxKey{}).(string)
+		if sid == "" {
+			return nil
+		}
+		return []attribute.KeyValue{attribute.String("langfuse.session.id", sid)}
+	}
+	h, rec := newTestHook(t, WithSpanAttributes(resolver))
+	ctx := context.WithValue(context.Background(), ctxKey{}, "sess-42")
+	meta := litellm.CallMeta{CallID: "c1", Provider: "openai", Model: "gpt-4", Operation: "chat"}
+
+	h.BeforeRequest(ctx, meta, nil)
+	h.AfterResponse(ctx, meta, &litellm.Response{Content: "ok"}, nil)
+
+	a := attrMap(rec.Ended()[0].Attributes())
+	if got := a["langfuse.session.id"].AsString(); got != "sess-42" {
+		t.Fatalf("langfuse.session.id = %q, want sess-42", got)
+	}
+}
+
+// TestWithSpanAttributesNilResolverResult ensures a resolver returning nil adds
+// nothing and does not break the span.
+func TestWithSpanAttributesNilResolverResult(t *testing.T) {
+	h, rec := newTestHook(t, WithSpanAttributes(func(context.Context) []attribute.KeyValue { return nil }))
+	meta := litellm.CallMeta{CallID: "c2", Provider: "openai", Model: "gpt-4", Operation: "chat"}
+	h.BeforeRequest(context.Background(), meta, nil)
+	h.AfterResponse(context.Background(), meta, &litellm.Response{Content: "ok"}, nil)
+
+	a := attrMap(rec.Ended()[0].Attributes())
+	if _, ok := a["langfuse.session.id"]; ok {
+		t.Fatal("no session attribute should be set when the resolver returns nil")
+	}
+	if got := a[attrRequestModel].AsString(); got != "gpt-4" {
+		t.Fatalf("base attributes must still be present, model = %q", got)
+	}
+}
+
 // TestUnknownCallID ensures callbacks for an unstarted call are no-ops, never panics.
 func TestUnknownCallID(t *testing.T) {
 	h, rec := newTestHook(t)
