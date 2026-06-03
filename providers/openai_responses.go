@@ -847,6 +847,17 @@ func (p *OpenAIProvider) streamWithResponsesAPI(ctx context.Context, req *OpenAI
 	}, nil
 }
 
+// indexFromOutput maps a Responses API output_index onto the flat tool-call
+// Index the stream accumulator keys by. Responses tool-call events carry their
+// slot in output_index (not index), so without this every parallel function
+// call defaults to index 0 and the accumulator merges them.
+func indexFromOutput(outputIndex *int) int {
+	if outputIndex != nil {
+		return *outputIndex
+	}
+	return 0
+}
+
 // ==================== Responses API Stream Reader ====================
 
 // responsesAPIStreamReader implements streaming for OpenAI /responses endpoint
@@ -1058,6 +1069,7 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 			}
 			streamChunk.Type = "tool_call_delta"
 			streamChunk.ToolCallDelta = &ToolCallDelta{
+				Index:          indexFromOutput(delta.OutputIndex),
 				ID:             delta.ItemID,
 				Type:           "function",
 				ArgumentsDelta: delta.Delta,
@@ -1087,6 +1099,7 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 			}
 			seenDelta := done.ItemID != "" && r.toolCallSeenMap[done.ItemID]
 			streamChunk.ToolCallDelta = &ToolCallDelta{
+				Index:        indexFromOutput(done.OutputIndex),
 				ID:           done.ItemID,
 				Type:         "function",
 				FunctionName: done.Name,
@@ -1138,6 +1151,7 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 			if item.Item.Type == "function_call" {
 				streamChunk.Type = "tool_call_delta"
 				streamChunk.ToolCallDelta = &ToolCallDelta{
+					Index:        indexFromOutput(item.OutputIndex),
 					ID:           item.Item.ID,
 					Type:         "function",
 					FunctionName: item.Item.Name,
