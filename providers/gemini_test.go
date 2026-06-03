@@ -1,6 +1,9 @@
 package providers
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // decodeGeminiToolResponse must accept non-JSON content (e.g. the synthetic
 // plain-text orphan compensation from PrepareMessages) without erroring, and
@@ -130,6 +133,96 @@ func TestGeminiStreamReaderReusesIndexForSameFunctionCallID(t *testing.T) {
 	if first.ToolCallDelta.Index != second.ToolCallDelta.Index {
 		t.Fatalf("same function call id must reuse stream index: first=%d second=%d", first.ToolCallDelta.Index, second.ToolCallDelta.Index)
 	}
+}
+
+func TestGeminiStreamReaderErrorsOnPromptFeedbackWithoutCandidates(t *testing.T) {
+	r := &geminiStreamReader{provider: "gemini", model: "gemini-test"}
+
+	_, err := r.processResponse(geminiStreamResponse{
+		PromptFeedback: &geminiPromptFeedback{
+			BlockReason: "SAFETY",
+			SafetyRatings: []geminiSafetyRating{{
+				Category:    "HARM_CATEGORY_DANGEROUS_CONTENT",
+				Probability: "HIGH",
+				Blocked:     true,
+			}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected promptFeedback error")
+	}
+	if !strings.Contains(err.Error(), "prompt blocked: SAFETY") || !strings.Contains(err.Error(), "HARM_CATEGORY_DANGEROUS_CONTENT=HIGH,blocked") {
+		t.Fatalf("error did not expose promptFeedback details: %v", err)
+	}
+}
+
+func TestGeminiStreamReaderErrorsOnBlockingFinishWithoutContent(t *testing.T) {
+	r := &geminiStreamReader{provider: "gemini", model: "gemini-test"}
+
+	_, err := r.processResponse(geminiStreamResponse{
+		Candidates: []geminiCandidate{{
+			FinishReason:  "SAFETY",
+			FinishMessage: "candidate blocked",
+			SafetyRatings: []geminiSafetyRating{{
+				Category:    "HARM_CATEGORY_HATE_SPEECH",
+				Probability: "MEDIUM",
+			}},
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected blocking finish error")
+	}
+	if !strings.Contains(err.Error(), "finish_reason=SAFETY") || !strings.Contains(err.Error(), "candidate blocked") {
+		t.Fatalf("error did not expose finish details: %v", err)
+	}
+}
+
+func TestGeminiStreamReaderEmitsAllPartsFromSingleResponse(t *testing.T) {
+	r := &geminiStreamReader{
+		provider:         "gemini",
+		model:            "gemini-test",
+		includeReasoning: true,
+		toolCallIndexes:  make(map[string]int),
+	}
+
+	first, err := r.processResponse(geminiStreamResponse{
+		Candidates: []geminiCandidate{{
+			Content: geminiContent{
+				Parts: []geminiPart{
+					{Text: "thought", Thought: boolPtr(true)},
+					{Text: "answer"},
+				},
+			},
+			FinishReason: "STOP",
+		}},
+		UsageMetadata: &geminiUsageMetadata{PromptTokenCount: 1, CandidatesTokenCount: 1, TotalTokenCount: 2},
+	})
+	if err != nil {
+		t.Fatalf("processResponse failed: %v", err)
+	}
+	if first == nil || first.Type != "reasoning" || first.ReasoningContent != "thought" {
+		t.Fatalf("first chunk = %+v, want reasoning thought", first)
+	}
+
+	second, err := r.Next()
+	if err != nil {
+		t.Fatalf("Next second failed: %v", err)
+	}
+	if second.Type != "content" || second.Content != "answer" {
+		t.Fatalf("second chunk = %+v, want content answer", second)
+	}
+
+	third, err := r.Next()
+	if err != nil {
+		t.Fatalf("Next third failed: %v", err)
+	}
+	if !third.Done || third.FinishReason != FinishReasonStop || third.Usage == nil {
+		t.Fatalf("third chunk = %+v, want done stop with usage", third)
+	}
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 func TestGeminiUsesThinkingLevel(t *testing.T) {

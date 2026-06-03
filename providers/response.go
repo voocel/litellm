@@ -126,9 +126,12 @@ func NormalizeFinishReason(raw string) string {
 		return FinishReasonLength
 	case "tool_calls", "tool_use", "FUNCTION_CALLING":
 		return FinishReasonToolCall
-	case "content_filter", "SAFETY", "RECITATION", "sensitive":
+	case "content_filter", "SAFETY", "RECITATION", "sensitive", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII",
+		"LANGUAGE", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "IMAGE_RECITATION":
 		return FinishReasonSafety
-	case "failed", "error", "cancelled", "canceled", "insufficient_system_resource", "network_error":
+	case "failed", "error", "cancelled", "canceled", "insufficient_system_resource", "network_error",
+		"MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL", "TOO_MANY_TOOL_CALLS",
+		"OTHER", "IMAGE_OTHER", "NO_IMAGE", "MISSING_THOUGHT_SIGNATURE":
 		return FinishReasonError
 	case "completed":
 		return FinishReasonStop

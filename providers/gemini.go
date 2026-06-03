@@ -685,6 +685,7 @@ type geminiStreamReader struct {
 	includeReasoning bool
 	done             bool
 	pending          string
+	chunkQueue       []StreamChunk
 	queue            []geminiStreamResponse
 	usage            *Usage // Accumulate usage from streaming response
 	toolCallIndex    int    // next index for unseen tool calls
@@ -692,6 +693,11 @@ type geminiStreamReader struct {
 }
 
 func (r *geminiStreamReader) Next() (*StreamChunk, error) {
+	if len(r.chunkQueue) > 0 {
+		next := r.chunkQueue[0]
+		r.chunkQueue = r.chunkQueue[1:]
+		return &next, nil
+	}
 	if r.done {
 		return &StreamChunk{Done: true, Provider: r.provider, Model: r.model, Usage: r.usage}, nil
 	}
@@ -777,10 +783,7 @@ func (r *geminiStreamReader) processResponse(streamResp geminiStreamResponse) (*
 
 	if len(streamResp.Candidates) > 0 {
 		candidate := streamResp.Candidates[0]
-		streamChunk := &StreamChunk{
-			Provider: r.provider,
-			Model:    r.model,
-		}
+		chunks := make([]StreamChunk, 0, len(candidate.Content.Parts)+1)
 
 		// Extract text content and thinking content
 		for _, part := range candidate.Content.Parts {
@@ -789,19 +792,24 @@ func (r *geminiStreamReader) processResponse(streamResp geminiStreamResponse) (*
 				if !r.includeReasoning {
 					continue
 				}
-				streamChunk.Type = "reasoning"
-				streamChunk.ReasoningContent = part.Text
-				return streamChunk, nil
+				chunks = append(chunks, StreamChunk{
+					Type:             "reasoning",
+					Provider:         r.provider,
+					Model:            r.model,
+					ReasoningContent: part.Text,
+				})
 			} else if part.Text != "" {
 				// Regular content
-				streamChunk.Type = "content"
-				streamChunk.Content = part.Text
-				return streamChunk, nil
+				chunks = append(chunks, StreamChunk{
+					Type:     "content",
+					Provider: r.provider,
+					Model:    r.model,
+					Content:  part.Text,
+				})
 			}
 
 			// Handle tool calls
 			if part.FunctionCall != nil {
-				streamChunk.Type = "tool_call_delta"
 				args, _ := json.Marshal(part.FunctionCall.Args)
 				id := part.FunctionCall.ID
 				index := r.toolCallIndex
@@ -816,29 +824,115 @@ func (r *geminiStreamReader) processResponse(streamResp geminiStreamResponse) (*
 					id = fmt.Sprintf("call_%d", time.Now().UnixNano())
 					r.toolCallIndex++
 				}
-				streamChunk.ToolCallDelta = &ToolCallDelta{
-					Index:          index,
-					ID:             id,
-					Type:           "function",
-					FunctionName:   part.FunctionCall.Name,
-					ArgumentsDelta: string(args),
-				}
-				return streamChunk, nil
+				chunks = append(chunks, StreamChunk{
+					Type:     "tool_call_delta",
+					Provider: r.provider,
+					Model:    r.model,
+					ToolCallDelta: &ToolCallDelta{
+						Index:          index,
+						ID:             id,
+						Type:           "function",
+						FunctionName:   part.FunctionCall.Name,
+						ArgumentsDelta: string(args),
+					},
+				})
 			}
 		}
 
 		if candidate.FinishReason != "" {
-			streamChunk.FinishReason = NormalizeFinishReason(candidate.FinishReason)
-			streamChunk.Done = true
-			streamChunk.Usage = r.usage
+			if len(chunks) == 0 && isGeminiEmptyOutputErrorFinishReason(candidate.FinishReason) {
+				return nil, r.candidateFinishError(candidate)
+			}
+			chunks = append(chunks, StreamChunk{
+				Provider:     r.provider,
+				Model:        r.model,
+				Done:         true,
+				FinishReason: NormalizeFinishReason(candidate.FinishReason),
+				Usage:        r.usage,
+			})
 			r.done = true
-			return streamChunk, nil
+		}
+
+		if len(chunks) > 0 {
+			return r.emitChunks(chunks), nil
 		}
 
 		return nil, nil // no emittable content, let caller continue
 	}
 
+	if streamResp.PromptFeedback != nil {
+		return nil, r.promptFeedbackError(streamResp.PromptFeedback)
+	}
+
 	return nil, nil // no candidates, let caller continue
+}
+
+func (r *geminiStreamReader) emitChunks(chunks []StreamChunk) *StreamChunk {
+	if len(chunks) == 0 {
+		return nil
+	}
+	r.chunkQueue = append(r.chunkQueue, chunks[1:]...)
+	return &chunks[0]
+}
+
+func (r *geminiStreamReader) promptFeedbackError(feedback *geminiPromptFeedback) error {
+	if feedback == nil {
+		return nil
+	}
+	message := "stream ended without candidates"
+	if feedback.BlockReason != "" {
+		message += ": prompt blocked: " + feedback.BlockReason
+	}
+	if ratings := formatGeminiSafetyRatings(feedback.SafetyRatings); ratings != "" {
+		message += " (" + ratings + ")"
+	}
+	return NewProviderError(r.provider, ErrorTypeProvider, "gemini: "+message)
+}
+
+func (r *geminiStreamReader) candidateFinishError(candidate geminiCandidate) error {
+	message := "stream finished before content"
+	if candidate.FinishReason != "" {
+		message += ": finish_reason=" + candidate.FinishReason
+	}
+	if candidate.FinishMessage != "" {
+		message += ": " + candidate.FinishMessage
+	}
+	if ratings := formatGeminiSafetyRatings(candidate.SafetyRatings); ratings != "" {
+		message += " (" + ratings + ")"
+	}
+	return NewProviderError(r.provider, ErrorTypeProvider, "gemini: "+message)
+}
+
+func isGeminiEmptyOutputErrorFinishReason(reason string) bool {
+	reason = strings.ToUpper(strings.TrimSpace(reason))
+	return reason != "" && reason != "STOP"
+}
+
+func formatGeminiSafetyRatings(ratings []geminiSafetyRating) string {
+	if len(ratings) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(ratings))
+	for _, rating := range ratings {
+		if rating.Category == "" && rating.Probability == "" && !rating.Blocked {
+			continue
+		}
+		item := rating.Category
+		if rating.Probability != "" {
+			if item != "" {
+				item += "="
+			}
+			item += rating.Probability
+		}
+		if rating.Blocked {
+			if item != "" {
+				item += ","
+			}
+			item += "blocked"
+		}
+		parts = append(parts, item)
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (r *geminiStreamReader) Close() error {
@@ -975,9 +1069,11 @@ type geminiModelInfo struct {
 }
 
 type geminiCandidate struct {
-	Content      geminiContent `json:"content"`
-	FinishReason string        `json:"finishReason,omitempty"`
-	Index        int           `json:"index,omitempty"`
+	Content       geminiContent        `json:"content"`
+	FinishReason  string               `json:"finishReason,omitempty"`
+	FinishMessage string               `json:"finishMessage,omitempty"`
+	Index         int                  `json:"index,omitempty"`
+	SafetyRatings []geminiSafetyRating `json:"safetyRatings,omitempty"`
 }
 
 type geminiUsageMetadata struct {
@@ -988,8 +1084,20 @@ type geminiUsageMetadata struct {
 	CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
 }
 
+type geminiPromptFeedback struct {
+	BlockReason   string               `json:"blockReason,omitempty"`
+	SafetyRatings []geminiSafetyRating `json:"safetyRatings,omitempty"`
+}
+
+type geminiSafetyRating struct {
+	Category    string `json:"category,omitempty"`
+	Probability string `json:"probability,omitempty"`
+	Blocked     bool   `json:"blocked,omitempty"`
+}
+
 // Streaming structures
 type geminiStreamResponse struct {
-	Candidates    []geminiCandidate    `json:"candidates,omitempty"`
-	UsageMetadata *geminiUsageMetadata `json:"usageMetadata,omitempty"`
+	Candidates     []geminiCandidate     `json:"candidates,omitempty"`
+	UsageMetadata  *geminiUsageMetadata  `json:"usageMetadata,omitempty"`
+	PromptFeedback *geminiPromptFeedback `json:"promptFeedback,omitempty"`
 }
