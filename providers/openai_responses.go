@@ -1114,6 +1114,12 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 					Type   string `json:"type"`
 					Role   string `json:"role,omitempty"`
 					Status string `json:"status,omitempty"`
+					// function_call items carry the tool NAME here. The
+					// Responses API sends the name only at call start (the
+					// argument-delta events carry args but no name), so it must
+					// be surfaced now or it is lost.
+					Name   string `json:"name,omitempty"`
+					CallID string `json:"call_id,omitempty"`
 				} `json:"item"`
 				OutputIndex    *int `json:"output_index,omitempty"`
 				SequenceNumber int  `json:"sequence_number,omitempty"`
@@ -1123,6 +1129,24 @@ func (r *responsesAPIStreamReader) Next() (*StreamChunk, error) {
 			}
 			if !r.shouldEmit(&item.SequenceNumber) {
 				continue
+			}
+			// A function_call item opens a tool call. Emit a tool_call_delta
+			// carrying the name at call start, mirroring the chat-completions
+			// stream (whose first tool_call delta carries the name). Without
+			// this the assembled tool call has full args but an empty name,
+			// because the name never reaches a delta the host accumulates.
+			if item.Item.Type == "function_call" {
+				streamChunk.Type = "tool_call_delta"
+				streamChunk.ToolCallDelta = &ToolCallDelta{
+					ID:           item.Item.ID,
+					Type:         "function",
+					FunctionName: item.Item.Name,
+					OutputIndex:  item.OutputIndex,
+					ItemID:       item.Item.ID,
+				}
+				streamChunk.ItemID = item.Item.ID
+				streamChunk.OutputIndex = item.OutputIndex
+				return streamChunk, nil
 			}
 			streamChunk.Type = "output_item_added"
 			streamChunk.ItemID = item.Item.ID
