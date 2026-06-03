@@ -56,6 +56,9 @@ type ToolCall struct {
 	ID       string       `json:"id"`
 	Type     string       `json:"type"`
 	Function FunctionCall `json:"function"`
+	// ThoughtSignature carries Gemini 3's opaque reasoning signature, passed
+	// through verbatim across turns. Empty for providers that don't emit one.
+	ThoughtSignature string `json:"thought_signature,omitempty"`
 }
 
 type FunctionCall struct {

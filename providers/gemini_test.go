@@ -246,6 +246,58 @@ func TestGeminiUsesThinkingLevel(t *testing.T) {
 	}
 }
 
+// Gemini 3 rejects function-call history whose first functionCall part lacks a
+// thoughtSignature. buildContents must stamp the skip-validation placeholder on
+// the first call of each assistant step for Gemini 3+, leave parallel calls
+// unsigned, and add nothing for Gemini 2.5 (which has no such requirement).
+func TestGeminiThoughtSignatureForFunctionCalls(t *testing.T) {
+	p := &GeminiProvider{}
+	twoCalls := []Message{{
+		Role: "assistant",
+		ToolCalls: []ToolCall{
+			{ID: "c1", Type: "function", Function: FunctionCall{Name: "a", Arguments: `{}`}},
+			{ID: "c2", Type: "function", Function: FunctionCall{Name: "b", Arguments: `{}`}},
+		},
+	}}
+	t.Run("gemini 3 stamps first call only", func(t *testing.T) {
+		contents, _, err := p.buildContents(&Request{Model: "gemini-3.5-flash", Messages: twoCalls})
+		if err != nil {
+			t.Fatalf("buildContents: %v", err)
+		}
+		parts := contents[0].Parts
+		if parts[0].ThoughtSignature != thoughtSignaturePlaceholder {
+			t.Errorf("first call ThoughtSignature = %q, want placeholder", parts[0].ThoughtSignature)
+		}
+		if parts[1].ThoughtSignature != "" {
+			t.Errorf("parallel call must stay unsigned, got %q", parts[1].ThoughtSignature)
+		}
+	})
+	t.Run("gemini 2.5 stamps nothing", func(t *testing.T) {
+		contents, _, err := p.buildContents(&Request{Model: "gemini-2.5-flash", Messages: twoCalls})
+		if err != nil {
+			t.Fatalf("buildContents: %v", err)
+		}
+		if sig := contents[0].Parts[0].ThoughtSignature; sig != "" {
+			t.Errorf("2.5 must not stamp a signature, got %q", sig)
+		}
+	})
+	t.Run("real signature replayed verbatim over placeholder", func(t *testing.T) {
+		withSig := []Message{{
+			Role: "assistant",
+			ToolCalls: []ToolCall{
+				{ID: "c1", Type: "function", Function: FunctionCall{Name: "a", Arguments: `{}`}, ThoughtSignature: "REAL_SIG"},
+			},
+		}}
+		contents, _, err := p.buildContents(&Request{Model: "gemini-3.5-flash", Messages: withSig})
+		if err != nil {
+			t.Fatalf("buildContents: %v", err)
+		}
+		if got := contents[0].Parts[0].ThoughtSignature; got != "REAL_SIG" {
+			t.Errorf("real signature must win over placeholder, got %q", got)
+		}
+	})
+}
+
 // Gemini 2.5 only accepts thinkingBudget; sending thinkingLevel to it returns
 // HTTP 400 "Thinking level is not supported for this model." Gemini 3+ uses
 // thinkingLevel. buildGenerationConfig must route by generation and emit only

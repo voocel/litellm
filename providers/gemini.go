@@ -181,6 +181,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *Request) (*Response, err
 						Name:      part.FunctionCall.Name,
 						Arguments: string(args),
 					},
+					ThoughtSignature: part.ThoughtSignature,
 				})
 			}
 		}
@@ -393,21 +394,33 @@ func (p *GeminiProvider) buildContents(req *Request) ([]geminiContent, string, e
 			content.Parts = append(content.Parts, geminiPart{Text: msg.Content})
 		}
 
-		// Assistant tool_calls → functionCall parts (id echoed, name required)
+		// Assistant tool_calls → functionCall parts (id echoed, name required).
+		// Gemini 3 rejects function-call history whose first part lacks a
+		// thoughtSignature, so replay the captured signature verbatim and fall back
+		// to the skip placeholder when none is available (cross-model history,
+		// resumed sessions, 2.5-origin calls). See switch below.
+		// https://ai.google.dev/gemini-api/docs/thought-signatures
 		if len(msg.ToolCalls) > 0 {
-			for _, toolCall := range msg.ToolCalls {
+			for i, toolCall := range msg.ToolCalls {
 				var args map[string]any
 				if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
 					return nil, "", fmt.Errorf("gemini: invalid tool call arguments for '%s': %w", toolCall.Function.Name, err)
 				}
 				callNames[toolCall.ID] = toolCall.Function.Name
-				content.Parts = append(content.Parts, geminiPart{
+				part := geminiPart{
 					FunctionCall: &geminiFunctionCall{
 						ID:   toolCall.ID,
 						Name: toolCall.Function.Name,
 						Args: args,
 					},
-				})
+				}
+				switch {
+				case toolCall.ThoughtSignature != "":
+					part.ThoughtSignature = toolCall.ThoughtSignature
+				case i == 0 && geminiUsesThinkingLevel(req.Model):
+					part.ThoughtSignature = thoughtSignaturePlaceholder
+				}
+				content.Parts = append(content.Parts, part)
 			}
 		}
 
@@ -525,6 +538,11 @@ func (p *GeminiProvider) buildGenerationConfig(req *Request) (*geminiGenerationC
 	}
 	return cfg, nil
 }
+
+// thoughtSignaturePlaceholder is Google's documented value that bypasses
+// thought-signature validation for injected function calls whose real signature
+// is unavailable. https://ai.google.dev/gemini-api/docs/thought-signatures
+const thoughtSignaturePlaceholder = "skip_thought_signature_validator"
 
 // geminiUsesThinkingLevel reports whether the model is Gemini 3 or newer, which
 // control reasoning via thinkingLevel. Gemini 2.5 and earlier only accept
@@ -829,11 +847,12 @@ func (r *geminiStreamReader) processResponse(streamResp geminiStreamResponse) (*
 					Provider: r.provider,
 					Model:    r.model,
 					ToolCallDelta: &ToolCallDelta{
-						Index:          index,
-						ID:             id,
-						Type:           "function",
-						FunctionName:   part.FunctionCall.Name,
-						ArgumentsDelta: string(args),
+						Index:            index,
+						ID:               id,
+						Type:             "function",
+						FunctionName:     part.FunctionCall.Name,
+						ArgumentsDelta:   string(args),
+						ThoughtSignature: part.ThoughtSignature,
 					},
 				})
 			}
@@ -971,6 +990,7 @@ type geminiContent struct {
 type geminiPart struct {
 	Text             string                  `json:"text,omitempty"`
 	Thought          *bool                   `json:"thought,omitempty"`
+	ThoughtSignature string                  `json:"thoughtSignature,omitempty"`
 	InlineData       *geminiInlineData       `json:"inlineData,omitempty"`
 	FileData         *geminiFileData         `json:"fileData,omitempty"`
 	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`

@@ -66,6 +66,9 @@ func (a *ToolCallAccumulator) Apply(delta *ToolCallDelta) {
 	if delta.ArgumentsDelta != "" {
 		tc.Function.Arguments += delta.ArgumentsDelta
 	}
+	if delta.ThoughtSignature != "" {
+		tc.ThoughtSignature = delta.ThoughtSignature
+	}
 }
 
 // Build returns the completed ToolCall list in first-seen order.

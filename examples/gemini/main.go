@@ -90,11 +90,11 @@ func basicChat(client *litellm.Client) {
 // Example 2: Streaming Chat
 func streamingChat(client *litellm.Client) {
 	request := &litellm.Request{
-		Model: "gemini-2.5-flash",
+		Model: "gemini-3.5-flash",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
-				Content: "你是谁",
+				Content: "Who are you?",
 			},
 		},
 		MaxTokens:   litellm.IntPtr(2000),

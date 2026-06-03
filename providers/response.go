@@ -76,13 +76,14 @@ type StreamChunk struct {
 }
 
 type ToolCallDelta struct {
-	Index          int    `json:"index"`
-	ID             string `json:"id,omitempty"`
-	Type           string `json:"type,omitempty"`
-	FunctionName   string `json:"function_name,omitempty"`
-	ArgumentsDelta string `json:"arguments_delta,omitempty"`
-	OutputIndex    *int   `json:"output_index,omitempty"`
-	ItemID         string `json:"item_id,omitempty"`
+	Index            int    `json:"index"`
+	ID               string `json:"id,omitempty"`
+	Type             string `json:"type,omitempty"`
+	FunctionName     string `json:"function_name,omitempty"`
+	ArgumentsDelta   string `json:"arguments_delta,omitempty"`
+	ThoughtSignature string `json:"thought_signature,omitempty"`
+	OutputIndex      *int   `json:"output_index,omitempty"`
+	ItemID           string `json:"item_id,omitempty"`
 }
 
 // ModelInfo provides a minimal, provider-agnostic model descriptor.
