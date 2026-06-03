@@ -508,16 +508,36 @@ func (p *GeminiProvider) buildGenerationConfig(req *Request) (*geminiGenerationC
 	}
 	if thinking != nil {
 		includeThoughts := !isThinkingDisabledConfig(thinking)
-		cfg.ThinkingConfig = &geminiThinkingConfig{
-			ThinkingLevel:   thinking.Level,
-			IncludeThoughts: &includeThoughts,
-			ThinkingBudget:  thinking.BudgetTokens,
+		tc := &geminiThinkingConfig{IncludeThoughts: &includeThoughts}
+		// Send exactly one field, chosen by model generation.
+		switch {
+		case !geminiUsesThinkingLevel(req.Model):
+			tc.ThinkingBudget = ResolveBudgetTokens(thinking)
+		case thinking.Level != "":
+			tc.ThinkingLevel = thinking.Level
+		default:
+			tc.ThinkingBudget = thinking.BudgetTokens
 		}
+		cfg.ThinkingConfig = tc
 	}
 	if err := p.applyResponseFormat(cfg, req.ResponseFormat); err != nil {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// geminiUsesThinkingLevel reports whether the model is Gemini 3 or newer, which
+// control reasoning via thinkingLevel. Gemini 2.5 and earlier only accept
+// thinkingBudget and reject thinkingLevel with HTTP 400. Unrecognized names
+// return false so the safer budget path is used.
+func geminiUsesThinkingLevel(model string) bool {
+	_, after, ok := strings.Cut(strings.ToLower(model), "gemini-")
+	if !ok {
+		return false
+	}
+	var major int
+	fmt.Sscanf(after, "%d", &major)
+	return major >= 3
 }
 
 func (p *GeminiProvider) applyResponseFormat(cfg *geminiGenerationConfig, format *ResponseFormat) error {

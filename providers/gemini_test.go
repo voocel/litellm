@@ -131,3 +131,71 @@ func TestGeminiStreamReaderReusesIndexForSameFunctionCallID(t *testing.T) {
 		t.Fatalf("same function call id must reuse stream index: first=%d second=%d", first.ToolCallDelta.Index, second.ToolCallDelta.Index)
 	}
 }
+
+func TestGeminiUsesThinkingLevel(t *testing.T) {
+	cases := []struct {
+		model string
+		want  bool
+	}{
+		{"gemini-2.5-flash", false},
+		{"gemini-2.5-pro", false},
+		{"gemini-3-pro", true},
+		{"gemini-3.5-flash", true},
+		{"models/gemini-3-flash", true},
+		{"google/gemini-2.0-flash", false},
+		{"gpt-4o", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := geminiUsesThinkingLevel(tc.model); got != tc.want {
+			t.Errorf("geminiUsesThinkingLevel(%q) = %v, want %v", tc.model, got, tc.want)
+		}
+	}
+}
+
+// Gemini 2.5 only accepts thinkingBudget; sending thinkingLevel to it returns
+// HTTP 400 "Thinking level is not supported for this model." Gemini 3+ uses
+// thinkingLevel. buildGenerationConfig must route by generation and emit only
+// the field that generation supports.
+func TestGeminiThinkingConfigByGeneration(t *testing.T) {
+	p := &GeminiProvider{}
+	budget := func(n int) *int { return &n }
+	cases := []struct {
+		name       string
+		model      string
+		thinking   *ThinkingConfig
+		wantLevel  string
+		wantBudget int // -1 means nil
+	}{
+		{"2.5 level → budget", "gemini-2.5-flash", &ThinkingConfig{Type: "enabled", Level: "low"}, "", 2048},
+		{"2.5 explicit budget passthrough", "models/gemini-2.5-pro", &ThinkingConfig{Type: "enabled", BudgetTokens: budget(4096)}, "", 4096},
+		{"3 keeps level", "gemini-3-pro", &ThinkingConfig{Type: "enabled", Level: "high"}, "high", -1},
+		{"3 with only budget falls back", "gemini-3-flash", &ThinkingConfig{Type: "enabled", BudgetTokens: budget(1024)}, "", 1024},
+		{"unknown model → budget", "custom-proxy", &ThinkingConfig{Type: "enabled", Level: "medium"}, "", 8192},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := p.buildGenerationConfig(&Request{Model: tc.model, Thinking: tc.thinking})
+			if err != nil {
+				t.Fatalf("buildGenerationConfig: %v", err)
+			}
+			if cfg == nil || cfg.ThinkingConfig == nil {
+				t.Fatalf("expected ThinkingConfig, got %+v", cfg)
+			}
+			got := cfg.ThinkingConfig
+			if got.ThinkingLevel != "" && got.ThinkingBudget != nil {
+				t.Fatalf("level and budget both set: level=%q budget=%d", got.ThinkingLevel, *got.ThinkingBudget)
+			}
+			if got.ThinkingLevel != tc.wantLevel {
+				t.Errorf("ThinkingLevel = %q, want %q", got.ThinkingLevel, tc.wantLevel)
+			}
+			gotBudget := -1
+			if got.ThinkingBudget != nil {
+				gotBudget = *got.ThinkingBudget
+			}
+			if gotBudget != tc.wantBudget {
+				t.Errorf("ThinkingBudget = %d, want %d", gotBudget, tc.wantBudget)
+			}
+		})
+	}
+}
