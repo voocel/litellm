@@ -21,6 +21,7 @@ type compatStreamReader struct {
 	model            string
 	usage            *Usage
 	pendingChunks    []*StreamChunk
+	lastReasoning    string
 }
 
 func newCompatStreamReader(resp *http.Response, req *Request, compat *Compat) *compatStreamReader {
@@ -117,12 +118,21 @@ func (r *compatStreamReader) Next() (*StreamChunk, error) {
 				// Reasoning — probe multiple field names
 				if r.includeReasoning && r.compat.shouldExtractReasoning(r.model) {
 					if reasoning, _ := r.compat.findReasoning(delta); reasoning != "" {
-						pending = append(pending, &StreamChunk{
-							Provider:         r.compat.ProviderName,
-							Model:            r.model,
-							Type:             "reasoning",
-							ReasoningContent: reasoning,
-						})
+						if r.compat.ReasoningCumulative {
+							next, err := r.reasoningDelta(reasoning)
+							if err != nil {
+								return nil, err
+							}
+							reasoning = next
+						}
+						if reasoning != "" {
+							pending = append(pending, &StreamChunk{
+								Provider:         r.compat.ProviderName,
+								Model:            r.model,
+								Type:             "reasoning",
+								ReasoningContent: reasoning,
+							})
+						}
 					}
 				}
 
@@ -171,6 +181,19 @@ func (r *compatStreamReader) Close() error {
 	return r.resp.Body.Close()
 }
 
+func (r *compatStreamReader) reasoningDelta(current string) (string, error) {
+	previous := r.lastReasoning
+	if previous == "" {
+		r.lastReasoning = current
+		return current, nil
+	}
+	if !strings.HasPrefix(current, previous) {
+		return "", fmt.Errorf("%s: cumulative reasoning stream changed unexpectedly", r.compat.ProviderName)
+	}
+	r.lastReasoning = current
+	return strings.TrimPrefix(current, previous), nil
+}
+
 // parseToolCallDelta extracts a ToolCallDelta from a raw tool_calls array element.
 func (r *compatStreamReader) parseToolCallDelta(raw any, choiceIndex int) *ToolCallDelta {
 	m, ok := raw.(map[string]any)
@@ -202,10 +225,10 @@ func (r *compatStreamReader) parseToolCallDelta(raw any, choiceIndex int) *ToolC
 // ---------------------------------------------------------------------------
 
 type compatStreamChunk struct {
-	ID      string                `json:"id"`
-	Model   string                `json:"model"`
-	Choices []compatStreamChoice  `json:"choices"`
-	Usage   json.RawMessage       `json:"usage,omitempty"`
+	ID      string               `json:"id"`
+	Model   string               `json:"model"`
+	Choices []compatStreamChoice `json:"choices"`
+	Usage   json.RawMessage      `json:"usage,omitempty"`
 }
 
 type compatStreamChoice struct {

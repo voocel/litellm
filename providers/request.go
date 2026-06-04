@@ -16,6 +16,7 @@ type Message struct {
 	Role             string           `json:"role"`
 	Content          string           `json:"content"`
 	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ReasoningDetails []map[string]any `json:"reasoning_details,omitempty"`
 	Contents         []MessageContent `json:"contents,omitempty"`
 	ToolCalls        []ToolCall       `json:"tool_calls,omitempty"`
 	ToolCallID       string           `json:"tool_call_id,omitempty"`

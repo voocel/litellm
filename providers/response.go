@@ -53,6 +53,7 @@ type Response struct {
 	Provider         string           `json:"provider"`
 	FinishReason     string           `json:"finish_reason,omitempty"`
 	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ReasoningDetails []map[string]any `json:"reasoning_details,omitempty"`
 
 	// Extra captures provider-specific response fields not covered by the
 	// standard schema (e.g. logprobs, annotations, system_fingerprint).

@@ -18,6 +18,7 @@ func main() {
 
 	client, err := litellm.NewWithProvider("minimax", litellm.ProviderConfig{
 		APIKey: apiKey,
+		// China-region users can set BaseURL: "https://api.minimaxi.com/v1".
 	})
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)

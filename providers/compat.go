@@ -97,6 +97,11 @@ type Compat struct {
 	//   "model_contains:<substring>"   — only when model name contains substring
 	ReasoningCondition string
 
+	// ReasoningCumulative marks streaming reasoning fields that contain the
+	// complete accumulated reasoning text on each chunk rather than a delta.
+	// The stream reader emits only the newly added suffix.
+	ReasoningCumulative bool
+
 	// ContentAsInterface parses Message.Content as interface{} (string or array)
 	// instead of plain string.  Used by OpenRouter.
 	ContentAsInterface bool
@@ -133,7 +138,7 @@ type Compat struct {
 }
 
 // defaultReasoningFields lists all known reasoning field names in probe order.
-var defaultReasoningFields = []string{"reasoning_summary", "reasoning_content", "reasoning", "reasoning_text"}
+var defaultReasoningFields = []string{"reasoning_summary", "reasoning_details", "reasoning_content", "reasoning", "reasoning_text"}
 
 // reasoningFields returns the ordered list of fields to probe for reasoning content.
 // If ReasoningField is configured, it gets highest priority; remaining defaults follow.
@@ -171,8 +176,44 @@ func findReasoningIn(m map[string]any, preferred string) (value, field string) {
 				return text, f
 			}
 		}
+		if details, ok := m[f].([]any); ok {
+			if text := reasoningDetailsText(details); text != "" {
+				return text, f
+			}
+		}
 	}
 	return "", ""
+}
+
+func reasoningDetailsText(details []any) string {
+	var parts []string
+	for _, detail := range details {
+		switch v := detail.(type) {
+		case string:
+			if v != "" {
+				parts = append(parts, v)
+			}
+		case map[string]any:
+			if text, ok := v["text"].(string); ok && text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func reasoningDetails(raw any) []map[string]any {
+	details, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]map[string]any, 0, len(details))
+	for _, detail := range details {
+		if m, ok := detail.(map[string]any); ok {
+			result = append(result, m)
+		}
+	}
+	return result
 }
 
 // dataPrefix returns the configured SSE prefix or the default.
@@ -646,6 +687,7 @@ func (p *OpenAICompatProvider) convertResponse(raw *compatResponse, req *Request
 			if reasoning, _ := c.findReasoning(msg); reasoning != "" {
 				resp.ReasoningContent = reasoning
 			}
+			resp.ReasoningDetails = reasoningDetails(msg["reasoning_details"])
 		}
 
 		// Extra — capture non-standard message fields (logprobs, annotations, etc.)

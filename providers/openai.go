@@ -907,6 +907,7 @@ type OpenAICompatMessage struct {
 	ToolCalls        []openaiToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string           `json:"tool_call_id,omitempty"`
 	ReasoningContent string           `json:"reasoning_content,omitempty"` // used by GLM/Qwen
+	ReasoningDetails []map[string]any `json:"reasoning_details,omitempty"`
 }
 
 // ConvertMessagesToOpenAI converts generic Message into native OpenAI format (string content or parts)
@@ -991,6 +992,7 @@ func ConvertMessages(messages []Message) []OpenAICompatMessage {
 			Role:             msg.Role,
 			ToolCallID:       msg.ToolCallID,
 			ReasoningContent: msg.ReasoningContent,
+			ReasoningDetails: msg.ReasoningDetails,
 		}
 
 		// Tool result messages require plain string content per OpenAI spec.
