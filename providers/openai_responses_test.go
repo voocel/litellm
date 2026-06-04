@@ -1,7 +1,9 @@
 package providers
 
 import (
+	"bufio"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -222,5 +224,121 @@ func TestResponsesRejectsConversationWithPreviousResponseID(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected mutual exclusion error")
+	}
+}
+
+// Regression: OpenAI's Responses API (gpt-5*) delivers a function call's NAME
+// only in response.output_item.added; the argument-delta events carry args but
+// no name. The reader must forward that name as a tool_call_delta at call start
+// (mirroring the chat-completions stream), so downstream accumulation captures
+// it. Otherwise the assembled tool call has full args and an empty name, and
+// the host dispatches `tool "" not found` / OpenAI later rejects the history
+// with "function name is required".
+func TestResponsesStreamForwardsFunctionNameAtCallStart(t *testing.T) {
+	sse := strings.Join([]string{
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","status":"in_progress","name":"get_weather","call_id":"call_1","arguments":""},"sequence_number":1}`,
+		``,
+		`event: response.function_call_arguments.delta`,
+		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\"city\":","sequence_number":2}`,
+		``,
+		`event: response.function_call_arguments.delta`,
+		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"\"SF\"}","sequence_number":3}`,
+		``,
+		`event: response.function_call_arguments.done`,
+		`data: {"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":0,"name":"get_weather","arguments":"{\"city\":\"SF\"}","sequence_number":4}`,
+		``,
+		`event: response.completed`,
+		`data: {"type":"response.completed","sequence_number":5,"response":{"id":"resp_1","status":"completed"}}`,
+		``,
+	}, "\n")
+
+	r := &responsesAPIStreamReader{
+		scanner:         bufio.NewScanner(strings.NewReader(sse)),
+		provider:        "openai",
+		model:           "gpt-5.4-mini",
+		toolCallSeenMap: make(map[string]bool),
+	}
+
+	var startName, args string
+	for {
+		c, err := r.Next()
+		if err != nil {
+			t.Fatalf("Next: %v", err)
+		}
+		if c.Done {
+			break
+		}
+		if c.ToolCallDelta != nil {
+			if c.Type == "tool_call_delta" && c.ToolCallDelta.FunctionName != "" && startName == "" {
+				startName = c.ToolCallDelta.FunctionName
+			}
+			args += c.ToolCallDelta.ArgumentsDelta
+		}
+	}
+
+	if startName != "get_weather" {
+		t.Fatalf("expected a tool_call_delta carrying the function name at call start, got %q (the Responses API only sends the name in output_item.added; it must be forwarded so downstream captures it)", startName)
+	}
+	if args != `{"city":"SF"}` {
+		t.Fatalf("arguments = %q, want the accumulated JSON", args)
+	}
+}
+
+// Regression: the stream accumulator keys tool calls by ToolCallDelta.Index.
+// The Responses API carries the slot in output_index, so the reader must map
+// output_index -> Index on every tool-call event; otherwise parallel function
+// calls all default to index 0 and get merged. (voocel/litellm#4 review.)
+func TestResponsesStreamMapsOutputIndexToIndex(t *testing.T) {
+	sse := strings.Join([]string{
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_0","type":"function_call","name":"tool_a","call_id":"call_0","arguments":""},"sequence_number":1}`,
+		``,
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","output_index":1,"item":{"id":"fc_1","type":"function_call","name":"tool_b","call_id":"call_1","arguments":""},"sequence_number":2}`,
+		``,
+		`event: response.function_call_arguments.delta`,
+		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":1,"delta":"{}","sequence_number":3}`,
+		``,
+		`event: response.function_call_arguments.done`,
+		`data: {"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":1,"name":"tool_b","arguments":"{}","sequence_number":4}`,
+		``,
+		`event: response.completed`,
+		`data: {"type":"response.completed","sequence_number":5,"response":{"id":"resp_1","status":"completed"}}`,
+		``,
+	}, "\n")
+
+	r := &responsesAPIStreamReader{
+		scanner:         bufio.NewScanner(strings.NewReader(sse)),
+		provider:        "openai",
+		model:           "gpt-5.4-mini",
+		toolCallSeenMap: make(map[string]bool),
+	}
+
+	// Map each tool call's item id to the Index values its events carried.
+	idxByItem := map[string]int{}
+	for {
+		c, err := r.Next()
+		if err != nil {
+			t.Fatalf("Next: %v", err)
+		}
+		if c.Done {
+			break
+		}
+		d := c.ToolCallDelta
+		if d == nil || d.ItemID == "" {
+			continue
+		}
+		if prev, ok := idxByItem[d.ItemID]; ok && prev != d.Index {
+			t.Fatalf("item %s saw inconsistent Index %d vs %d", d.ItemID, prev, d.Index)
+		}
+		idxByItem[d.ItemID] = d.Index
+	}
+
+	if idxByItem["fc_0"] != 0 {
+		t.Fatalf("fc_0 Index = %d, want 0", idxByItem["fc_0"])
+	}
+	if idxByItem["fc_1"] != 1 {
+		t.Fatalf("fc_1 Index = %d, want 1 (output_index must map to Index so the accumulator keeps parallel calls separate)", idxByItem["fc_1"])
 	}
 }
