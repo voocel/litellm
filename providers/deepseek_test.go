@@ -145,6 +145,64 @@ func TestDeepSeekAnthropicMapsThinkingToOutputEffort(t *testing.T) {
 	}
 }
 
+func TestDeepSeekAnthropicPreservesReasoningContentForToolTurns(t *testing.T) {
+	var payload []byte
+	p := NewDeepSeekAnthropic(ProviderConfig{APIKey: "test"})
+	_, err := p.buildHTTPRequest(context.Background(), &Request{
+		Model: "deepseek-v4-pro",
+		Messages: []Message{
+			{Role: "user", Content: "hi"},
+			{
+				Role:             "assistant",
+				Content:          "need tool",
+				ReasoningContent: "thinking before tool",
+				ToolCalls: []ToolCall{{
+					ID:   "call_1",
+					Type: "function",
+					Function: FunctionCall{
+						Name:      "lookup",
+						Arguments: `{"q":"x"}`,
+					},
+				}},
+			},
+			{Role: "tool", ToolCallID: "call_1", Content: "ok"},
+		},
+		Thinking: &ThinkingConfig{Type: "enabled", Level: "high"},
+		OnPayload: func(provider string, raw []byte) {
+			payload = raw
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildHTTPRequest failed: %v", err)
+	}
+
+	var body struct {
+		Messages []struct {
+			Role    string           `json:"role"`
+			Content []map[string]any `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(payload, &body); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if len(body.Messages) < 2 {
+		t.Fatalf("messages len = %d, want at least 2", len(body.Messages))
+	}
+	assistant := body.Messages[1]
+	if assistant.Role != "assistant" {
+		t.Fatalf("message[1].role = %q, want assistant", assistant.Role)
+	}
+	var foundThinking bool
+	for _, block := range assistant.Content {
+		if block["type"] == "thinking" && block["thinking"] == "thinking before tool" {
+			foundThinking = true
+		}
+	}
+	if !foundThinking {
+		t.Fatalf("assistant content missing thinking block: %+v", assistant.Content)
+	}
+}
+
 func TestDeepSeekAnthropicDefaultBaseURL(t *testing.T) {
 	p := NewDeepSeekAnthropic(ProviderConfig{APIKey: "test"})
 	if got := p.Config().BaseURL; got != "https://api.deepseek.com/anthropic" {

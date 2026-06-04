@@ -27,7 +27,7 @@ func main() {
 	fmt.Println("=========================================")
 
 	// Example 1: Basic Chat
-	fmt.Println("\n1. Basic Chat Example (DeepSeek Chat)")
+	fmt.Println("\n1. Basic Chat Example (DeepSeek V4 Flash)")
 	fmt.Println("-------------------------------------")
 	basicChat(client)
 
@@ -47,10 +47,10 @@ func main() {
 	jsonResponseFormat(client)
 }
 
-// Example 1: Basic Chat with DeepSeek Chat
+// Example 1: Basic Chat with DeepSeek V4 Flash
 func basicChat(client *litellm.Client) {
 	request := &litellm.Request{
-		Model: "deepseek-chat",
+		Model: "deepseek-v4-flash",
 		Messages: []litellm.Message{
 			{
 				Role:    "system",
@@ -86,9 +86,9 @@ func basicChat(client *litellm.Client) {
 
 // Example 2: Streaming Chat
 func streamingChat(client *litellm.Client) {
-	request := litellm.NewRequest("deepseek-reasoner", "Write a short story about artificial intelligence in 3 paragraphs",
+	request := litellm.NewRequest("deepseek-v4-pro", "Write a short story about artificial intelligence in 3 paragraphs",
 		litellm.WithMaxTokens(400),
-		litellm.WithTemperature(0.8),
+		litellm.WithThinking("high"),
 	)
 
 	ctx := context.Background()
@@ -159,7 +159,7 @@ func functionCalling(client *litellm.Client) {
 	}
 
 	request := &litellm.Request{
-		Model: "deepseek-chat",
+		Model: "deepseek-v4-flash",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
@@ -189,7 +189,7 @@ func functionCalling(client *litellm.Client) {
 // Example 4: JSON Response Format
 func jsonResponseFormat(client *litellm.Client) {
 	request := &litellm.Request{
-		Model: "deepseek-chat",
+		Model: "deepseek-v4-flash",
 		Messages: []litellm.Message{
 			{
 				Role:    "system",

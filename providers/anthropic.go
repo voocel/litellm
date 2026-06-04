@@ -28,11 +28,6 @@ func NewAnthropic(config ProviderConfig) *AnthropicProvider {
 	return newAnthropicProvider("anthropic", config, false)
 }
 
-// NewDeepSeekAnthropic creates a DeepSeek provider using its Anthropic-compatible API.
-func NewDeepSeekAnthropic(config ProviderConfig) *AnthropicProvider {
-	return newAnthropicProvider("deepseek-anthropic", config, true)
-}
-
 func newAnthropicProvider(name string, config ProviderConfig, deepSeekCompat bool) *AnthropicProvider {
 	baseProvider := NewBaseProvider(name, config)
 	return &AnthropicProvider{
@@ -502,6 +497,13 @@ func (p *AnthropicProvider) convertSingleMessage(msg Message) anthropicMessage {
 		}
 	} else if content != "" && msg.ToolCallID == "" {
 		anthropicMsg.Content = []anthropicContent{{Type: "text", Text: content}}
+	}
+
+	if p.deepSeekCompat && msg.ReasoningContent != "" && msg.ToolCallID == "" {
+		anthropicMsg.Content = append(anthropicMsg.Content, anthropicContent{
+			Type:     "thinking",
+			Thinking: msg.ReasoningContent,
+		})
 	}
 
 	for _, toolCall := range msg.ToolCalls {

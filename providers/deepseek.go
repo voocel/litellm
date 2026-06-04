@@ -29,6 +29,11 @@ func NewDeepSeek(config ProviderConfig) *OpenAICompatProvider {
 	})
 }
 
+// NewDeepSeekAnthropic creates a DeepSeek provider using its Anthropic-compatible API.
+func NewDeepSeekAnthropic(config ProviderConfig) *AnthropicProvider {
+	return newAnthropicProvider("deepseek-anthropic", config, true)
+}
+
 func mapDeepSeekThinking(thinking *ThinkingConfig, _ string) map[string]any {
 	if thinking == nil {
 		return nil
