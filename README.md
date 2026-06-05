@@ -43,7 +43,7 @@ func main() {
 	}
 
 	resp, err := client.Chat(context.Background(), &litellm.Request{
-		Model:    "gpt-4o-mini",
+		Model:    "gpt-5.5",
 		Messages: []litellm.Message{litellm.UserMessage("Explain AI in one sentence.")},
 	})
 	if err != nil {
@@ -86,8 +86,8 @@ func main() {
 	}
 
 	resp, err := client.Chat(context.Background(), &litellm.Request{
-		Model:      "gpt-4o-mini",
-		Messages:   []litellm.Message{litellm.UserMessage("Weather in Tokyo?")},
+		Model:      "gpt-5.5",
+		Messages:   []litellm.Message{litellm.UserMessage("Weather in New York?")},
 		Tools:      tools,
 		ToolChoice: "auto",
 	})
@@ -121,7 +121,7 @@ func main() {
 	}
 
 	stream, err := client.Stream(context.Background(), &litellm.Request{
-		Model:    "gpt-4o-mini",
+		Model:    "gpt-5.5",
 		Messages: []litellm.Message{litellm.UserMessage("Tell me a joke.")},
 	})
 	if err != nil {
@@ -177,7 +177,7 @@ fmt.Println(resp.Content)
 
 ```go
 stream, err := client.Stream(ctx, &litellm.Request{
-	Model: "gpt-4o-mini",
+	Model: "gpt-5.5",
 	Messages: []litellm.Message{
 		{Role: "user", Content: "Tell me a joke."},
 	},
@@ -203,7 +203,7 @@ client, err := litellm.NewWithProvider(
 	"openai",
 	litellm.ProviderConfig{APIKey: os.Getenv("OPENAI_API_KEY")},
 	litellm.WithHook(litellm.HookFuncs{
-		BeforeRequestFunc: func(ctx context.Context, meta litellm.CallMeta) {
+		BeforeRequestFunc: func(ctx context.Context, meta litellm.CallMeta, req *litellm.Request) {
 			log.Printf("→ call=%s %s provider=%s model=%s", meta.CallID, meta.Operation, meta.Provider, meta.Model)
 		},
 		AfterResponseFunc: func(ctx context.Context, meta litellm.CallMeta, resp *litellm.Response, err error) {
@@ -229,6 +229,31 @@ Notes:
 - Hooks are observational. They do not modify requests, responses, or stream flow.
 - `CallMeta.CallID` is stable for the lifetime of a single call and can be used to correlate hook events.
 - For streaming calls, `AfterResponse` runs when the stream is established; `resp` is `nil` in that case.
+- `OnStreamEnd` runs exactly once when a stream ends, including early close or abort.
+
+### OpenTelemetry
+
+The optional `github.com/voocel/litellm/otel` module turns hooks into OpenTelemetry generation spans. The core module has no OpenTelemetry dependency.
+
+```bash
+go get github.com/voocel/litellm/otel
+```
+
+```go
+client, err := litellm.NewWithProvider(
+	"openai",
+	litellm.ProviderConfig{APIKey: os.Getenv("OPENAI_API_KEY")},
+	litellm.WithHook(litellmotel.New(
+		otel.Tracer("my-app"),
+		litellmotel.WithCaptureContent(false), // disable prompt/completion capture for privacy
+	)),
+)
+if err != nil {
+	log.Fatal(err)
+}
+```
+
+It records `gen_ai.*` attributes for provider/model, finish reason, token usage, and optional prompt/completion text. Use `WithSpanAttributes` for backend-specific metadata such as Langfuse session IDs.
 
 ## Advanced Features (optional)
 
@@ -265,7 +290,7 @@ schema := map[string]any{
 }
 
 resp, err := client.Chat(ctx, &litellm.Request{
-	Model: "gpt-4o-mini",
+	Model: "gpt-5.5",
 	Messages: []litellm.Message{{Role: "user", Content: "Generate a person."}},
 	ResponseFormat: litellm.NewResponseFormatJSONSchema("person", "", schema, true),
 })
@@ -292,8 +317,8 @@ tools := []litellm.Tool{
 }
 
 resp, err := client.Chat(ctx, &litellm.Request{
-	Model: "gpt-4o-mini",
-	Messages: []litellm.Message{{Role: "user", Content: "Weather in Tokyo?"}},
+	Model: "gpt-5.5",
+	Messages: []litellm.Message{{Role: "user", Content: "Weather in New York?"}},
 	Tools: tools,
 	ToolChoice: "auto",
 })
@@ -326,7 +351,7 @@ _ = req
 
 ```go
 resp, err := client.Responses(ctx, &litellm.OpenAIResponsesRequest{
-	Model: "o3-mini",
+	Model: "gpt-5.5",
 	Messages: []litellm.Message{{Role: "user", Content: "Solve 15*8 step by step."}},
 	ReasoningEffort:  "medium",
 	ReasoningSummary: "auto",

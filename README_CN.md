@@ -43,7 +43,7 @@ func main() {
 	}
 
 	resp, err := client.Chat(context.Background(), &litellm.Request{
-		Model:    "gpt-4o-mini",
+		Model:    "gpt-5.5",
 		Messages: []litellm.Message{litellm.UserMessage("用一句话解释 AI。")},
 	})
 	if err != nil {
@@ -86,8 +86,8 @@ func main() {
 	}
 
 	resp, err := client.Chat(context.Background(), &litellm.Request{
-		Model:      "gpt-4o-mini",
-		Messages:   []litellm.Message{litellm.UserMessage("东京天气怎么样？")},
+		Model:      "gpt-5.5",
+		Messages:   []litellm.Message{litellm.UserMessage("纽约天气怎么样？")},
 		Tools:      tools,
 		ToolChoice: "auto",
 	})
@@ -121,7 +121,7 @@ func main() {
 	}
 
 	stream, err := client.Stream(context.Background(), &litellm.Request{
-		Model:    "gpt-4o-mini",
+		Model:    "gpt-5.5",
 		Messages: []litellm.Message{litellm.UserMessage("讲个笑话")},
 	})
 	if err != nil {
@@ -177,7 +177,7 @@ fmt.Println(resp.Content)
 
 ```go
 stream, err := client.Stream(ctx, &litellm.Request{
-	Model: "gpt-4o-mini",
+	Model: "gpt-5.5",
 	Messages: []litellm.Message{
 		{Role: "user", Content: "讲个笑话"},
 	},
@@ -203,7 +203,7 @@ client, err := litellm.NewWithProvider(
 	"openai",
 	litellm.ProviderConfig{APIKey: os.Getenv("OPENAI_API_KEY")},
 	litellm.WithHook(litellm.HookFuncs{
-		BeforeRequestFunc: func(ctx context.Context, meta litellm.CallMeta) {
+		BeforeRequestFunc: func(ctx context.Context, meta litellm.CallMeta, req *litellm.Request) {
 			log.Printf("→ call=%s %s provider=%s model=%s", meta.CallID, meta.Operation, meta.Provider, meta.Model)
 		},
 		AfterResponseFunc: func(ctx context.Context, meta litellm.CallMeta, resp *litellm.Response, err error) {
@@ -229,6 +229,31 @@ if err != nil {
 - hooks 只做观测，不修改请求、响应或流式控制。
 - `CallMeta.CallID` 在一次调用生命周期内保持稳定，可用于关联前后 hook 事件。
 - 对流式调用来说，`AfterResponse` 会在 stream 建立成功时触发，此时 `resp` 为 `nil`。
+- `OnStreamEnd` 会在流式结束时触发且只触发一次，包括正常结束、提前关闭和异常中断。
+
+### OpenTelemetry
+
+可选的 `github.com/voocel/litellm/otel` 子模块可以把 hooks 转成 OpenTelemetry generation span。核心模块不依赖 OpenTelemetry。
+
+```bash
+go get github.com/voocel/litellm/otel
+```
+
+```go
+client, err := litellm.NewWithProvider(
+	"openai",
+	litellm.ProviderConfig{APIKey: os.Getenv("OPENAI_API_KEY")},
+	litellm.WithHook(litellmotel.New(
+		otel.Tracer("my-app"),
+		litellmotel.WithCaptureContent(false), // 为隐私关闭 prompt/completion 内容采集
+	)),
+)
+if err != nil {
+	log.Fatal(err)
+}
+```
+
+适配器会记录 `gen_ai.*` 属性，包括 Provider/模型、结束原因、token 用量，以及可选的 prompt/completion 文本。需要 Langfuse session ID 等后端元数据时，使用 `WithSpanAttributes`。
 
 ## 高级能力（可选）
 
@@ -265,7 +290,7 @@ schema := map[string]any{
 }
 
 resp, err := client.Chat(ctx, &litellm.Request{
-	Model: "gpt-4o-mini",
+	Model: "gpt-5.5",
 	Messages: []litellm.Message{{Role: "user", Content: "生成一个人。"}},
 	ResponseFormat: litellm.NewResponseFormatJSONSchema("person", "", schema, true),
 })
@@ -292,8 +317,8 @@ tools := []litellm.Tool{
 }
 
 resp, err := client.Chat(ctx, &litellm.Request{
-	Model: "gpt-4o-mini",
-	Messages: []litellm.Message{{Role: "user", Content: "东京天气？"}},
+	Model: "gpt-5.5",
+	Messages: []litellm.Message{{Role: "user", Content: "纽约天气？"}},
 	Tools: tools,
 	ToolChoice: "auto",
 })
@@ -326,7 +351,7 @@ _ = req
 
 ```go
 resp, err := client.Responses(ctx, &litellm.OpenAIResponsesRequest{
-	Model: "o3-mini",
+	Model: "gpt-5.5",
 	Messages: []litellm.Message{{Role: "user", Content: "逐步算 15*8"}},
 	ReasoningEffort:  "medium",
 	ReasoningSummary: "auto",
