@@ -221,6 +221,14 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 		OutputConfig:  outputConfig,
 	}
 
+	// Claude models reject a request that specifies both temperature and top_p
+	// ("`temperature` and `top_p` cannot both be specified for this model").
+	// The client backfills top_p by default, so prefer temperature and drop
+	// top_p when both are present.
+	if anthropicReq.Temperature != nil {
+		anthropicReq.TopP = nil
+	}
+
 	if p.deepSeekCompat {
 		anthropicReq.Thinking = resolveDeepSeekAnthropicThinking(req)
 		if effort := deepSeekThinkingEffortFromRequest(req); effort != "" {
