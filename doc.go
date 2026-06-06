@@ -71,7 +71,7 @@ Or stream while aggregating:
 Use a dedicated request type for Responses API:
 
 	resp, err := client.Responses(ctx, &litellm.OpenAIResponsesRequest{
-	    Model: "o3-mini",
+	    Model: "gpt-5.5",
 	    Messages: []litellm.Message{
 	        {Role: "user", Content: "Solve 15*8 step by step."},
 	    },

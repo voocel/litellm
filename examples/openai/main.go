@@ -55,7 +55,7 @@ func main() {
 // Example 1: Basic reasoning via Responses API.
 func basicReasoning(client *litellm.Client) {
 	request := &litellm.OpenAIResponsesRequest{
-		Model: "gpt-5.4",
+		Model: "gpt-5.5",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
@@ -91,7 +91,7 @@ func basicReasoning(client *litellm.Client) {
 // Example 2: Streaming reasoning via Responses API.
 func streamingChat(client *litellm.Client) {
 	request := &litellm.OpenAIResponsesRequest{
-		Model: "gpt-5.4",
+		Model: "gpt-5.5",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
@@ -157,7 +157,7 @@ func streamingChat(client *litellm.Client) {
 
 // Example 3: Chat Completions reasoning probe.
 func chatCompletionsReasoning(client *litellm.Client) {
-	request := litellm.NewRequest("gpt-5.4", "A person first drives at 80 km/h for 2.5 hours, then at 120 km/h for 1.5 hours. What is the average speed?",
+	request := litellm.NewRequest("gpt-5.5", "A person first drives at 80 km/h for 2.5 hours, then at 120 km/h for 1.5 hours. What is the average speed?",
 		litellm.WithMaxTokens(2200),
 		litellm.WithThinking("high"),
 	)
@@ -202,11 +202,11 @@ func functionCalling(client *litellm.Client) {
 	}
 
 	request := &litellm.Request{
-		Model: "gpt-4o",
+		Model: "gpt-5.5",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
-				Content: "What's the weather like in Tokyo?",
+				Content: "What's the weather like in New York?",
 			},
 		},
 		Tools:      []litellm.Tool{weatherFunction},
@@ -257,7 +257,7 @@ func jsonSchemaExample(client *litellm.Client) {
 	}
 
 	request := &litellm.Request{
-		Model: "gpt-5",
+		Model: "gpt-5.5",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",

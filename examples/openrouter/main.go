@@ -230,11 +230,11 @@ func functionCalling(client *litellm.Client) {
 	}
 
 	request := &litellm.Request{
-		Model: "openai/gpt-4o-mini", // Use a cost-effective model for function calling
+		Model: "openai/gpt-5-nano", // Use a cost-effective model for function calling
 		Messages: []litellm.Message{
 			{
 				Role:    "user",
-				Content: "What's the weather like in Tokyo?",
+				Content: "What's the weather like in New York?",
 			},
 		},
 		Tools:     []litellm.Tool{weatherFunction},
@@ -340,7 +340,7 @@ func jsonSchemaResponse(client *litellm.Client) {
 	}
 
 	request := &litellm.Request{
-		Model: "openai/gpt-4o-mini",
+		Model: "openai/gpt-5-nano",
 		Messages: []litellm.Message{
 			{
 				Role:    "user",

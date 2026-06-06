@@ -104,6 +104,61 @@ func TestDeepSeekMessagesPreserveReasoningContentForToolTurns(t *testing.T) {
 	}
 }
 
+func TestDeepSeekPrefersReasoningContentOverSummaryFields(t *testing.T) {
+	p := NewDeepSeek(ProviderConfig{})
+	reasoning, field := p.compat.findReasoning(map[string]any{
+		"reasoning_summary": map[string]any{"text": "summary only"},
+		"reasoning_details": []any{
+			map[string]any{"text": "detail only"},
+		},
+		"reasoning_content": "full reasoning content",
+	})
+
+	if field != "reasoning_content" {
+		t.Fatalf("field = %q, want reasoning_content", field)
+	}
+	if reasoning != "full reasoning content" {
+		t.Fatalf("reasoning = %q, want full reasoning content", reasoning)
+	}
+}
+
+func TestDeepSeekResponseConversionStoresFullReasoningContent(t *testing.T) {
+	p := NewDeepSeek(ProviderConfig{})
+	rawMessage := json.RawMessage(`{
+		"role": "assistant",
+		"content": "",
+		"reasoning_summary": {"text": "summary only"},
+		"reasoning_details": [{"text": "detail only"}],
+		"reasoning_content": "full reasoning content",
+		"tool_calls": [{
+			"id": "call_1",
+			"type": "function",
+			"function": {"name": "lookup", "arguments": "{}"}
+		}]
+	}`)
+
+	resp, err := p.convertResponse(&compatResponse{
+		Model: "deepseek-v4-flash",
+		Choices: []compatChoice{{
+			Message:      rawMessage,
+			FinishReason: "tool_calls",
+		}},
+	}, &Request{
+		Model:    "deepseek-v4-flash",
+		Thinking: &ThinkingConfig{Type: "enabled", Level: "high"},
+	})
+	if err != nil {
+		t.Fatalf("convertResponse failed: %v", err)
+	}
+
+	if resp.ReasoningContent != "full reasoning content" {
+		t.Fatalf("reasoning_content = %q, want full reasoning content", resp.ReasoningContent)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("tool calls len = %d, want 1", len(resp.ToolCalls))
+	}
+}
+
 func TestDeepSeekAnthropicMapsThinkingToOutputEffort(t *testing.T) {
 	var payload []byte
 	p := NewDeepSeekAnthropic(ProviderConfig{APIKey: "test"})
