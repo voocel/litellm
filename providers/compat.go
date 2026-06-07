@@ -406,6 +406,17 @@ func (p *OpenAICompatProvider) ListModels(ctx context.Context) ([]ModelInfo, err
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+// Validate honors SkipAPIKeyValidation for keyless providers (e.g. Ollama),
+// which the embedded BaseProvider.Validate does not. Without this override the
+// flag would be ignored on the constructor path (client.New → provider.Validate),
+// failing keyless providers with "API key is required" before any request runs.
+func (p *OpenAICompatProvider) Validate() error {
+	if p.compat.SkipAPIKeyValidation {
+		return nil
+	}
+	return p.BaseProvider.Validate()
+}
+
 func (p *OpenAICompatProvider) validate(req *Request) error {
 	if !p.compat.SkipAPIKeyValidation {
 		if err := p.Validate(); err != nil {
