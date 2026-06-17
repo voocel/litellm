@@ -1,0 +1,30 @@
+name: Go Test Workflow
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run tests
+      run: go test -v ./...
+
+    - name: Download otel dependencies
+      working-directory: otel
+      run: go mod download
+
+    - name: Run otel tests
+      working-directory: otel
+      run: go test -v ./...
