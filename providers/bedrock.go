@@ -488,6 +488,10 @@ func (p *BedrockProvider) buildRequest(req *Request) (*bedrockRequest, error) {
 		}
 	}
 
+	if err := applyBedrockThinking(bedrockReq, req); err != nil {
+		return nil, err
+	}
+
 	if len(req.Tools) > 0 {
 		bedrockReq.ToolConfig = &bedrockToolConfig{
 			Tools: make([]bedrockTool, len(req.Tools)),
@@ -521,6 +525,70 @@ func (p *BedrockProvider) buildRequest(req *Request) (*bedrockRequest, error) {
 	}
 
 	return bedrockReq, nil
+}
+
+// applyBedrockThinking translates the unified thinking config into the Converse
+// API's additionalModelRequestFields. Reasoning is not a base inference param,
+// so it must be passed through additionalModelRequestFields per AWS docs.
+//
+// Only Anthropic Claude models are wired: Bedrock passes Claude's native
+// `thinking: {type, budget_tokens}` field through, so this mirrors the direct
+// Anthropic provider via resolveAnthropicThinking (extended-thinking / budget
+// path, same maxTokens>=1024 and temperature==1 constraints). Other Bedrock
+// families (Nova, DeepSeek-R1, Llama) have no documented Converse reasoning
+// schema, so an explicit thinking request on them is dropped with a warning
+// rather than guessed at.
+func applyBedrockThinking(bedrockReq *bedrockRequest, req *Request) error {
+	if req == nil || req.Thinking == nil {
+		return nil
+	}
+	if !isBedrockClaude(req.Model) {
+		notifyWarning(req, "bedrock", "thinking was omitted because model %q has no supported Bedrock reasoning config", req.Model)
+		return nil
+	}
+
+	// Mirror anthropic.go's default so budget_tokens < maxTokens holds when the
+	// caller leaves maxTokens unset.
+	maxTokens := 64000
+	if req.MaxTokens != nil {
+		maxTokens = *req.MaxTokens
+	}
+	thinking, err := resolveAnthropicThinking(req, maxTokens)
+	if err != nil {
+		return fmt.Errorf("bedrock: %w", err)
+	}
+	if thinking == nil {
+		return nil
+	}
+
+	field := map[string]any{"type": thinking.Type}
+	if thinking.BudgetTokens != nil {
+		field["budget_tokens"] = *thinking.BudgetTokens
+	}
+	if bedrockReq.AdditionalModelRequestFields == nil {
+		bedrockReq.AdditionalModelRequestFields = map[string]any{}
+	}
+	bedrockReq.AdditionalModelRequestFields["thinking"] = field
+
+	// Extended thinking requires maxTokens > budget_tokens; if the caller didn't
+	// set maxTokens, send the same default we validated against so the model
+	// doesn't fall back to a small default below the budget.
+	if isThinkingEnabledConfig(thinking) {
+		if bedrockReq.InferenceConfig == nil {
+			bedrockReq.InferenceConfig = &bedrockInferenceConfig{}
+		}
+		if bedrockReq.InferenceConfig.MaxTokens == 0 {
+			bedrockReq.InferenceConfig.MaxTokens = maxTokens
+		}
+	}
+	return nil
+}
+
+// isBedrockClaude reports whether the Bedrock modelId is an Anthropic Claude
+// model. Bedrock Claude IDs always contain "claude" (e.g.
+// "anthropic.claude-sonnet-4-...", "us.anthropic.claude-3-7-sonnet-...").
+func isBedrockClaude(model string) bool {
+	return strings.Contains(strings.ToLower(model), "claude")
 }
 
 // resolveBedrockCachePoint reads req.Extra["cache_retention"] and returns the

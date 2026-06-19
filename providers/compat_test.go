@@ -22,9 +22,15 @@ func TestCompatFindReasoningSupportsSummaryText(t *testing.T) {
 
 func TestCompatOmitsThinkingWithoutMapper(t *testing.T) {
 	var warnings []string
-	p := NewOllama(ProviderConfig{})
+	// Use an inline compat with no ThinkingMapper rather than a real provider —
+	// real providers gain mappers over time (e.g. ollama did), which would
+	// silently invalidate this framework-level test.
+	p := NewOpenAICompat(ProviderConfig{}, Compat{
+		ProviderName:   "no-thinking-mapper",
+		DefaultBaseURL: "https://api.example.test/v1",
+	})
 	body, err := p.buildRequestBody(&Request{
-		Model:     "llama",
+		Model:     "some-model",
 		Messages:  []Message{{Role: "user", Content: "hi"}},
 		Thinking:  &ThinkingConfig{Type: "enabled"},
 		OnWarning: func(provider string, message string) { warnings = append(warnings, provider+": "+message) },
