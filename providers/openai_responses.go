@@ -622,7 +622,9 @@ func (p *OpenAIProvider) completeWithResponsesAPI(ctx context.Context, req *Open
 		return nil, fmt.Errorf("openai: create responses request: %w", err)
 	}
 
-	p.setHeaders(httpReq, &Request{APIKey: req.APIKey})
+	if err := p.setHeaders(httpReq, &Request{APIKey: req.APIKey}); err != nil {
+		return nil, err
+	}
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -819,7 +821,9 @@ func (p *OpenAIProvider) streamWithResponsesAPI(ctx context.Context, req *OpenAI
 		return nil, fmt.Errorf("openai: create responses request: %w", err)
 	}
 
-	p.setHeaders(httpReq, &Request{APIKey: req.APIKey})
+	if err := p.setHeaders(httpReq, &Request{APIKey: req.APIKey}); err != nil {
+		return nil, err
+	}
 	// Ensure Accept header is set for SSE
 	httpReq.Header.Set("Accept", "text/event-stream")
 

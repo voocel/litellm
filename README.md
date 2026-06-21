@@ -381,7 +381,32 @@ _ = client
 `Request.Extra` is validated per provider. Unsupported providers will return an error.
 
 Supported keys:
+- Anthropic request extra: `cache_retention`, `metadata`, `metadata_user_id`
 - Gemini: `tool_name` (string) for tool response naming
+
+OpenAI, OpenAI-compatible, and Anthropic providers also support provider-level
+request headers via `ProviderConfig.Extra`:
+
+- `user_agent` (string): sets `User-Agent`
+- `headers` / `extra_headers` (`map[string]string` or `map[string]any`): sets extra HTTP headers
+- Anthropic only: `anthropic_beta` (string or `[]string`): sets `anthropic-beta`
+
+Example:
+
+```go
+client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
+	APIKey:  os.Getenv("OPENAI_API_KEY"),
+	BaseURL: os.Getenv("OPENAI_BASE_URL"),
+	Extra: map[string]any{
+		"user_agent": "my-client/1.0",
+		"headers": map[string]string{
+			"X-Custom-Client": "my-client",
+		},
+	},
+})
+_ = client
+_ = err
+```
 
 ### Cost calculation
 

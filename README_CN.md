@@ -381,7 +381,32 @@ _ = client
 `Request.Extra` 会按 Provider 进行校验，不支持的 Provider 会直接报错。
 
 支持的键：
+- Anthropic 请求参数：`cache_retention`、`metadata`、`metadata_user_id`
 - Gemini：`tool_name`（string），用于 tool response 命名
+
+OpenAI、OpenAI-compatible 和 Anthropic provider 也支持通过
+`ProviderConfig.Extra` 配置 provider 级请求头：
+
+- `user_agent`（string）：设置 `User-Agent`
+- `headers` / `extra_headers`（`map[string]string` 或 `map[string]any`）：设置额外 HTTP 请求头
+- 仅 Anthropic：`anthropic_beta`（string 或 `[]string`）：设置 `anthropic-beta`
+
+示例：
+
+```go
+client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
+	APIKey:  os.Getenv("OPENAI_API_KEY"),
+	BaseURL: os.Getenv("OPENAI_BASE_URL"),
+	Extra: map[string]any{
+		"user_agent": "my-client/1.0",
+		"headers": map[string]string{
+			"X-Custom-Client": "my-client",
+		},
+	},
+})
+_ = client
+_ = err
+```
 
 ### 费用计算
 

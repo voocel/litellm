@@ -164,7 +164,9 @@ func (p *OpenAIProvider) completeWithChatAPI(ctx context.Context, req *Request, 
 		return nil, fmt.Errorf("openai: create request: %w", err)
 	}
 
-	p.setHeaders(httpReq, req)
+	if err := p.setHeaders(httpReq, req); err != nil {
+		return nil, err
+	}
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -322,7 +324,9 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (StreamReader
 		return nil, fmt.Errorf("openai: create request: %w", err)
 	}
 
-	p.setHeaders(httpReq, req)
+	if err := p.setHeaders(httpReq, req); err != nil {
+		return nil, err
+	}
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -358,7 +362,9 @@ func (p *OpenAIProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("openai: create models request: %w", err)
 	}
-	p.setHeaders(httpReq, nil)
+	if err := p.setHeaders(httpReq, nil); err != nil {
+		return nil, err
+	}
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -401,9 +407,85 @@ func (p *OpenAIProvider) buildURL(endpoint string) string {
 	return baseURL + "/v1" + endpoint
 }
 
-func (p *OpenAIProvider) setHeaders(httpReq *http.Request, provReq *Request) {
+func (p *OpenAIProvider) setHeaders(httpReq *http.Request, provReq *Request) error {
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("User-Agent", resolveOpenAIUserAgent(p.Config().Extra))
 	httpReq.Header.Set("Authorization", "Bearer "+p.ResolveAPIKey(provReq))
+
+	extraHeaders, err := resolveOpenAIExtraHeaders(p.Config().Extra)
+	if err != nil {
+		return err
+	}
+	for key, value := range extraHeaders {
+		httpReq.Header.Set(key, value)
+	}
+
+	return nil
+}
+
+func resolveOpenAIUserAgent(extra map[string]any) string {
+	const defaultUserAgent = "litellm-go/0.1"
+
+	if len(extra) == 0 {
+		return defaultUserAgent
+	}
+	userAgent, ok := extra["user_agent"].(string)
+	if !ok {
+		return defaultUserAgent
+	}
+	userAgent = strings.TrimSpace(userAgent)
+	if userAgent == "" {
+		return defaultUserAgent
+	}
+	return userAgent
+}
+
+func resolveOpenAIExtraHeaders(extra map[string]any) (map[string]string, error) {
+	if len(extra) == 0 {
+		return nil, nil
+	}
+	raw, ok := extra["headers"]
+	if !ok {
+		raw, ok = extra["extra_headers"]
+	}
+	if !ok || raw == nil {
+		return nil, nil
+	}
+
+	resolved := map[string]string{}
+	switch headers := raw.(type) {
+	case map[string]string:
+		for k, v := range headers {
+			key := strings.TrimSpace(k)
+			value := strings.TrimSpace(v)
+			if key == "" {
+				return nil, fmt.Errorf("openai: extra header name cannot be empty")
+			}
+			if value == "" {
+				continue
+			}
+			resolved[key] = value
+		}
+	case map[string]any:
+		for k, v := range headers {
+			key := strings.TrimSpace(k)
+			if key == "" {
+				return nil, fmt.Errorf("openai: extra header name cannot be empty")
+			}
+			value, ok := v.(string)
+			if !ok {
+				return nil, fmt.Errorf("openai: extra header %q must be a string", key)
+			}
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			resolved[key] = value
+		}
+	default:
+		return nil, fmt.Errorf("openai: extra headers must be an object")
+	}
+	return resolved, nil
 }
 
 // openaiStreamReader implements streaming for OpenAI

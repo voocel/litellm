@@ -1,6 +1,10 @@
 package providers
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"testing"
+)
 
 func TestPrepareOpenAIMessagesUsesPrepareMessages(t *testing.T) {
 	messages := []Message{
@@ -124,5 +128,53 @@ func TestOpenAIChatExtraRejectsUnsupportedKeys(t *testing.T) {
 	err := validateOpenAIChatExtra(map[string]any{"unknown": true})
 	if err == nil {
 		t.Fatal("expected unsupported extra error")
+	}
+}
+
+func TestOpenAISetHeadersUsesConfiguredUserAgentAndExtraHeaders(t *testing.T) {
+	p := NewOpenAI(ProviderConfig{
+		APIKey: "test-key",
+		Extra: map[string]any{
+			"user_agent": "custom-client/1.0",
+			"headers": map[string]string{
+				"X-Codex-Beta-Features": "feature-a",
+				"Originator":            "codex_cli_rs",
+			},
+		},
+	})
+	httpReq, err := http.NewRequestWithContext(context.Background(), "POST", "https://example.test/v1/chat/completions", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.setHeaders(httpReq, nil); err != nil {
+		t.Fatalf("setHeaders: %v", err)
+	}
+
+	if got := httpReq.Header.Get("User-Agent"); got != "custom-client/1.0" {
+		t.Fatalf("User-Agent = %q, want custom-client/1.0", got)
+	}
+	if got := httpReq.Header.Get("X-Codex-Beta-Features"); got != "feature-a" {
+		t.Fatalf("X-Codex-Beta-Features = %q, want feature-a", got)
+	}
+	if got := httpReq.Header.Get("Originator"); got != "codex_cli_rs" {
+		t.Fatalf("Originator = %q, want codex_cli_rs", got)
+	}
+}
+
+func TestOpenAISetHeadersRejectsInvalidExtraHeaders(t *testing.T) {
+	p := NewOpenAI(ProviderConfig{
+		APIKey: "test-key",
+		Extra: map[string]any{
+			"headers": map[string]any{"X-Test": 42},
+		},
+	})
+	httpReq, err := http.NewRequestWithContext(context.Background(), "POST", "https://example.test/v1/chat/completions", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.setHeaders(httpReq, nil); err == nil {
+		t.Fatal("setHeaders error = nil, want invalid extra header error")
 	}
 }

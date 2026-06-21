@@ -1,7 +1,9 @@
 package providers
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -59,6 +61,76 @@ func TestCompatDefaultBaseURLIsApplied(t *testing.T) {
 
 	if got := p.Config().BaseURL; got != "https://api.example.test/v1" {
 		t.Fatalf("base URL = %q, want %q", got, "https://api.example.test/v1")
+	}
+}
+
+func TestCompatSetHeadersUsesConfiguredUserAgentAndExtraHeaders(t *testing.T) {
+	p := NewOpenAICompat(ProviderConfig{
+		APIKey: "test-key",
+		Extra: map[string]any{
+			"user_agent": "custom-client/1.0",
+			"headers": map[string]string{
+				"X-Provider": "from-extra",
+				"X-Trace":    "trace-id",
+			},
+		},
+	}, Compat{
+		ProviderName:   "custom-compatible",
+		DefaultBaseURL: "https://api.example.test/v1",
+		ExtraHeaders: map[string]string{
+			"X-Provider": "from-compat",
+		},
+		StreamHeaders: map[string]string{
+			"X-Stream": "true",
+		},
+	})
+	httpReq, err := http.NewRequestWithContext(context.Background(), "POST", "https://example.test/chat", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.setHeaders(httpReq, nil, true); err != nil {
+		t.Fatalf("setHeaders: %v", err)
+	}
+
+	if got := httpReq.Header.Get("User-Agent"); got != "custom-client/1.0" {
+		t.Fatalf("User-Agent = %q, want custom-client/1.0", got)
+	}
+	if got := httpReq.Header.Get("X-Provider"); got != "from-extra" {
+		t.Fatalf("X-Provider = %q, want from-extra", got)
+	}
+	if got := httpReq.Header.Get("X-Trace"); got != "trace-id" {
+		t.Fatalf("X-Trace = %q, want trace-id", got)
+	}
+	if got := httpReq.Header.Get("X-Stream"); got != "true" {
+		t.Fatalf("X-Stream = %q, want true", got)
+	}
+	if got := httpReq.Header.Get("Accept"); got != "text/event-stream" {
+		t.Fatalf("Accept = %q, want text/event-stream", got)
+	}
+}
+
+func TestCompatSetHeadersRejectsInvalidExtraHeaders(t *testing.T) {
+	p := NewOpenAICompat(ProviderConfig{
+		APIKey: "test-key",
+		Extra: map[string]any{
+			"headers": map[string]any{"X-Test": 42},
+		},
+	}, Compat{
+		ProviderName:   "custom-compatible",
+		DefaultBaseURL: "https://api.example.test/v1",
+	})
+	httpReq, err := http.NewRequestWithContext(context.Background(), "POST", "https://example.test/chat", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = p.setHeaders(httpReq, nil, false)
+	if err == nil {
+		t.Fatal("setHeaders error = nil, want invalid extra header error")
+	}
+	if !strings.Contains(err.Error(), "custom-compatible") {
+		t.Fatalf("error = %q, want provider name", err)
 	}
 }
 

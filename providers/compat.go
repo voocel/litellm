@@ -356,7 +356,9 @@ func (p *OpenAICompatProvider) ListModels(ctx context.Context) ([]ModelInfo, err
 	if err != nil {
 		return nil, fmt.Errorf("%s: create models request: %w", p.compat.ProviderName, err)
 	}
-	p.setHeaders(httpReq, nil, false)
+	if err := p.setHeaders(httpReq, nil, false); err != nil {
+		return nil, err
+	}
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -438,8 +440,9 @@ func (p *OpenAICompatProvider) modelsURL() string {
 	return base + "/models"
 }
 
-func (p *OpenAICompatProvider) setHeaders(httpReq *http.Request, req *Request, stream bool) {
+func (p *OpenAICompatProvider) setHeaders(httpReq *http.Request, req *Request, stream bool) error {
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("User-Agent", resolveCompatUserAgent(p.Config().Extra))
 	if !p.compat.SkipAPIKeyValidation {
 		httpReq.Header.Set("Authorization", "Bearer "+p.ResolveAPIKey(req))
 	} else if key := p.ResolveAPIKey(req); key != "" {
@@ -448,12 +451,85 @@ func (p *OpenAICompatProvider) setHeaders(httpReq *http.Request, req *Request, s
 	for k, v := range p.compat.ExtraHeaders {
 		httpReq.Header.Set(k, v)
 	}
+	extraHeaders, err := resolveCompatExtraHeaders(p.compat.ProviderName, p.Config().Extra)
+	if err != nil {
+		return err
+	}
+	for k, v := range extraHeaders {
+		httpReq.Header.Set(k, v)
+	}
 	if stream {
 		httpReq.Header.Set("Accept", "text/event-stream")
 		for k, v := range p.compat.StreamHeaders {
 			httpReq.Header.Set(k, v)
 		}
 	}
+	return nil
+}
+
+func resolveCompatUserAgent(extra map[string]any) string {
+	const defaultUserAgent = "litellm-go/0.1"
+
+	if len(extra) == 0 {
+		return defaultUserAgent
+	}
+	userAgent, ok := extra["user_agent"].(string)
+	if !ok {
+		return defaultUserAgent
+	}
+	userAgent = strings.TrimSpace(userAgent)
+	if userAgent == "" {
+		return defaultUserAgent
+	}
+	return userAgent
+}
+
+func resolveCompatExtraHeaders(provider string, extra map[string]any) (map[string]string, error) {
+	if len(extra) == 0 {
+		return nil, nil
+	}
+	raw, ok := extra["headers"]
+	if !ok {
+		raw, ok = extra["extra_headers"]
+	}
+	if !ok || raw == nil {
+		return nil, nil
+	}
+
+	resolved := map[string]string{}
+	switch headers := raw.(type) {
+	case map[string]string:
+		for k, v := range headers {
+			key := strings.TrimSpace(k)
+			value := strings.TrimSpace(v)
+			if key == "" {
+				return nil, fmt.Errorf("%s: extra header name cannot be empty", provider)
+			}
+			if value == "" {
+				continue
+			}
+			resolved[key] = value
+		}
+	case map[string]any:
+		for k, v := range headers {
+			key := strings.TrimSpace(k)
+			if key == "" {
+				return nil, fmt.Errorf("%s: extra header name cannot be empty", provider)
+			}
+			value, ok := v.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s: extra header %q must be a string", provider, key)
+			}
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			resolved[key] = value
+		}
+	default:
+		return nil, fmt.Errorf("%s: extra headers must be an object", provider)
+	}
+	return resolved, nil
 }
 
 func (p *OpenAICompatProvider) newHTTPRequest(ctx context.Context, body []byte, req *Request, stream bool) (*http.Request, error) {
@@ -461,7 +537,9 @@ func (p *OpenAICompatProvider) newHTTPRequest(ctx context.Context, body []byte, 
 	if err != nil {
 		return nil, fmt.Errorf("%s: create request: %w", p.compat.ProviderName, err)
 	}
-	p.setHeaders(httpReq, req, stream)
+	if err := p.setHeaders(httpReq, req, stream); err != nil {
+		return nil, err
+	}
 	return httpReq, nil
 }
 

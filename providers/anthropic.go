@@ -156,7 +156,9 @@ func (p *AnthropicProvider) ListModels(ctx context.Context) ([]ModelInfo, error)
 	if err != nil {
 		return nil, fmt.Errorf("%s: create models request: %w", p.Name(), err)
 	}
-	p.setModelHeaders(httpReq)
+	if err := p.setModelHeaders(httpReq); err != nil {
+		return nil, err
+	}
 
 	resp, err := p.HTTPClient().Do(httpReq)
 	if err != nil {
@@ -194,7 +196,7 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	if err := p.BaseProvider.ValidateExtra(req.Extra, []string{"cache_retention"}); err != nil {
+	if err := p.BaseProvider.ValidateExtra(req.Extra, []string{"cache_retention", "metadata", "metadata_user_id"}); err != nil {
 		return nil, err
 	}
 	if err := p.BaseProvider.ValidateRequest(req); err != nil {
@@ -209,6 +211,10 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 	if err != nil {
 		return nil, err
 	}
+	metadata, err := convertAnthropicMetadata(req)
+	if err != nil {
+		return nil, err
+	}
 
 	anthropicReq := anthropicRequest{
 		Model:         req.Model,
@@ -219,6 +225,7 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 		StopSequences: req.Stop,
 		ToolChoice:    req.ToolChoice,
 		OutputConfig:  outputConfig,
+		Metadata:      metadata,
 	}
 
 	// Claude models reject a request that specifies both temperature and top_p
@@ -282,8 +289,61 @@ func (p *AnthropicProvider) buildHTTPRequest(ctx context.Context, req *Request, 
 		return nil, fmt.Errorf("%s: create request: %w", p.Name(), err)
 	}
 
-	p.setHeaders(httpReq, req)
+	if err := p.setHeaders(httpReq, req); err != nil {
+		return nil, err
+	}
 	return httpReq, nil
+}
+
+func convertAnthropicMetadata(req *Request) (map[string]any, error) {
+	if req == nil || len(req.Extra) == 0 {
+		return nil, nil
+	}
+
+	metadata := map[string]any(nil)
+	if raw, ok := req.Extra["metadata"]; ok && raw != nil {
+		switch typed := raw.(type) {
+		case map[string]any:
+			metadata = make(map[string]any, len(typed))
+			for k, v := range typed {
+				key := strings.TrimSpace(k)
+				if key == "" {
+					return nil, fmt.Errorf("anthropic: metadata key cannot be empty")
+				}
+				metadata[key] = v
+			}
+		case map[string]string:
+			metadata = make(map[string]any, len(typed))
+			for k, v := range typed {
+				key := strings.TrimSpace(k)
+				if key == "" {
+					return nil, fmt.Errorf("anthropic: metadata key cannot be empty")
+				}
+				metadata[key] = v
+			}
+		default:
+			return nil, fmt.Errorf("anthropic: metadata must be an object")
+		}
+	}
+
+	if raw, ok := req.Extra["metadata_user_id"]; ok && raw != nil {
+		userID, ok := raw.(string)
+		if !ok {
+			return nil, fmt.Errorf("anthropic: metadata_user_id must be a string")
+		}
+		userID = strings.TrimSpace(userID)
+		if userID != "" {
+			if metadata == nil {
+				metadata = map[string]any{}
+			}
+			metadata["user_id"] = userID
+		}
+	}
+
+	if len(metadata) == 0 {
+		return nil, nil
+	}
+	return metadata, nil
 }
 
 func convertAnthropicOutputConfig(format *ResponseFormat) (*anthropicOutputConfig, error) {
@@ -609,35 +669,134 @@ func (p *AnthropicProvider) buildURL(endpoint string) string {
 	return baseURL + endpoint
 }
 
-func (p *AnthropicProvider) setHeaders(httpReq *http.Request, provReq *Request) {
+func (p *AnthropicProvider) setHeaders(httpReq *http.Request, provReq *Request) error {
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("User-Agent", resolveAnthropicUserAgent(p.Config().Extra))
 	httpReq.Header.Set("x-api-key", p.ResolveAPIKey(provReq))
 	httpReq.Header.Set("anthropic-version", "2023-06-01") // Latest stable version
 
-	if betaHeader := resolveAnthropicBetaHeader(p.Config().Extra); betaHeader != "" {
+	betaHeader, err := resolveAnthropicBetaHeader(p.Config().Extra)
+	if err != nil {
+		return err
+	}
+	if betaHeader != "" {
 		httpReq.Header.Set("anthropic-beta", betaHeader)
 	}
+
+	extraHeaders, err := resolveAnthropicExtraHeaders(p.Config().Extra)
+	if err != nil {
+		return err
+	}
+	for key, value := range extraHeaders {
+		httpReq.Header.Set(key, value)
+	}
+
+	return nil
 }
 
-func (p *AnthropicProvider) setModelHeaders(httpReq *http.Request) {
+func (p *AnthropicProvider) setModelHeaders(httpReq *http.Request) error {
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("User-Agent", resolveAnthropicUserAgent(p.Config().Extra))
 	httpReq.Header.Set("x-api-key", p.ResolveAPIKey(nil))
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
+
+	betaHeader, err := resolveAnthropicBetaHeader(p.Config().Extra)
+	if err != nil {
+		return err
+	}
+	if betaHeader != "" {
+		httpReq.Header.Set("anthropic-beta", betaHeader)
+	}
+
+	extraHeaders, err := resolveAnthropicExtraHeaders(p.Config().Extra)
+	if err != nil {
+		return err
+	}
+	for key, value := range extraHeaders {
+		httpReq.Header.Set(key, value)
+	}
+
+	return nil
 }
 
-func resolveAnthropicBetaHeader(extra map[string]any) string {
+func resolveAnthropicUserAgent(extra map[string]any) string {
+	const defaultUserAgent = "litellm-go/0.1"
+
 	if len(extra) == 0 {
-		return ""
+		return defaultUserAgent
+	}
+	userAgent, ok := extra["user_agent"].(string)
+	if !ok {
+		return defaultUserAgent
+	}
+	userAgent = strings.TrimSpace(userAgent)
+	if userAgent == "" {
+		return defaultUserAgent
+	}
+	return userAgent
+}
+
+func resolveAnthropicExtraHeaders(extra map[string]any) (map[string]string, error) {
+	if len(extra) == 0 {
+		return nil, nil
+	}
+	raw, ok := extra["headers"]
+	if !ok {
+		raw, ok = extra["extra_headers"]
+	}
+	if !ok || raw == nil {
+		return nil, nil
+	}
+
+	resolved := map[string]string{}
+	switch headers := raw.(type) {
+	case map[string]string:
+		for k, v := range headers {
+			key := strings.TrimSpace(k)
+			value := strings.TrimSpace(v)
+			if key == "" {
+				return nil, fmt.Errorf("anthropic: extra header name cannot be empty")
+			}
+			if value == "" {
+				continue
+			}
+			resolved[key] = value
+		}
+	case map[string]any:
+		for k, v := range headers {
+			key := strings.TrimSpace(k)
+			if key == "" {
+				return nil, fmt.Errorf("anthropic: extra header name cannot be empty")
+			}
+			value, ok := v.(string)
+			if !ok {
+				return nil, fmt.Errorf("anthropic: extra header %q must be a string", key)
+			}
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			resolved[key] = value
+		}
+	default:
+		return nil, fmt.Errorf("anthropic: extra headers must be an object")
+	}
+	return resolved, nil
+}
+
+func resolveAnthropicBetaHeader(extra map[string]any) (string, error) {
+	if len(extra) == 0 {
+		return "", nil
 	}
 
 	raw, ok := extra["anthropic_beta"]
 	if !ok || raw == nil {
-		return ""
+		return "", nil
 	}
 
 	switch beta := raw.(type) {
 	case string:
-		return strings.TrimSpace(beta)
+		return strings.TrimSpace(beta), nil
 	case []string:
 		values := make([]string, 0, len(beta))
 		for _, item := range beta {
@@ -646,22 +805,22 @@ func resolveAnthropicBetaHeader(extra map[string]any) string {
 				values = append(values, item)
 			}
 		}
-		return strings.Join(values, ",")
+		return strings.Join(values, ","), nil
 	case []any:
 		values := make([]string, 0, len(beta))
 		for _, item := range beta {
 			s, ok := item.(string)
 			if !ok {
-				continue
+				return "", fmt.Errorf("anthropic: anthropic_beta values must be strings")
 			}
 			s = strings.TrimSpace(s)
 			if s != "" {
 				values = append(values, s)
 			}
 		}
-		return strings.Join(values, ",")
+		return strings.Join(values, ","), nil
 	default:
-		return ""
+		return "", fmt.Errorf("anthropic: anthropic_beta must be a string or string array")
 	}
 }
 
@@ -872,6 +1031,7 @@ type anthropicRequest struct {
 	StopSequences []string               `json:"stop_sequences,omitempty"` // Custom text sequences that will cause the model to stop generating
 	Thinking      *ThinkingConfig        `json:"thinking,omitempty"`
 	OutputConfig  *anthropicOutputConfig `json:"output_config,omitempty"`
+	Metadata      map[string]any         `json:"metadata,omitempty"`
 }
 
 type anthropicOutputConfig struct {
