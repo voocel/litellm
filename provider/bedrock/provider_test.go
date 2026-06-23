@@ -124,7 +124,7 @@ func TestChatRetriesAndSignsEachAttempt(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 	resp, err := provider.Chat(context.Background(), &litellm.Request{
-		Model:    "anthropic.claude",
+		Model:    "anthropic.claude-3-5-sonnet-20240620-v1:0",
 		Messages: []litellm.Message{litellm.UserText("hi")},
 	})
 	if err != nil {
@@ -235,8 +235,8 @@ func TestChatSignsRequestAndConvertsResponse(t *testing.T) {
 		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			authHeader = req.Header.Get("Authorization")
 			tokenHeader = req.Header.Get("X-Amz-Security-Token")
-			if !strings.Contains(req.URL.Path, "/model/anthropic.claude/converse") {
-				t.Fatalf("unexpected path: %s", req.URL.Path)
+			if req.URL.Path != "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/converse" || req.URL.RawPath != "/model/anthropic.claude-3-5-sonnet-20240620-v1%3A0/converse" {
+				t.Fatalf("unexpected path/rawPath: %s/%s", req.URL.Path, req.URL.RawPath)
 			}
 			return jsonResponse(http.StatusOK, `{
 				"output":{"message":{"role":"assistant","content":[
@@ -252,7 +252,7 @@ func TestChatSignsRequestAndConvertsResponse(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 	resp, err := provider.Chat(context.Background(), &litellm.Request{
-		Model:    "anthropic.claude",
+		Model:    "anthropic.claude-3-5-sonnet-20240620-v1:0",
 		Messages: []litellm.Message{litellm.UserText("hi")},
 	})
 	if err != nil {
@@ -292,8 +292,8 @@ func TestStreamConvertsEventStreamToTypedEvents(t *testing.T) {
 		BaseURL:     "https://bedrock-runtime.us-west-2.amazonaws.com",
 		Credentials: StaticCredentials("AKID", "SECRET", ""),
 		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			if !strings.Contains(req.URL.Path, "/model/anthropic.claude/converse-stream") {
-				t.Fatalf("unexpected path: %s", req.URL.Path)
+			if req.URL.Path != "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/converse-stream" || req.URL.RawPath != "/model/anthropic.claude-3-5-sonnet-20240620-v1%3A0/converse-stream" {
+				t.Fatalf("unexpected path/rawPath: %s/%s", req.URL.Path, req.URL.RawPath)
 			}
 			return &http.Response{
 				StatusCode: http.StatusOK,
@@ -306,7 +306,7 @@ func TestStreamConvertsEventStreamToTypedEvents(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 	stream, err := provider.Stream(context.Background(), &litellm.Request{
-		Model:    "anthropic.claude",
+		Model:    "anthropic.claude-3-5-sonnet-20240620-v1:0",
 		Messages: []litellm.Message{litellm.UserText("hi")},
 	})
 	if err != nil {

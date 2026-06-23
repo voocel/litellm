@@ -112,6 +112,54 @@ func TestResponsesInputItemsPreserveToolTurns(t *testing.T) {
 	}
 }
 
+func TestResponsesTextFormatUsesResponsesJSONSchemaShape(t *testing.T) {
+	provider := mustProvider(t)
+	format, err := litellm.NewResponseFormatJSONSchema("answer", "Answer shape.", map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+		"required": []string{"answer"},
+	}, litellm.StrictEnabled)
+	if err != nil {
+		t.Fatalf("NewResponseFormatJSONSchema: %v", err)
+	}
+	wire, err := provider.buildResponsesRequest(&ResponsesRequest{
+		Model:          "gpt-5.1",
+		Messages:       []litellm.Message{litellm.UserText("hello")},
+		ResponseFormat: format,
+	}, false)
+	if err != nil {
+		t.Fatalf("buildResponsesRequest: %v", err)
+	}
+	data, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(data, &body); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	text, ok := body["text"].(map[string]any)
+	if !ok {
+		t.Fatalf("text = %#v", body["text"])
+	}
+	formatBody, ok := text["format"].(map[string]any)
+	if !ok {
+		t.Fatalf("text.format = %#v", text["format"])
+	}
+	if _, ok := formatBody["json_schema"]; ok {
+		t.Fatalf("responses text.format must not use chat response_format nesting: %s", data)
+	}
+	if formatBody["type"] != "json_schema" || formatBody["name"] != "answer" || formatBody["description"] != "Answer shape." || formatBody["strict"] != true {
+		t.Fatalf("format = %#v", formatBody)
+	}
+	schema, ok := formatBody["schema"].(map[string]any)
+	if !ok || schema["type"] != "object" || schema["additionalProperties"] != false {
+		t.Fatalf("schema = %#v", formatBody["schema"])
+	}
+}
+
 func TestResponsesBuildRequestDeepClonesNativeMaps(t *testing.T) {
 	provider := mustProvider(t)
 	req := &ResponsesRequest{

@@ -4,8 +4,6 @@
 
 LiteLLM is a small, explicit Go SDK for calling LLM providers through one typed core model. The root package owns the provider-agnostic API; concrete providers live in `provider/<name>` subpackages.
 
-It is not a router, gateway, fallback engine, queue, account system, or agent runtime.
-
 ## Install
 
 ```bash

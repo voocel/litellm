@@ -105,7 +105,7 @@ func signRequest(req *http.Request, payload []byte, credentials Credentials) err
 	payloadHash := sha256Hex(payload)
 	req.Header.Set("X-Amz-Content-Sha256", payloadHash)
 
-	canonicalURI := req.URL.Path
+	canonicalURI := awsEscapePath(req.URL.EscapedPath(), false)
 	if canonicalURI == "" {
 		canonicalURI = "/"
 	}
@@ -175,3 +175,31 @@ func signatureKey(secretKey, dateStamp, region, service string) []byte {
 	kService := hmacSHA256(kRegion, []byte(service))
 	return hmacSHA256(kService, []byte("aws4_request"))
 }
+
+func awsEscapePath(path string, encodeSlash bool) string {
+	var out strings.Builder
+	out.Grow(len(path))
+	for i := 0; i < len(path); i++ {
+		c := path[i]
+		if isAWSPathUnreserved(c) || (c == '/' && !encodeSlash) {
+			out.WriteByte(c)
+			continue
+		}
+		out.WriteByte('%')
+		out.WriteByte(upperHex[c>>4])
+		out.WriteByte(upperHex[c&0x0f])
+	}
+	return out.String()
+}
+
+func isAWSPathUnreserved(c byte) bool {
+	return (c >= 'A' && c <= 'Z') ||
+		(c >= 'a' && c <= 'z') ||
+		(c >= '0' && c <= '9') ||
+		c == '-' ||
+		c == '.' ||
+		c == '_' ||
+		c == '~'
+}
+
+const upperHex = "0123456789ABCDEF"

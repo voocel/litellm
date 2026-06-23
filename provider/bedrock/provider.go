@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/voocel/litellm"
@@ -109,10 +110,15 @@ func (p *Provider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Res
 	if err != nil {
 		return nil, fmt.Errorf("bedrock: marshal request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.cfg.BaseURL, "/")+"/model/"+req.Model+"/converse", bytes.NewReader(body))
+	endpoint, rawPath, err := runtimeEndpoint(p.cfg.BaseURL, req.Model, "converse")
+	if err != nil {
+		return nil, fmt.Errorf("bedrock: create endpoint: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("bedrock: create request: %w", err)
 	}
+	httpReq.URL.RawPath = rawPath
 	resp, err := p.cfg.HTTPClient.Do(httpReq)
 	if err != nil {
 		return nil, litellm.NewNetworkError(p.Name(), "request failed", err)
@@ -147,10 +153,15 @@ func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.St
 	if err != nil {
 		return nil, fmt.Errorf("bedrock: marshal stream request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.cfg.BaseURL, "/")+"/model/"+req.Model+"/converse-stream", bytes.NewReader(body))
+	endpoint, rawPath, err := runtimeEndpoint(p.cfg.BaseURL, req.Model, "converse-stream")
+	if err != nil {
+		return nil, fmt.Errorf("bedrock: create stream endpoint: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("bedrock: create stream request: %w", err)
 	}
+	httpReq.URL.RawPath = rawPath
 	resp, err := p.cfg.HTTPClient.Do(httpReq)
 	if err != nil {
 		return nil, litellm.NewNetworkError(p.Name(), "stream request failed", err)
@@ -204,4 +215,18 @@ type clientTransport struct {
 
 func (t clientTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.client.Do(req)
+}
+
+func runtimeEndpoint(baseURL, model, operation string) (string, string, error) {
+	endpoint, err := url.Parse(strings.TrimRight(baseURL, "/"))
+	if err != nil {
+		return "", "", err
+	}
+	pathPrefix := strings.TrimRight(endpoint.Path, "/")
+	rawPrefix := strings.TrimRight(endpoint.EscapedPath(), "/")
+	path := pathPrefix + "/model/" + model + "/" + operation
+	rawPath := rawPrefix + "/model/" + awsEscapePath(model, true) + "/" + operation
+	endpoint.Path = path
+	endpoint.RawPath = rawPath
+	return endpoint.String(), rawPath, nil
 }

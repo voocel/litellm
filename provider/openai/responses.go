@@ -103,14 +103,10 @@ type responsesText struct {
 }
 
 type responsesTextFormat struct {
-	Type       string               `json:"type"`
-	JSONSchema *responsesJSONSchema `json:"json_schema,omitempty"`
-}
-
-type responsesJSONSchema struct {
-	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
-	Schema      any    `json:"schema"`
+	Schema      any    `json:"schema,omitempty"`
 	Strict      *bool  `json:"strict,omitempty"`
 }
 
@@ -656,12 +652,10 @@ func (p *Provider) responsesText(req *ResponsesRequest) (*responsesText, error) 
 		case litellm.StrictDisabled:
 			strict = litellm.Bool(false)
 		}
-		format.JSONSchema = &responsesJSONSchema{
-			Name:        req.ResponseFormat.JSONSchema.Name,
-			Description: req.ResponseFormat.JSONSchema.Description,
-			Schema:      schema,
-			Strict:      strict,
-		}
+		format.Name = req.ResponseFormat.JSONSchema.Name
+		format.Description = req.ResponseFormat.JSONSchema.Description
+		format.Schema = schema
+		format.Strict = strict
 	}
 	out.Format = format
 	return out, nil

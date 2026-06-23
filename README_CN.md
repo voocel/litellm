@@ -4,8 +4,6 @@
 
 LiteLLM 是一个小巧、显式、类型化的 Go LLM SDK。根包拥有跨 Provider 的领域模型，具体 Provider 放在 `provider/<name>` 子包。
 
-它不是路由器、网关、fallback 引擎、队列、账号系统或 Agent Runtime。
-
 ## 安装
 
 ```bash

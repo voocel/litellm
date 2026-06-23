@@ -45,6 +45,32 @@ func TestSignRequestSetsSigV4Headers(t *testing.T) {
 	}
 }
 
+func TestAWSCanonicalPathEscapesBedrockModelID(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3-5-sonnet-20240620-v1%3A0/converse", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	canonicalURI := awsEscapePath(req.URL.EscapedPath(), false)
+	if canonicalURI != "/model/anthropic.claude-3-5-sonnet-20240620-v1%253A0/converse" {
+		t.Fatalf("canonicalURI = %q", canonicalURI)
+	}
+}
+
+func TestRuntimeURLEscapesModelIDAsSinglePathSegment(t *testing.T) {
+	endpoint, rawPath, err := runtimeEndpoint("https://bedrock-runtime.us-west-2.amazonaws.com", "arn:aws:bedrock:us-west-2:123456789012:prompt/PROMPT12345:1", "converse")
+	if err != nil {
+		t.Fatalf("runtimeEndpoint: %v", err)
+	}
+	want := "https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-west-2%3A123456789012%3Aprompt%2FPROMPT12345%3A1/converse"
+	if endpoint != want {
+		t.Fatalf("endpoint = %q, want %q", endpoint, want)
+	}
+	wantRawPath := "/model/arn%3Aaws%3Abedrock%3Aus-west-2%3A123456789012%3Aprompt%2FPROMPT12345%3A1/converse"
+	if rawPath != wantRawPath {
+		t.Fatalf("rawPath = %q, want %q", rawPath, wantRawPath)
+	}
+}
+
 func TestSigningTransportSignsEachRetryAttempt(t *testing.T) {
 	credentials := &countingCredentials{
 		credentials: Credentials{
