@@ -32,18 +32,14 @@ func TestThinkingBudget(t *testing.T) {
 	testgolden.AssertJSON(t, "../../testdata/compat/qwen_request.golden.json", body)
 }
 
-func TestThinkingDisabledErrors(t *testing.T) {
-	p, err := New(compat.Config{APIKey: "key", BaseURL: "https://qwen.test", HTTPClient: roundTripFunc(nil)})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	_, err = p.Chat(context.Background(), &litellm.Request{
+func TestThinkingDisabled(t *testing.T) {
+	body := captureBody(t, &litellm.Request{
 		Model:    "qwen-plus",
 		Messages: []litellm.Message{litellm.UserText("hi")},
 		Thinking: &litellm.Thinking{Mode: litellm.ThinkingDisabled},
 	})
-	if err == nil || !strings.Contains(err.Error(), "disabling thinking is not supported") {
-		t.Fatalf("expected disabled thinking error, got %v", err)
+	if body["enable_thinking"] != false {
+		t.Fatalf("body = %#v", body)
 	}
 }
 

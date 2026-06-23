@@ -83,6 +83,21 @@ func TestResponsesBuildRequestMapsCoreFields(t *testing.T) {
 	}
 }
 
+func TestResponsesAcceptsMinimalReasoningEffort(t *testing.T) {
+	provider := mustProvider(t)
+	wire, err := provider.buildResponsesRequest(&ResponsesRequest{
+		Model:           "gpt-5.1",
+		Messages:        []litellm.Message{litellm.UserText("hello")},
+		ReasoningEffort: "minimal",
+	}, false)
+	if err != nil {
+		t.Fatalf("buildResponsesRequest: %v", err)
+	}
+	if wire.Reasoning == nil || wire.Reasoning.Effort != "minimal" {
+		t.Fatalf("reasoning = %#v", wire.Reasoning)
+	}
+}
+
 func TestResponsesInputItemsPreserveToolTurns(t *testing.T) {
 	items, err := responsesInputItems([]litellm.Message{
 		litellm.UserText("weather?"),

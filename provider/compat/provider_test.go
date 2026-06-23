@@ -307,7 +307,7 @@ func TestChatConvertsPromptTokensDetailsCachedTokens(t *testing.T) {
 				}
 			}`), nil
 		}),
-	}, Spec{Name: "strict", Response: ResponseSpec{HasCacheTokens: true}})
+	}, Spec{Name: "strict"})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -486,7 +486,7 @@ func TestStreamConvertsRefusalAndCachedTokens(t *testing.T) {
 				``,
 			}, "\n")), nil
 		}),
-	}, Spec{Name: "strict", Response: ResponseSpec{HasCacheTokens: true}})
+	}, Spec{Name: "strict"})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}

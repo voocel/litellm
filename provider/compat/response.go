@@ -61,13 +61,11 @@ func convertUsage(u usage, spec Spec, provider, model string) litellm.Usage {
 	if spec.Response.HasCompletionTokenDetails && u.CompletionTokensDetails != nil {
 		out.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
 	}
-	if spec.Response.HasCacheTokens {
-		if u.PromptTokensDetails != nil {
-			out.CacheReadTokens = u.PromptTokensDetails.CachedTokens
-		}
-		if out.CacheReadTokens == 0 {
-			out.CacheReadTokens = u.PromptCacheHitTokens
-		}
+	if u.PromptTokensDetails != nil {
+		out.CacheReadTokens = u.PromptTokensDetails.CachedTokens
+	}
+	if out.CacheReadTokens == 0 && spec.Response.HasCacheTokens {
+		out.CacheReadTokens = u.PromptCacheHitTokens
 	}
 	return out
 }

@@ -21,7 +21,7 @@ func (f roundTripFunc) Do(req *http.Request) (*http.Response, error) {
 
 func TestReasoningEffort(t *testing.T) {
 	body := captureBody(t, &litellm.Request{
-		Model:    "grok-4",
+		Model:    "grok-4.3",
 		Messages: []litellm.Message{litellm.UserText("hi")},
 		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "high"},
 	})
@@ -31,13 +31,39 @@ func TestReasoningEffort(t *testing.T) {
 	testgolden.AssertJSON(t, "../../testdata/compat/grok_request.golden.json", body)
 }
 
-func TestThinkingRequiresLevelOrEffort(t *testing.T) {
+func TestThinkingDisabled(t *testing.T) {
+	body := captureBody(t, &litellm.Request{
+		Model:    "grok-4.3",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingDisabled},
+	})
+	if body["reasoning_effort"] != "none" {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
+func TestThinkingRequiresSupportedModel(t *testing.T) {
 	p, err := New(compat.Config{APIKey: "key", BaseURL: "https://grok.test", HTTPClient: roundTripFunc(nil)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	_, err = p.Chat(context.Background(), &litellm.Request{
 		Model:    "grok-4",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "high"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "only supported by grok-4.3") {
+		t.Fatalf("expected model support error, got %v", err)
+	}
+}
+
+func TestThinkingRequiresLevelOrEffort(t *testing.T) {
+	p, err := New(compat.Config{APIKey: "key", BaseURL: "https://grok.test", HTTPClient: roundTripFunc(nil)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = p.Chat(context.Background(), &litellm.Request{
+		Model:    "grok-4.3",
 		Messages: []litellm.Message{litellm.UserText("hi")},
 		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled},
 	})

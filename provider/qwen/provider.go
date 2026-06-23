@@ -41,7 +41,7 @@ func mapThinking(thinking *litellm.Thinking, _ string) (map[string]any, error) {
 		return nil, nil
 	}
 	if thinking.Mode == litellm.ThinkingDisabled {
-		return nil, fmt.Errorf("qwen: disabling thinking is not supported by the OpenAI-compatible endpoint")
+		return map[string]any{"enable_thinking": false}, nil
 	}
 	if thinking.Mode != litellm.ThinkingEnabled {
 		return nil, fmt.Errorf("qwen: unsupported thinking mode %d", thinking.Mode)
