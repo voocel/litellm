@@ -207,6 +207,45 @@ func TestBuildRequestRejectsStrictTool(t *testing.T) {
 	}
 }
 
+func TestBuildRequestProviderOptions(t *testing.T) {
+	provider := mustProvider(t)
+	wire, err := provider.buildRequest(&litellm.Request{
+		Model:    "gemini-3-pro",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{
+			ProviderOptionTopK:           10,
+			ProviderOptionCandidateCount: 1,
+			ProviderOptionSafetySettings: []map[string]any{
+				{"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	if wire.GenerationConfig == nil || wire.GenerationConfig.TopK == nil || *wire.GenerationConfig.TopK != 10 {
+		t.Fatalf("generation config topK = %+v", wire.GenerationConfig)
+	}
+	if wire.GenerationConfig.CandidateCount == nil || *wire.GenerationConfig.CandidateCount != 1 {
+		t.Fatalf("generation config candidateCount = %+v", wire.GenerationConfig)
+	}
+	if len(wire.SafetySettings) != 1 || wire.SafetySettings[0].Category != "HARM_CATEGORY_DANGEROUS_CONTENT" || wire.SafetySettings[0].Threshold != "BLOCK_ONLY_HIGH" {
+		t.Fatalf("safety settings = %+v", wire.SafetySettings)
+	}
+}
+
+func TestBuildRequestRejectsUnknownProviderOption(t *testing.T) {
+	provider := mustProvider(t)
+	_, err := provider.buildRequest(&litellm.Request{
+		Model:           "gemini-3-pro",
+		Messages:        []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{"unknown": true},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported provider option") {
+		t.Fatalf("expected provider option error, got %v", err)
+	}
+}
+
 func TestChatConvertsThinkingToolAndUsage(t *testing.T) {
 	provider, err := New(Config{
 		APIKey:  "test-key",

@@ -94,7 +94,7 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) (*anthropicRe
 		ToolChoice:    req.ToolChoice,
 		Metadata:      metadata,
 	}
-	thinking, err := convertThinking(req.Thinking, *req.MaxTokens, req.Temperature)
+	thinking, err := convertThinking(req.Thinking, *req.MaxTokens, req.Temperature, req.TopP, req.ToolChoice)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +170,7 @@ func anthropicMetadata(options litellm.ProviderOptions) (map[string]any, error) 
 	return metadata, nil
 }
 
-func convertThinking(thinking *litellm.Thinking, maxTokens int, temperature *float64) (*anthropicThinking, error) {
+func convertThinking(thinking *litellm.Thinking, maxTokens int, temperature, topP *float64, toolChoice any) (*anthropicThinking, error) {
 	if thinking == nil || thinking.Mode == litellm.ThinkingUnspecified {
 		return nil, nil
 	}
@@ -182,6 +182,12 @@ func convertThinking(thinking *litellm.Thinking, maxTokens int, temperature *flo
 	}
 	if temperature != nil && *temperature != 1 {
 		return nil, fmt.Errorf("anthropic: temperature must be 1 when thinking is enabled, got %g", *temperature)
+	}
+	if topP != nil && (*topP < 0.95 || *topP > 1) {
+		return nil, fmt.Errorf("anthropic: top_p must be between 0.95 and 1 when thinking is enabled, got %g", *topP)
+	}
+	if typ, ok := forcedThinkingToolChoice(toolChoice); ok {
+		return nil, fmt.Errorf("anthropic: tool_choice %q is not supported when thinking is enabled", typ)
 	}
 	budget := thinking.BudgetTokens
 	if budget == nil {
@@ -195,10 +201,52 @@ func convertThinking(thinking *litellm.Thinking, maxTokens int, temperature *flo
 	if *budget < 1024 {
 		return nil, fmt.Errorf("anthropic: thinking budget_tokens must be >= 1024, got %d", *budget)
 	}
-	if *budget > maxTokens {
-		return nil, fmt.Errorf("anthropic: thinking budget_tokens must be <= max_tokens, got %d > %d", *budget, maxTokens)
+	if *budget >= maxTokens {
+		return nil, fmt.Errorf("anthropic: thinking budget_tokens must be < max_tokens, got %d >= %d", *budget, maxTokens)
 	}
 	return &anthropicThinking{Type: "enabled", BudgetTokens: budget}, nil
+}
+
+func forcedThinkingToolChoice(choice any) (string, bool) {
+	typ := toolChoiceType(choice)
+	switch typ {
+	case "", "auto", "none":
+		return "", false
+	default:
+		return typ, true
+	}
+}
+
+func toolChoiceType(choice any) string {
+	switch v := choice.(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	case map[string]any:
+		typ, _ := v["type"].(string)
+		return typ
+	case map[string]string:
+		return v["type"]
+	case json.RawMessage:
+		var decoded struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(v, &decoded); err == nil {
+			return decoded.Type
+		}
+	}
+	data, err := json.Marshal(choice)
+	if err != nil {
+		return ""
+	}
+	var decoded struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return ""
+	}
+	return decoded.Type
 }
 
 func levelToBudget(level string) int {

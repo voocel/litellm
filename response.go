@@ -106,7 +106,7 @@ const (
 
 func NormalizeFinishReason(raw string) FinishReason {
 	switch raw {
-	case "stop", "end_turn", "STOP", "stop_sequence":
+	case "stop", "end_turn", "STOP", "stop_sequence", "pause_turn":
 		return FinishReasonStop
 	case "length", "max_tokens", "MAX_TOKENS":
 		return FinishReasonLength
@@ -116,7 +116,7 @@ func NormalizeFinishReason(raw string) FinishReason {
 		return FinishReasonStop
 	case "incomplete":
 		return FinishReasonLength
-	case "safety", "SAFETY", "content_filter", "RECITATION", "sensitive", "BLOCKLIST",
+	case "safety", "SAFETY", "content_filter", "refusal", "RECITATION", "sensitive", "BLOCKLIST",
 		"PROHIBITED_CONTENT", "SPII", "LANGUAGE", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT",
 		"IMAGE_RECITATION":
 		return FinishReasonSafety

@@ -203,6 +203,23 @@ func TestBuildRequestReasoningModelConstraints(t *testing.T) {
 	if wire.ReasoningEffort != "medium" {
 		t.Fatalf("reasoning_effort = %q, want medium", wire.ReasoningEffort)
 	}
+
+	topP := 0.9
+	wire, err = provider.buildRequest(&litellm.Request{
+		Model:    "gpt-5.1",
+		TopP:     &topP,
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		Thinking: &litellm.Thinking{
+			Mode:   litellm.ThinkingEnabled,
+			Effort: "minimal",
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest minimal reasoning model: %v", err)
+	}
+	if wire.ReasoningEffort != "minimal" || wire.TopP != nil {
+		t.Fatalf("reasoning_effort/top_p = %q/%v", wire.ReasoningEffort, wire.TopP)
+	}
 }
 
 func TestChatRetriesWhenRetryPolicyIsConfigured(t *testing.T) {

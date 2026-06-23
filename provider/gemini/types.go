@@ -2,6 +2,7 @@ package gemini
 
 type request struct {
 	Contents          []content         `json:"contents"`
+	SafetySettings    []safetySetting   `json:"safetySettings,omitempty"`
 	GenerationConfig  *generationConfig `json:"generationConfig,omitempty"`
 	Tools             []tool            `json:"tools,omitempty"`
 	ToolConfig        *toolConfig       `json:"toolConfig,omitempty"`
@@ -49,10 +50,17 @@ type generationConfig struct {
 	Temperature      *float64        `json:"temperature,omitempty"`
 	MaxOutputTokens  *int            `json:"maxOutputTokens,omitempty"`
 	TopP             *float64        `json:"topP,omitempty"`
+	TopK             *int            `json:"topK,omitempty"`
+	CandidateCount   *int            `json:"candidateCount,omitempty"`
 	StopSequences    []string        `json:"stopSequences,omitempty"`
 	ResponseMimeType string          `json:"responseMimeType,omitempty"`
 	ResponseSchema   any             `json:"responseJsonSchema,omitempty"`
 	ThinkingConfig   *thinkingConfig `json:"thinkingConfig,omitempty"`
+}
+
+type safetySetting struct {
+	Category  string `json:"category"`
+	Threshold string `json:"threshold"`
 }
 
 type thinkingConfig struct {

@@ -293,6 +293,78 @@ func TestResponseReasoningBlocksRoundTripThroughConfiguredField(t *testing.T) {
 	}
 }
 
+func TestChatConvertsPromptTokensDetailsCachedTokens(t *testing.T) {
+	provider, err := New(Config{
+		BaseURL: "https://compat.example",
+		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return jsonResponse(http.StatusOK, `{
+				"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],
+				"usage":{
+					"prompt_tokens":10,
+					"completion_tokens":2,
+					"total_tokens":12,
+					"prompt_tokens_details":{"cached_tokens":7}
+				}
+			}`), nil
+		}),
+	}, Spec{Name: "strict", Response: ResponseSpec{HasCacheTokens: true}})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	resp, err := provider.Chat(context.Background(), &litellm.Request{
+		Model:    "m",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	if resp.Usage.CacheReadTokens != 7 {
+		t.Fatalf("cache read tokens = %d, want 7", resp.Usage.CacheReadTokens)
+	}
+}
+
+func TestChatConvertsRefusalMessageAndContentPart(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "message_refusal",
+			body: `{"choices":[{"message":{"content":null,"refusal":"I can't help."},"finish_reason":"content_filter"}]}`,
+			want: "I can't help.",
+		},
+		{
+			name: "content_part_refusal",
+			body: `{"choices":[{"message":{"content":[{"type":"refusal","refusal":"I can't help."}]},"finish_reason":"content_filter"}]}`,
+			want: "I can't help.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider, err := New(Config{
+				BaseURL: "https://compat.example",
+				HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					return jsonResponse(http.StatusOK, tt.body), nil
+				}),
+			}, Spec{Name: "strict"})
+			if err != nil {
+				t.Fatalf("New returned error: %v", err)
+			}
+			resp, err := provider.Chat(context.Background(), &litellm.Request{
+				Model:    "m",
+				Messages: []litellm.Message{litellm.UserText("hi")},
+			})
+			if err != nil {
+				t.Fatalf("Chat returned error: %v", err)
+			}
+			if resp.Text() != tt.want {
+				t.Fatalf("text = %q, want %q", resp.Text(), tt.want)
+			}
+		})
+	}
+}
+
 func TestChatRejectsUnsupportedResponseContent(t *testing.T) {
 	provider, err := New(Config{
 		BaseURL: "https://compat.example",
@@ -400,6 +472,37 @@ func TestStreamCumulativeReasoningAndToolDeltas(t *testing.T) {
 	}
 	if resp.Usage.InputTokens != 1 || resp.Usage.OutputTokens != 2 || resp.FinishReason != litellm.FinishReasonToolCall {
 		t.Fatalf("usage/finish = %+v/%q", resp.Usage, resp.FinishReason)
+	}
+}
+
+func TestStreamConvertsRefusalAndCachedTokens(t *testing.T) {
+	provider, err := New(Config{
+		BaseURL: "https://compat.example/v1",
+		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return streamResponse(strings.Join([]string{
+				`data: {"choices":[{"index":0,"delta":{"refusal":"no"}}]}`,
+				`data: {"choices":[{"finish_reason":"content_filter"}],"usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11,"prompt_tokens_details":{"cached_tokens":6}}}`,
+				`data: [DONE]`,
+				``,
+			}, "\n")), nil
+		}),
+	}, Spec{Name: "strict", Response: ResponseSpec{HasCacheTokens: true}})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), &litellm.Request{
+		Model:    "m",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	resp, err := litellm.Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+	if resp.Text() != "no" || resp.Usage.CacheReadTokens != 6 || resp.FinishReason != litellm.FinishReasonSafety {
+		t.Fatalf("response = text %q usage %+v finish %q", resp.Text(), resp.Usage, resp.FinishReason)
 	}
 }
 

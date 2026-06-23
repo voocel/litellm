@@ -113,6 +113,9 @@ func (s *stream) events(event map[string]json.RawMessage) ([]litellm.Event, erro
 			litellm.DoneEvent{FinishReason: s.finish, Provider: "bedrock", Model: s.model},
 		}, nil
 	}
+	if err := s.streamException(event); err != nil {
+		return nil, err
+	}
 	raw, err := json.Marshal(event)
 	if err != nil {
 		return nil, bedrockStreamProviderError("bedrock: marshal unknown stream event", err)
@@ -149,7 +152,12 @@ func (s *stream) contentBlockDelta(data json.RawMessage) ([]litellm.Event, error
 	var delta struct {
 		ContentBlockIndex int `json:"contentBlockIndex"`
 		Delta             struct {
-			Text    string `json:"text"`
+			Text             string `json:"text"`
+			ReasoningContent *struct {
+				Text            string `json:"text"`
+				Signature       string `json:"signature"`
+				RedactedContent []byte `json:"redactedContent"`
+			} `json:"reasoningContent"`
 			ToolUse *struct {
 				Input string `json:"input"`
 			} `json:"toolUse"`
@@ -160,6 +168,14 @@ func (s *stream) contentBlockDelta(data json.RawMessage) ([]litellm.Event, error
 	}
 	if delta.Delta.Text != "" {
 		return []litellm.Event{litellm.ContentDelta{Text: delta.Delta.Text, ContentIndex: litellm.IntPtr(delta.ContentBlockIndex)}}, nil
+	}
+	if delta.Delta.ReasoningContent != nil {
+		return []litellm.Event{litellm.ReasoningDelta{
+			Text:      delta.Delta.ReasoningContent.Text,
+			Signature: delta.Delta.ReasoningContent.Signature,
+			Redacted:  append([]byte(nil), delta.Delta.ReasoningContent.RedactedContent...),
+			Index:     litellm.IntPtr(delta.ContentBlockIndex),
+		}}, nil
 	}
 	if delta.Delta.ToolUse != nil && delta.Delta.ToolUse.Input != "" {
 		return []litellm.Event{litellm.ToolUseDelta{
@@ -185,6 +201,34 @@ func (s *stream) contentBlockStop(data json.RawMessage) ([]litellm.Event, error)
 	delete(s.toolIDs, stop.ContentBlockIndex)
 	delete(s.toolNames, stop.ContentBlockIndex)
 	return []litellm.Event{litellm.ToolUseDone{ID: id, Index: litellm.IntPtr(stop.ContentBlockIndex)}}, nil
+}
+
+func (s *stream) streamException(event map[string]json.RawMessage) error {
+	for name, raw := range event {
+		switch name {
+		case "throttlingException":
+			return bedrockStreamError(litellm.ErrorTypeRateLimit, name, raw)
+		case "validationException":
+			return bedrockStreamError(litellm.ErrorTypeValidation, name, raw)
+		case "serviceUnavailableException":
+			return bedrockStreamError(litellm.ErrorTypeOverloaded, name, raw)
+		case "internalServerException", "modelStreamErrorException":
+			return bedrockStreamError(litellm.ErrorTypeProvider, name, raw)
+		}
+	}
+	return nil
+}
+
+func bedrockStreamError(errorType litellm.ErrorType, name string, raw json.RawMessage) error {
+	var payload struct {
+		Message string `json:"message"`
+	}
+	_ = json.Unmarshal(raw, &payload)
+	message := payload.Message
+	if message == "" {
+		message = name
+	}
+	return litellm.NewProviderError("bedrock", errorType, "bedrock: stream "+message)
 }
 
 func bedrockProviderEvent(name string, raw json.RawMessage) litellm.ProviderEvent {

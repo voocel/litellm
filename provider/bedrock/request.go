@@ -134,6 +134,8 @@ func convertAssistantBlocks(blocks []litellm.Block) ([]content, error) {
 		switch b := block.(type) {
 		case litellm.TextBlock:
 			out = append(out, content{Text: b.Text})
+		case litellm.ReasoningBlock:
+			out = append(out, convertReasoningContent(b))
 		case litellm.ToolUseBlock:
 			var input any = map[string]any{}
 			if len(b.Arguments) > 0 {
@@ -142,13 +144,21 @@ func convertAssistantBlocks(blocks []litellm.Block) ([]content, error) {
 				}
 			}
 			out = append(out, content{ToolUse: &toolUse{ToolUseID: b.ID, Name: b.Name, Input: input}})
-		case litellm.ReasoningBlock:
-			return nil, fmt.Errorf("Bedrock does not accept reasoning blocks in message history")
 		default:
 			return nil, fmt.Errorf("unsupported assistant block %T", block)
 		}
 	}
 	return out, nil
+}
+
+func convertReasoningContent(block litellm.ReasoningBlock) content {
+	if len(block.Redacted) > 0 {
+		return content{ReasoningContent: &reasoningContent{RedactedContent: append([]byte(nil), block.Redacted...)}}
+	}
+	return content{ReasoningContent: &reasoningContent{ReasoningText: &reasoningText{
+		Text:      block.Text,
+		Signature: block.Signature,
+	}}}
 }
 
 func convertToolResultBlocks(blocks []litellm.Block) ([]content, error) {

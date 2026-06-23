@@ -114,6 +114,9 @@ func (s *stream) events(chunk streamChunk) ([]litellm.Event, error) {
 			if text := s.findContent(delta); text != "" {
 				events = append(events, litellm.ContentDelta{Text: text, OutputIndex: litellm.IntPtr(choice.Index)})
 			}
+			if refusal, _ := delta["refusal"].(string); refusal != "" {
+				events = append(events, litellm.RefusalDelta{Text: refusal, OutputIndex: litellm.IntPtr(choice.Index)})
+			}
 			if s.reasoningAllowed() {
 				if reasoning := findReasoning(delta, s.reasoningFields()); reasoning != "" {
 					if s.spec.Stream.ReasoningCumulative {

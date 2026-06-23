@@ -25,6 +25,7 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) (*chatRequest
 	}
 	if p.isReasoningModel(req.Model) {
 		out.MaxCompletionTokens = req.MaxTokens
+		out.TopP = nil
 		if req.Thinking != nil && req.Thinking.Mode == litellm.ThinkingDisabled {
 			return nil, fmt.Errorf("openai: disabling thinking is not supported for reasoning chat models")
 		}

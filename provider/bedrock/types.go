@@ -15,16 +15,27 @@ type message struct {
 }
 
 type content struct {
-	Text       string      `json:"text,omitempty"`
-	Image      *image      `json:"image,omitempty"`
-	ToolUse    *toolUse    `json:"toolUse,omitempty"`
-	ToolResult *toolResult `json:"toolResult,omitempty"`
-	CachePoint *cachePoint `json:"cachePoint,omitempty"`
+	Text             string            `json:"text,omitempty"`
+	Image            *image            `json:"image,omitempty"`
+	ReasoningContent *reasoningContent `json:"reasoningContent,omitempty"`
+	ToolUse          *toolUse          `json:"toolUse,omitempty"`
+	ToolResult       *toolResult       `json:"toolResult,omitempty"`
+	CachePoint       *cachePoint       `json:"cachePoint,omitempty"`
 }
 
 type cachePoint struct {
 	Type string `json:"type"`
 	TTL  string `json:"ttl,omitempty"`
+}
+
+type reasoningContent struct {
+	ReasoningText   *reasoningText `json:"reasoningText,omitempty"`
+	RedactedContent []byte         `json:"redactedContent,omitempty"`
+}
+
+type reasoningText struct {
+	Text      string `json:"text"`
+	Signature string `json:"signature,omitempty"`
 }
 
 type image struct {

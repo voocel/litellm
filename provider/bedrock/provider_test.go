@@ -212,16 +212,20 @@ func TestBuildRequestRejectsInvalidCacheRetention(t *testing.T) {
 	}
 }
 
-func TestBuildRequestRejectsReasoningBlockHistory(t *testing.T) {
+func TestBuildRequestRoundTripsReasoningBlockHistory(t *testing.T) {
 	provider := mustProvider(t)
-	_, err := provider.buildRequest(&litellm.Request{
+	wire, err := provider.buildRequest(&litellm.Request{
 		Model: "anthropic.claude-sonnet-4-20250514-v1:0",
 		Messages: []litellm.Message{
-			litellm.Assistant(litellm.ReasoningBlock{Text: "think"}),
+			litellm.Assistant(litellm.ReasoningBlock{Text: "think", Signature: "sig"}),
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "does not accept reasoning blocks") {
-		t.Fatalf("expected reasoning block error, got %v", err)
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	block := wire.Messages[0].Content[0].ReasoningContent
+	if block == nil || block.ReasoningText == nil || block.ReasoningText.Text != "think" || block.ReasoningText.Signature != "sig" {
+		t.Fatalf("reasoning content = %#v", block)
 	}
 }
 
@@ -240,6 +244,7 @@ func TestChatSignsRequestAndConvertsResponse(t *testing.T) {
 			}
 			return jsonResponse(http.StatusOK, `{
 				"output":{"message":{"role":"assistant","content":[
+					{"reasoningContent":{"reasoningText":{"text":"think","signature":"sig"}}},
 					{"text":"hello"},
 					{"toolUse":{"toolUseId":"toolu_1","name":"lookup","input":{"q":"x"}}}
 				]}},
@@ -266,6 +271,13 @@ func TestChatSignsRequestAndConvertsResponse(t *testing.T) {
 	}
 	if resp.Text() != "hello" {
 		t.Fatalf("text = %q", resp.Text())
+	}
+	if resp.Reasoning() != "think" {
+		t.Fatalf("reasoning = %q", resp.Reasoning())
+	}
+	reasoning, ok := resp.Blocks[0].(litellm.ReasoningBlock)
+	if !ok || reasoning.Signature != "sig" {
+		t.Fatalf("reasoning block = %#v", resp.Blocks[0])
 	}
 	calls := resp.ToolCalls()
 	if len(calls) != 1 || calls[0].ID != "toolu_1" || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
@@ -334,7 +346,7 @@ func TestStreamConvertsEventStreamToTypedEvents(t *testing.T) {
 func TestStreamExposesUnknownContentBlockAsProviderEvent(t *testing.T) {
 	stream := newStream(&http.Response{
 		Body: io.NopCloser(bytes.NewReader(eventStream(
-			`{"contentBlockDelta":{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"hidden"}}}}`,
+			`{"contentBlockDelta":{"contentBlockIndex":0,"delta":{"audio":{"bytes":"abc"}}}}`,
 			`{"metadata":{"usage":{"inputTokens":1,"outputTokens":1,"totalTokens":2}}}`,
 		))),
 	}, "anthropic.claude")
@@ -347,8 +359,40 @@ func TestStreamExposesUnknownContentBlockAsProviderEvent(t *testing.T) {
 	if !ok {
 		t.Fatalf("event = %#v, want ProviderEvent", event)
 	}
-	if providerEvent.Name != "bedrock.contentBlockDelta" || !strings.Contains(string(providerEvent.Raw), "reasoningContent") {
+	if providerEvent.Name != "bedrock.contentBlockDelta" || !strings.Contains(string(providerEvent.Raw), "audio") {
 		t.Fatalf("provider event = %#v", providerEvent)
+	}
+}
+
+func TestStreamConvertsReasoningDelta(t *testing.T) {
+	stream := newStream(&http.Response{
+		Body: io.NopCloser(bytes.NewReader(eventStream(
+			`{"contentBlockDelta":{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"think","signature":"sig"}}}}`,
+			`{"metadata":{"usage":{"inputTokens":1,"outputTokens":1,"totalTokens":2}}}`,
+		))),
+	}, "anthropic.claude")
+	resp, err := litellm.Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+	if resp.Reasoning() != "think" {
+		t.Fatalf("reasoning = %q", resp.Reasoning())
+	}
+	reasoning, ok := resp.Blocks[0].(litellm.ReasoningBlock)
+	if !ok || reasoning.Signature != "sig" {
+		t.Fatalf("reasoning block = %#v", resp.Blocks[0])
+	}
+}
+
+func TestStreamConvertsExceptionEventsToErrors(t *testing.T) {
+	stream := newStream(&http.Response{
+		Body: io.NopCloser(bytes.NewReader(eventStream(
+			`{"throttlingException":{"message":"too many requests"}}`,
+		))),
+	}, "anthropic.claude")
+	_, err := stream.Next()
+	if err == nil || !litellm.IsRateLimitError(err) || !strings.Contains(err.Error(), "too many requests") {
+		t.Fatalf("expected rate limit stream error, got %v", err)
 	}
 }
 

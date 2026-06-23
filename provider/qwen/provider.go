@@ -23,7 +23,11 @@ func New(cfg Config) (*compat.Provider, error) {
 		},
 		Response: compat.ResponseSpec{
 			ModelFromResponse:         true,
+			ReasoningFields:           []string{"reasoning_content"},
 			HasCompletionTokenDetails: true,
+		},
+		Stream: compat.StreamSpec{
+			ReasoningFields: []string{"reasoning_content"},
 		},
 	})
 }

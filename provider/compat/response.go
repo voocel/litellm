@@ -34,6 +34,9 @@ func (p *Provider) convertResponse(resp *chatResponse, req *litellm.Request) (*l
 		return nil, fmt.Errorf("%s: convert response content: %w", p.Name(), err)
 	}
 	out.Blocks = append(out.Blocks, blocks...)
+	if choice.Message.Refusal != "" {
+		out.Blocks = append(out.Blocks, litellm.TextBlock{Text: choice.Message.Refusal})
+	}
 	for _, call := range choice.Message.ToolCalls {
 		if !json.Valid([]byte(call.Function.Arguments)) {
 			return nil, fmt.Errorf("%s: tool call %q arguments are not valid JSON", p.Name(), call.ID)
@@ -59,7 +62,12 @@ func convertUsage(u usage, spec Spec, provider, model string) litellm.Usage {
 		out.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
 	}
 	if spec.Response.HasCacheTokens {
-		out.CacheReadTokens = u.PromptCacheHitTokens
+		if u.PromptTokensDetails != nil {
+			out.CacheReadTokens = u.PromptTokensDetails.CachedTokens
+		}
+		if out.CacheReadTokens == 0 {
+			out.CacheReadTokens = u.PromptCacheHitTokens
+		}
 	}
 	return out
 }
@@ -85,6 +93,10 @@ func contentBlocks(raw json.RawMessage) ([]litellm.Block, error) {
 		switch partType {
 		case "text":
 			if text, _ := part["text"].(string); text != "" {
+				blocks = append(blocks, litellm.TextBlock{Text: text})
+			}
+		case "refusal":
+			if text, _ := part["refusal"].(string); text != "" {
 				blocks = append(blocks, litellm.TextBlock{Text: text})
 			}
 		default:

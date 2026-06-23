@@ -29,6 +29,9 @@ func convertResponse(resp *response, model string) (*litellm.Response, error) {
 		if block.Text != "" {
 			out.Blocks = append(out.Blocks, litellm.TextBlock{Text: block.Text})
 		}
+		if block.ReasoningContent != nil {
+			out.Blocks = append(out.Blocks, convertReasoningBlock(block.ReasoningContent))
+		}
 		if block.ToolUse != nil {
 			args, err := json.Marshal(block.ToolUse.Input)
 			if err != nil {
@@ -42,4 +45,20 @@ func convertResponse(resp *response, model string) (*litellm.Response, error) {
 		}
 	}
 	return out, nil
+}
+
+func convertReasoningBlock(block *reasoningContent) litellm.ReasoningBlock {
+	if block == nil {
+		return litellm.ReasoningBlock{}
+	}
+	if block.ReasoningText != nil {
+		return litellm.ReasoningBlock{
+			Text:      block.ReasoningText.Text,
+			Signature: block.ReasoningText.Signature,
+		}
+	}
+	if len(block.RedactedContent) > 0 {
+		return litellm.ReasoningBlock{Redacted: append([]byte(nil), block.RedactedContent...)}
+	}
+	return litellm.ReasoningBlock{}
 }

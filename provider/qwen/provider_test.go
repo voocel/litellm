@@ -47,6 +47,35 @@ func TestThinkingDisabledErrors(t *testing.T) {
 	}
 }
 
+func TestResponseReasoningContent(t *testing.T) {
+	p, err := New(compat.Config{
+		APIKey:  "key",
+		BaseURL: "https://qwen.test",
+		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body: io.NopCloser(strings.NewReader(`{
+					"choices":[{"message":{"content":"ok","reasoning_content":"think"},"finish_reason":"stop"}]
+				}`)),
+				Header: make(http.Header),
+			}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	resp, err := p.Chat(context.Background(), &litellm.Request{
+		Model:    "qwen-plus",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if resp.Text() != "ok" || resp.Reasoning() != "think" {
+		t.Fatalf("text/reasoning = %q/%q", resp.Text(), resp.Reasoning())
+	}
+}
+
 func captureBody(t *testing.T, req *litellm.Request) map[string]any {
 	t.Helper()
 	var body map[string]any

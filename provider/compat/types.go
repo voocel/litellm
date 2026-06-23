@@ -19,6 +19,7 @@ type choice struct {
 type message struct {
 	Role             string          `json:"role"`
 	Content          json.RawMessage `json:"content,omitempty"`
+	Refusal          string          `json:"refusal,omitempty"`
 	ToolCalls        []toolCall      `json:"tool_calls,omitempty"`
 	ReasoningSummary any             `json:"reasoning_summary,omitempty"`
 	ReasoningDetails any             `json:"reasoning_details,omitempty"`
@@ -42,9 +43,14 @@ type usage struct {
 	PromptTokens            int                      `json:"prompt_tokens"`
 	CompletionTokens        int                      `json:"completion_tokens"`
 	TotalTokens             int                      `json:"total_tokens"`
+	PromptTokensDetails     *promptTokensDetails     `json:"prompt_tokens_details,omitempty"`
 	PromptCacheHitTokens    int                      `json:"prompt_cache_hit_tokens,omitempty"`
 	PromptCacheMissTokens   int                      `json:"prompt_cache_miss_tokens,omitempty"`
 	CompletionTokensDetails *completionTokensDetails `json:"completion_tokens_details,omitempty"`
+}
+
+type promptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens,omitempty"`
 }
 
 type completionTokensDetails struct {

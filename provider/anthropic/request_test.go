@@ -222,6 +222,84 @@ func TestBuildRequestRejectsSilentThinkingBudgetDefault(t *testing.T) {
 	}
 }
 
+func TestBuildRequestRejectsThinkingBudgetEqualToMaxTokens(t *testing.T) {
+	provider, err := New(Config{APIKey: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	maxTokens := 1024
+	budget := 1024
+	_, err = provider.buildRequest(&litellm.Request{
+		Model:     "claude",
+		MaxTokens: &maxTokens,
+		Messages:  []litellm.Message{litellm.UserText("hi")},
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, BudgetTokens: &budget},
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), "budget_tokens must be < max_tokens") {
+		t.Fatalf("expected budget/max_tokens error, got %v", err)
+	}
+}
+
+func TestBuildRequestValidatesThinkingTopP(t *testing.T) {
+	provider, err := New(Config{APIKey: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	maxTokens := 2048
+	budget := 1024
+	topP := 0.94
+	_, err = provider.buildRequest(&litellm.Request{
+		Model:     "claude",
+		MaxTokens: &maxTokens,
+		TopP:      &topP,
+		Messages:  []litellm.Message{litellm.UserText("hi")},
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, BudgetTokens: &budget},
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), "top_p must be between 0.95 and 1") {
+		t.Fatalf("expected top_p error, got %v", err)
+	}
+
+	topP = 0.95
+	if _, err := provider.buildRequest(&litellm.Request{
+		Model:     "claude",
+		MaxTokens: &maxTokens,
+		TopP:      &topP,
+		Messages:  []litellm.Message{litellm.UserText("hi")},
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, BudgetTokens: &budget},
+	}, false); err != nil {
+		t.Fatalf("buildRequest returned error for top_p 0.95: %v", err)
+	}
+}
+
+func TestBuildRequestRejectsForcedToolChoiceWithThinking(t *testing.T) {
+	provider, err := New(Config{APIKey: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	maxTokens := 2048
+	budget := 1024
+	_, err = provider.buildRequest(&litellm.Request{
+		Model:      "claude",
+		MaxTokens:  &maxTokens,
+		Messages:   []litellm.Message{litellm.UserText("hi")},
+		Thinking:   &litellm.Thinking{Mode: litellm.ThinkingEnabled, BudgetTokens: &budget},
+		ToolChoice: map[string]any{"type": "tool", "name": "lookup"},
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), `tool_choice "tool" is not supported`) {
+		t.Fatalf("expected tool_choice error, got %v", err)
+	}
+
+	if _, err := provider.buildRequest(&litellm.Request{
+		Model:      "claude",
+		MaxTokens:  &maxTokens,
+		Messages:   []litellm.Message{litellm.UserText("hi")},
+		Thinking:   &litellm.Thinking{Mode: litellm.ThinkingEnabled, BudgetTokens: &budget},
+		ToolChoice: map[string]any{"type": "none"},
+	}, false); err != nil {
+		t.Fatalf("buildRequest returned error for tool_choice none: %v", err)
+	}
+}
+
 func TestBuildRequestRequiresMaxTokens(t *testing.T) {
 	provider, err := New(Config{APIKey: "test"})
 	if err != nil {

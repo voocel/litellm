@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/voocel/litellm"
@@ -11,10 +12,13 @@ import (
 
 const thoughtSignaturePlaceholder = "skip_thought_signature_validator"
 
+const (
+	ProviderOptionSafetySettings = "safety_settings"
+	ProviderOptionTopK           = "top_k"
+	ProviderOptionCandidateCount = "candidate_count"
+)
+
 func (p *Provider) buildRequest(req *litellm.Request) (*request, error) {
-	if len(req.ProviderOptions) > 0 {
-		return nil, fmt.Errorf("gemini: provider options are not supported yet")
-	}
 	out := &request{}
 	contents, system, err := convertMessages(req.Model, req.Messages)
 	if err != nil {
@@ -29,6 +33,9 @@ func (p *Provider) buildRequest(req *litellm.Request) (*request, error) {
 		return nil, err
 	}
 	out.GenerationConfig = generation
+	if err := applyProviderOptions(out, req.ProviderOptions); err != nil {
+		return nil, err
+	}
 	if len(req.Tools) > 0 {
 		converted, err := convertTools(req.Tools)
 		if err != nil {
@@ -38,6 +45,81 @@ func (p *Provider) buildRequest(req *litellm.Request) (*request, error) {
 		out.ToolConfig = convertToolChoice(req.ToolChoice)
 	}
 	return out, nil
+}
+
+func applyProviderOptions(out *request, options litellm.ProviderOptions) error {
+	for key, value := range options {
+		switch key {
+		case ProviderOptionSafetySettings:
+			settings, err := safetySettings(value)
+			if err != nil {
+				return err
+			}
+			out.SafetySettings = settings
+		case ProviderOptionTopK:
+			topK, err := intOption("gemini", key, value)
+			if err != nil {
+				return err
+			}
+			if out.GenerationConfig == nil {
+				out.GenerationConfig = &generationConfig{}
+			}
+			out.GenerationConfig.TopK = &topK
+		case ProviderOptionCandidateCount:
+			count, err := intOption("gemini", key, value)
+			if err != nil {
+				return err
+			}
+			if out.GenerationConfig == nil {
+				out.GenerationConfig = &generationConfig{}
+			}
+			out.GenerationConfig.CandidateCount = &count
+		default:
+			return fmt.Errorf("gemini: unsupported provider option %q", key)
+		}
+	}
+	return nil
+}
+
+func safetySettings(raw any) ([]safetySetting, error) {
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("gemini: marshal safety settings: %w", err)
+	}
+	var settings []safetySetting
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return nil, fmt.Errorf("gemini: provider option %q must be safety setting array: %w", ProviderOptionSafetySettings, err)
+	}
+	for i, setting := range settings {
+		if setting.Category == "" || setting.Threshold == "" {
+			return nil, fmt.Errorf("gemini: safety_settings[%d] requires category and threshold", i)
+		}
+	}
+	return settings, nil
+}
+
+func intOption(provider, key string, value any) (int, error) {
+	switch v := value.(type) {
+	case int:
+		return v, nil
+	case int32:
+		return int(v), nil
+	case int64:
+		return int(v), nil
+	case float64:
+		if v != float64(int(v)) {
+			return 0, fmt.Errorf("%s: provider option %q must be integer", provider, key)
+		}
+		return int(v), nil
+	case json.Number:
+		n, err := strconv.Atoi(string(v))
+		if err != nil {
+			return 0, fmt.Errorf("%s: provider option %q must be integer", provider, key)
+		}
+		return n, nil
+	default:
+		return 0, fmt.Errorf("%s: provider option %q must be integer", provider, key)
+	}
 }
 
 func convertMessages(model string, messages []litellm.Message) ([]content, []part, error) {
