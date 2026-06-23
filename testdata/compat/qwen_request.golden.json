@@ -1,0 +1,11 @@
+{
+  "enable_thinking": true,
+  "messages": [
+    {
+      "content": "hi",
+      "role": "user"
+    }
+  ],
+  "model": "qwen-plus",
+  "thinking_budget": 4096
+}

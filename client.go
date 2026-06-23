@@ -5,90 +5,77 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync/atomic"
+	"time"
 )
 
-// Client is a minimal, predictable client bound to a single Provider.
 type Client struct {
-	provider Provider
-	defaults DefaultConfig
-	hooks    []Hook
-	debug    bool
-	debugOut io.Writer
+	provider           Provider
+	hooks              []Hook
+	defaults           *RequestDefaults
+	repair             MessageRepairPolicy
+	debug              bool
+	debugOut           io.Writer
+	captureRawResponse bool
+	streamIdleTimeout  time.Duration
 }
 
-// DefaultConfig holds request-level defaults.
-type DefaultConfig struct {
-	MaxTokens   int     `json:"max_tokens"`
-	Temperature float64 `json:"temperature"`
-	TopP        float64 `json:"top_p"`
+type RequestDefaults struct {
+	MaxTokens   *int
+	Temperature *float64
+	TopP        *float64
 }
 
-// ClientOption configures the Client.
 type ClientOption func(*Client) error
 
-// New creates a client with an explicit Provider (no implicit discovery).
 func New(provider Provider, opts ...ClientOption) (*Client, error) {
 	if provider == nil {
 		return nil, fmt.Errorf("provider cannot be nil")
 	}
-
-	client := &Client{
-		provider: provider,
-		defaults: DefaultConfig{MaxTokens: 4096, Temperature: 1, TopP: 1.0},
-	}
-
+	client := &Client{provider: provider}
 	for _, opt := range opts {
 		if err := opt(client); err != nil {
-			return nil, fmt.Errorf("failed to apply option: %w", err)
+			return nil, fmt.Errorf("apply client option: %w", err)
 		}
 	}
-
-	if err := provider.Validate(); err != nil {
-		return nil, fmt.Errorf("%s provider validation failed: %w", provider.Name(), err)
-	}
-
 	return client, nil
 }
 
-// NewWithProvider creates a client from provider name and config.
-func NewWithProvider(name string, config ProviderConfig, opts ...ClientOption) (*Client, error) {
-	if err := validateProviderName(name); err != nil {
-		return nil, err
-	}
-	provider, err := createProvider(name, config)
-	if err != nil {
-		return nil, err
-	}
-	return New(provider, opts...)
-}
-
-func validateProviderName(name string) error {
-	if normalizeProviderName(name) == "" {
-		return fmt.Errorf("provider name cannot be empty")
-	}
-	return nil
-}
-
-// WithDefaults sets request-level defaults (applies only when fields are unset).
-func WithDefaults(maxTokens int, temperature float64, topP float64) ClientOption {
+func WithDefaults(defaults RequestDefaults) ClientOption {
 	return func(c *Client) error {
-		if maxTokens <= 0 {
-			return fmt.Errorf("maxTokens must be positive")
-		}
-		if temperature < 0 || temperature > 2 {
-			return fmt.Errorf("temperature must be between 0 and 2")
-		}
-		if topP < 0 || topP > 1 {
-			return fmt.Errorf("topP must be between 0 and 1")
-		}
-		c.defaults.MaxTokens = maxTokens
-		c.defaults.Temperature = temperature
-		c.defaults.TopP = topP
+		c.defaults = &defaults
 		return nil
 	}
 }
 
-// WithDebug enables debug logging to stderr.
+func WithMessageRepair(policies ...MessageRepairPolicy) ClientOption {
+	return func(c *Client) error {
+		var policy MessageRepairPolicy
+		for _, p := range policies {
+			policy |= p
+		}
+		c.repair = policy
+		return nil
+	}
+}
+
+func WithCaptureRawResponse(enabled bool) ClientOption {
+	return func(c *Client) error {
+		c.captureRawResponse = enabled
+		return nil
+	}
+}
+
+func WithStreamIdleTimeout(timeout time.Duration) ClientOption {
+	return func(c *Client) error {
+		if timeout < 0 {
+			return fmt.Errorf("stream idle timeout cannot be negative")
+		}
+		c.streamIdleTimeout = timeout
+		return nil
+	}
+}
+
 func WithDebug(enabled bool) ClientOption {
 	return func(c *Client) error {
 		c.debug = enabled
@@ -99,8 +86,6 @@ func WithDebug(enabled bool) ClientOption {
 	}
 }
 
-// WithDebugOutput enables debug logging to a custom writer.
-// If w is nil, debug logging is disabled.
 func WithDebugOutput(w io.Writer) ClientOption {
 	return func(c *Client) error {
 		if w == nil {
@@ -114,45 +99,85 @@ func WithDebugOutput(w io.Writer) ClientOption {
 	}
 }
 
-// ProviderName returns the name of the bound provider.
 func (c *Client) ProviderName() string {
-	if c.provider == nil {
+	if c == nil || c.provider == nil {
 		return ""
 	}
 	return c.provider.Name()
 }
 
-// Chat executes a non-streaming request.
-func (c *Client) Chat(ctx context.Context, req *Request) (*Response, error) {
-	return c.executeRequestCall(ctx, req, requestCallOptions{
-		operation: "chat",
-	}, func(ctx context.Context, prepared *Request) (*Response, error) {
-		return c.provider.Chat(ctx, prepared)
-	})
+func (c *Client) Chat(ctx context.Context, req Request) (*Response, error) {
+	prepared, warnings, err := c.prepareRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	stampWarnings(warnings, c.ProviderName())
+	meta := c.newCallMeta("chat", prepared.Model, false)
+	c.notifyBeforeRequest(ctx, meta, prepared)
+	start := meta.StartedAt
+	resp, err := c.provider.Chat(ctx, prepared)
+	if err != nil {
+		err = WrapError(err, c.provider.Name())
+	}
+	if err == nil {
+		err = validateResponse(resp, c.provider.Name(), prepared.Model)
+	}
+	if resp != nil {
+		resp.Warnings = append(warnings, resp.Warnings...)
+		finalizeResponse(resp, c.provider.Name(), prepared.Model)
+	}
+	meta.Duration = time.Since(start)
+	c.notifyAfterResponse(ctx, meta, resp, err)
+	return resp, err
 }
 
-// Stream executes a streaming request.
-func (c *Client) Stream(ctx context.Context, req *Request) (StreamReader, error) {
-	return c.executeRequestStreamCall(ctx, req, requestCallOptions{
-		operation: "stream",
-	}, func(ctx context.Context, prepared *Request) (StreamReader, error) {
-		return c.provider.Stream(ctx, prepared)
-	})
+func (c *Client) Stream(ctx context.Context, req Request) (Stream, error) {
+	prepared, warnings, err := c.prepareRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	streamCtx := ctx
+	var cancel context.CancelFunc
+	if c.streamIdleTimeout > 0 {
+		streamCtx, cancel = context.WithCancel(ctx)
+	}
+	stampWarnings(warnings, c.ProviderName())
+	meta := c.newCallMeta("stream", prepared.Model, true)
+	c.notifyBeforeRequest(streamCtx, meta, prepared)
+	start := meta.StartedAt
+	stream, err := c.provider.Stream(streamCtx, prepared)
+	if err != nil {
+		err = WrapError(err, c.provider.Name())
+	}
+	meta.Duration = time.Since(start)
+	c.notifyAfterResponse(streamCtx, meta, nil, err)
+	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		return nil, err
+	}
+	if stream == nil {
+		if cancel != nil {
+			cancel()
+		}
+		err := NewProviderError(c.provider.Name(), ErrorTypeInternal, "provider returned nil stream without error")
+		return nil, err
+	}
+	stream = wrapProviderStreamErrors(c.provider.Name(), stream)
+	stream = newStreamIdleWatchdog(stream, cancel, c.streamIdleTimeout, c.provider.Name())
+	stream = prependWarningEvents(stream, warnings)
+	return newHookedStream(streamCtx, meta, c.hooks, stream), nil
 }
 
-// ListModels returns the list of available models for the bound provider (if supported).
 func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	if c == nil || c.provider == nil {
-		return nil, NewError(ErrorTypeValidation, "client provider cannot be nil")
+		return nil, NewError(ErrorTypeValidation, "client has no provider")
 	}
-
-	lister, ok := c.provider.(interface {
-		ListModels(context.Context) ([]ModelInfo, error)
-	})
+	lister, ok := c.provider.(ModelLister)
 	if !ok {
-		return nil, NewError(ErrorTypeValidation, fmt.Sprintf("%s provider does not support model listing", c.provider.Name()))
+		return nil, NewProviderError(c.provider.Name(), ErrorTypeValidation, fmt.Sprintf("%s provider does not support model listing", c.provider.Name()))
 	}
-
 	models, err := lister.ListModels(ctx)
 	if err != nil {
 		return nil, WrapError(err, c.provider.Name())
@@ -160,20 +185,43 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	return models, nil
 }
 
-// Responses executes an OpenAI Responses API request on an OpenAI provider.
-func (c *Client) Responses(ctx context.Context, req *OpenAIResponsesRequest) (*Response, error) {
-	return c.executeResponsesCall(ctx, req, responsesCallOptions{
-		operation: "responses",
-	}, func(ctx context.Context, provider responsesProvider, prepared *OpenAIResponsesRequest) (*Response, error) {
-		return provider.Responses(ctx, prepared)
-	})
+func (c *Client) prepareRequest(req Request) (*Request, []Warning, error) {
+	prepared := cloneRequest(req)
+	if c.defaults != nil {
+		applyDefaults(prepared, *c.defaults)
+	}
+	prepared.captureRawResponse = c.captureRawResponse
+	warnings, err := repairRequest(prepared, c.repair)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := validateRequest(prepared); err != nil {
+		return nil, nil, err
+	}
+	return prepared, warnings, nil
 }
 
-// ResponsesStream executes a streaming OpenAI Responses API request.
-func (c *Client) ResponsesStream(ctx context.Context, req *OpenAIResponsesRequest) (StreamReader, error) {
-	return c.executeResponsesStreamCall(ctx, req, responsesCallOptions{
-		operation: "responses_stream",
-	}, func(ctx context.Context, provider responsesStreamProvider, prepared *OpenAIResponsesRequest) (StreamReader, error) {
-		return provider.ResponsesStream(ctx, prepared)
-	})
+func (c *Client) newCallMeta(operation, model string, streaming bool) CallMeta {
+	return CallMeta{
+		CallID:    fmt.Sprintf("call_%d", callIDSeq.Add(1)),
+		Provider:  c.ProviderName(),
+		Operation: operation,
+		Model:     model,
+		Streaming: streaming,
+		StartedAt: time.Now(),
+	}
+}
+
+var callIDSeq atomic.Uint64
+
+func applyDefaults(req *Request, defaults RequestDefaults) {
+	if req.MaxTokens == nil && defaults.MaxTokens != nil {
+		req.MaxTokens = IntPtr(*defaults.MaxTokens)
+	}
+	if req.Temperature == nil && defaults.Temperature != nil {
+		req.Temperature = Float64Ptr(*defaults.Temperature)
+	}
+	if req.TopP == nil && defaults.TopP != nil {
+		req.TopP = Float64Ptr(*defaults.TopP)
+	}
 }

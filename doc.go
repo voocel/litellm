@@ -1,116 +1,81 @@
 /*
-Package litellm provides a predictable, explicit client for multiple LLM providers.
+Package litellm provides a small, explicit multi-provider LLM SDK core.
 
-# Design Principles
-
-  - Explicit configuration: no environment auto-discovery, no auto-routing
-  - Single-provider client: each Client binds exactly one Provider
-  - Predictable behavior: fail fast instead of guessing
+The root package owns the provider-agnostic domain model: Request, Response,
+Message, Block, Stream, Event, structured errors, warnings, hooks, and pricing
+helpers. Concrete providers live in provider-specific subpackages.
 
 # Quick Start
 
-Create a client explicitly:
+Create a provider with its package-specific config, then bind a Client:
 
-	client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
-	    APIKey: os.Getenv("OPENAI_API_KEY"),
+	import (
+	    "context"
+	    "fmt"
+	    "os"
+
+	    "github.com/voocel/litellm"
+	    "github.com/voocel/litellm/provider/anthropic"
+	)
+
+	provider, err := anthropic.New(anthropic.Config{
+	    APIKey: os.Getenv("ANTHROPIC_API_KEY"),
 	})
 	if err != nil {
-	    log.Fatal(err)
+	    panic(err)
+	}
+	client, err := litellm.New(provider)
+	if err != nil {
+	    panic(err)
 	}
 
-	resp, err := client.Chat(context.Background(), &litellm.Request{
-	    Model: "gpt-4o-mini",
-	    Messages: []litellm.Message{
-	        {Role: "user", Content: "Explain AI in one sentence."},
-	    },
+	maxTokens := 1024
+	resp, err := client.Chat(context.Background(), litellm.Request{
+	    Model:     "claude-sonnet-4-5",
+	    MaxTokens: &maxTokens,
+	    Messages:  []litellm.Message{litellm.UserText("Explain AI in one sentence.")},
 	})
+	if err != nil {
+	    panic(err)
+	}
+	fmt.Println(resp.Text())
+
+# Blocks
+
+Message and Response content is represented as ordered Blocks. This preserves
+the order of text, reasoning, tool use, tool results, cache markers, and opaque
+provider signatures across multi-turn agent workflows.
 
 # Streaming
 
-	stream, err := client.Stream(ctx, &litellm.Request{
-	    Model: "gpt-4o-mini",
-	    Messages: []litellm.Message{
-	        {Role: "user", Content: "Tell me a joke."},
-	    },
-	})
+Providers stream typed Event values. Use a type switch for real-time handling
+or Collect to aggregate a stream into a Response:
+Stream is intended for single-goroutine consumption; do not call Next
+concurrently.
+
+	stream, err := client.Stream(ctx, req)
 	if err != nil {
-	    log.Fatal(err)
+	    panic(err)
 	}
 	defer stream.Close()
 
 	for {
-	    chunk, err := stream.Next()
-	    if err != nil || chunk.Done {
-	        break
+	    event, err := stream.Next()
+	    if err != nil {
+	        panic(err)
 	    }
-	    fmt.Print(chunk.Content)
-	}
-
-Or collect the full response:
-
-	resp, err := litellm.CollectStream(stream)
-	if err != nil {
-	    log.Fatal(err)
-	}
-	fmt.Print(resp.Content)
-
-Or stream while aggregating:
-
-	resp, err := litellm.CollectStreamWithHandler(stream, func(chunk *litellm.StreamChunk) {
-	    if chunk.Type == litellm.ChunkTypeContent && chunk.Content != "" {
-	        fmt.Print(chunk.Content)
+	    switch e := event.(type) {
+	    case litellm.ContentDelta:
+	        fmt.Print(e.Text)
+	    case litellm.DoneEvent:
+	        return
 	    }
-	})
-	if err != nil {
-	    log.Fatal(err)
 	}
-	fmt.Print(resp.Content)
 
-# OpenAI Responses API
+# Design
 
-Use a dedicated request type for Responses API:
-
-	resp, err := client.Responses(ctx, &litellm.OpenAIResponsesRequest{
-	    Model: "gpt-5.5",
-	    Messages: []litellm.Message{
-	        {Role: "user", Content: "Solve 15*8 step by step."},
-	    },
-	    ReasoningEffort:  "medium",
-	    ReasoningSummary: "auto",
-	    MaxOutputTokens:  litellm.IntPtr(800),
-	})
-	_ = resp
-
-# Custom Providers
-
-Implement the Provider interface and register it:
-
-	type MyProvider struct{}
-	func (p *MyProvider) Name() string { return "myprovider" }
-	func (p *MyProvider) Validate() error { return nil }
-	func (p *MyProvider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) { ... }
-	func (p *MyProvider) Stream(ctx context.Context, req *litellm.Request) (litellm.StreamReader, error) { ... }
-
-	litellm.RegisterProviderWithDescriptor(litellm.ProviderDescriptor{
-	    Name:       "myprovider",
-	    DefaultURL: "https://api.example.com/v1",
-	    Factory: func(cfg litellm.ProviderConfig) litellm.Provider {
-	        return &MyProvider{}
-	    },
-	})
-
-Custom provider contract:
-
-  - Chat should validate request basics and return canonical fields when possible:
-    Response.Provider, Response.Model, Response.FinishReason, and Response.Usage.
-  - Stream should emit ChunkTypeContent for text deltas, ReasoningContent for
-    reasoning deltas, ToolCallDelta for tool streaming, and a final chunk with Done=true.
-  - ToolCallDelta.Index must remain stable across all deltas of the same tool call.
-  - Prefer returning LiteLLMError (or errors wrapped by WrapError) so upper layers
-    can classify auth, rate-limit, timeout, model, and validation failures consistently.
-
-# Thread Safety
-
-Client is safe for concurrent use. StreamReader is not goroutine-safe and must be consumed by a single goroutine.
+The SDK is intentionally not a gateway, router, agent runtime, account system,
+or request scheduler. It binds one Client to one Provider and exposes explicit
+configuration and local validation.
 */
 package litellm

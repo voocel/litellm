@@ -30,15 +30,15 @@ func TestNonStreaming(t *testing.T) {
 	h, rec := newTestHook(t)
 	ctx := context.Background()
 	meta := litellm.CallMeta{CallID: "c1", Provider: "openai", Model: "gpt-4", Operation: "chat"}
-	req := &litellm.Request{Model: "gpt-4", Messages: []litellm.Message{{Role: "user", Content: "hi"}}}
+	req := &litellm.Request{Model: "gpt-4", Messages: []litellm.Message{litellm.UserText("hi")}}
 
 	h.BeforeRequest(ctx, meta, req)
 	h.AfterResponse(ctx, meta, &litellm.Response{
-		Content:      "hello",
+		Blocks:       []litellm.Block{litellm.TextBlock{Text: "hello"}},
 		Model:        "gpt-4",
 		Provider:     "openai",
-		FinishReason: "stop",
-		Usage:        litellm.Usage{PromptTokens: 10, CompletionTokens: 5},
+		FinishReason: litellm.FinishReasonStop,
+		Usage:        litellm.Usage{InputTokens: 10, OutputTokens: 5},
 	}, nil)
 
 	spans := rec.Ended()
@@ -74,20 +74,16 @@ func TestStreaming(t *testing.T) {
 	ctx := context.Background()
 	meta := litellm.CallMeta{CallID: "s1", Provider: "anthropic", Model: "claude", Operation: "stream", Streaming: true}
 
-	h.BeforeRequest(ctx, meta, &litellm.Request{Model: "claude", Messages: []litellm.Message{{Role: "user", Content: "hi"}}})
+	h.BeforeRequest(ctx, meta, &litellm.Request{Model: "claude", Messages: []litellm.Message{litellm.UserText("hi")}})
 	// stream established: resp nil, no span yet
 	h.AfterResponse(ctx, meta, nil, nil)
 	if len(rec.Ended()) != 0 {
 		t.Fatal("span ended too early on streaming")
 	}
-	h.OnStreamChunk(ctx, meta, &litellm.StreamChunk{Content: "hel"})
-	h.OnStreamChunk(ctx, meta, &litellm.StreamChunk{Content: "lo"})
-	h.OnStreamChunk(ctx, meta, &litellm.StreamChunk{
-		Done:         true,
-		Model:        "claude",
-		FinishReason: "stop",
-		Usage:        &litellm.Usage{PromptTokens: 7, CompletionTokens: 3},
-	})
+	h.OnStreamEvent(ctx, meta, litellm.ContentDelta{Text: "hel"})
+	h.OnStreamEvent(ctx, meta, litellm.ContentDelta{Text: "lo"})
+	h.OnStreamEvent(ctx, meta, litellm.UsageEvent{Usage: litellm.Usage{InputTokens: 7, OutputTokens: 3}})
+	h.OnStreamEvent(ctx, meta, litellm.DoneEvent{FinishReason: litellm.FinishReasonStop})
 
 	spans := rec.Ended()
 	if len(spans) != 1 {
@@ -127,8 +123,8 @@ func TestCaptureContentDisabled(t *testing.T) {
 	ctx := context.Background()
 	meta := litellm.CallMeta{CallID: "n1", Provider: "openai", Model: "gpt-4", Operation: "chat"}
 
-	h.BeforeRequest(ctx, meta, &litellm.Request{Model: "gpt-4", Messages: []litellm.Message{{Role: "user", Content: "secret"}}})
-	h.AfterResponse(ctx, meta, &litellm.Response{Content: "private", Usage: litellm.Usage{PromptTokens: 1, CompletionTokens: 1}}, nil)
+	h.BeforeRequest(ctx, meta, &litellm.Request{Model: "gpt-4", Messages: []litellm.Message{litellm.UserText("secret")}})
+	h.AfterResponse(ctx, meta, &litellm.Response{Blocks: []litellm.Block{litellm.TextBlock{Text: "private"}}, Usage: litellm.Usage{InputTokens: 1, OutputTokens: 1}}, nil)
 
 	a := attrMap(rec.Ended()[0].Attributes())
 	if _, ok := a[attrPrompt]; ok {
@@ -151,10 +147,10 @@ func TestStreamEndAbortClosesSpan(t *testing.T) {
 	ctx := context.Background()
 	meta := litellm.CallMeta{CallID: "abort", Provider: "openai", Model: "gpt-4", Operation: "stream", Streaming: true}
 
-	h.BeforeRequest(ctx, meta, &litellm.Request{Model: "gpt-4", Messages: []litellm.Message{{Role: "user", Content: "hi"}}})
+	h.BeforeRequest(ctx, meta, &litellm.Request{Model: "gpt-4", Messages: []litellm.Message{litellm.UserText("hi")}})
 	h.AfterResponse(ctx, meta, nil, nil) // stream established
-	h.OnStreamChunk(ctx, meta, &litellm.StreamChunk{Content: "par"})
-	h.OnStreamChunk(ctx, meta, &litellm.StreamChunk{Content: "tial"})
+	h.OnStreamEvent(ctx, meta, litellm.ContentDelta{Text: "par"})
+	h.OnStreamEvent(ctx, meta, litellm.ContentDelta{Text: "tial"})
 	h.OnStreamEnd(ctx, meta, context.DeadlineExceeded) // no Done chunk
 
 	spans := rec.Ended()
@@ -178,7 +174,7 @@ func TestStreamEndCleanCloseClosesSpan(t *testing.T) {
 
 	h.BeforeRequest(ctx, meta, nil)
 	h.AfterResponse(ctx, meta, nil, nil)
-	h.OnStreamChunk(ctx, meta, &litellm.StreamChunk{Content: "hi"})
+	h.OnStreamEvent(ctx, meta, litellm.ContentDelta{Text: "hi"})
 	h.OnStreamEnd(ctx, meta, nil)
 
 	spans := rec.Ended()
@@ -199,12 +195,8 @@ func TestStreamEndAfterDoneIsNoop(t *testing.T) {
 
 	h.BeforeRequest(ctx, meta, nil)
 	h.AfterResponse(ctx, meta, nil, nil)
-	h.OnStreamChunk(ctx, meta, &litellm.StreamChunk{
-		Done:         true,
-		Model:        "claude",
-		FinishReason: "stop",
-		Usage:        &litellm.Usage{PromptTokens: 2, CompletionTokens: 1},
-	})
+	h.OnStreamEvent(ctx, meta, litellm.UsageEvent{Usage: litellm.Usage{InputTokens: 2, OutputTokens: 1}})
+	h.OnStreamEvent(ctx, meta, litellm.DoneEvent{FinishReason: litellm.FinishReasonStop})
 	h.OnStreamEnd(ctx, meta, nil) // late terminal: span already gone from the map
 
 	if got := len(rec.Ended()); got != 1 {
@@ -228,7 +220,7 @@ func TestWithSpanAttributes(t *testing.T) {
 	meta := litellm.CallMeta{CallID: "c1", Provider: "openai", Model: "gpt-4", Operation: "chat"}
 
 	h.BeforeRequest(ctx, meta, nil)
-	h.AfterResponse(ctx, meta, &litellm.Response{Content: "ok"}, nil)
+	h.AfterResponse(ctx, meta, &litellm.Response{Blocks: []litellm.Block{litellm.TextBlock{Text: "ok"}}}, nil)
 
 	a := attrMap(rec.Ended()[0].Attributes())
 	if got := a["langfuse.session.id"].AsString(); got != "sess-42" {
@@ -242,7 +234,7 @@ func TestWithSpanAttributesNilResolverResult(t *testing.T) {
 	h, rec := newTestHook(t, WithSpanAttributes(func(context.Context) []attribute.KeyValue { return nil }))
 	meta := litellm.CallMeta{CallID: "c2", Provider: "openai", Model: "gpt-4", Operation: "chat"}
 	h.BeforeRequest(context.Background(), meta, nil)
-	h.AfterResponse(context.Background(), meta, &litellm.Response{Content: "ok"}, nil)
+	h.AfterResponse(context.Background(), meta, &litellm.Response{Blocks: []litellm.Block{litellm.TextBlock{Text: "ok"}}}, nil)
 
 	a := attrMap(rec.Ended()[0].Attributes())
 	if _, ok := a["langfuse.session.id"]; ok {
@@ -260,7 +252,7 @@ func TestUnknownCallID(t *testing.T) {
 	meta := litellm.CallMeta{CallID: "ghost", Provider: "openai", Model: "gpt-4", Operation: "chat"}
 
 	h.AfterResponse(ctx, meta, &litellm.Response{}, nil)
-	h.OnStreamChunk(ctx, meta, &litellm.StreamChunk{Done: true})
+	h.OnStreamEvent(ctx, meta, litellm.DoneEvent{})
 	h.OnStreamEnd(ctx, meta, context.Canceled)
 	if len(rec.Ended()) != 0 {
 		t.Fatal("no span should be created for unknown call id")

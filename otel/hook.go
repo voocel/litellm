@@ -17,7 +17,7 @@ import (
 )
 
 // callState tracks an in-flight call between the BeforeRequest /
-// OnStreamChunk / AfterResponse callbacks, keyed by litellm CallMeta.CallID.
+// OnStreamEvent / AfterResponse callbacks, keyed by litellm CallMeta.CallID.
 // content accumulates streamed output (non-streaming reads it from Response).
 type callState struct {
 	span    trace.Span
@@ -67,7 +67,7 @@ func (h *OTelHook) BeforeRequest(ctx context.Context, meta litellm.CallMeta, req
 
 // AfterResponse finishes non-streaming spans. For streaming calls it fires when
 // the stream is established (resp == nil) — the span is finished in
-// OnStreamChunk on the final chunk; only a stream-setup error is handled here.
+// OnStreamEvent on the final DoneEvent; only a stream-setup error is handled here.
 func (h *OTelHook) AfterResponse(ctx context.Context, meta litellm.CallMeta, resp *litellm.Response, err error) {
 	defer recoverHook()
 	if meta.Streaming && err == nil {
@@ -84,19 +84,18 @@ func (h *OTelHook) AfterResponse(ctx context.Context, meta litellm.CallMeta, res
 		return
 	}
 	if resp != nil {
-		stampResponse(st.span, resp.Model, resp.FinishReason, &resp.Usage)
-		if h.captureContent && resp.Content != "" {
-			st.span.SetAttributes(attribute.String(attrCompletion, resp.Content))
+		stampResponse(st.span, resp.Model, string(resp.FinishReason), &resp.Usage)
+		if h.captureContent && resp.Text() != "" {
+			st.span.SetAttributes(attribute.String(attrCompletion, resp.Text()))
 		}
 	}
 	st.span.End()
 }
 
-// OnStreamChunk accumulates streamed output and finishes the span on the final
-// chunk, where the aggregated usage becomes available.
-func (h *OTelHook) OnStreamChunk(ctx context.Context, meta litellm.CallMeta, chunk *litellm.StreamChunk) {
+// OnStreamEvent accumulates streamed output and finishes the span on DoneEvent.
+func (h *OTelHook) OnStreamEvent(ctx context.Context, meta litellm.CallMeta, event litellm.Event) {
 	defer recoverHook()
-	if chunk == nil {
+	if event == nil {
 		return
 	}
 	h.mu.Lock()
@@ -105,26 +104,31 @@ func (h *OTelHook) OnStreamChunk(ctx context.Context, meta litellm.CallMeta, chu
 	if st == nil {
 		return
 	}
-	if h.captureContent && chunk.Content != "" {
-		st.content.WriteString(chunk.Content)
-	}
-	if !chunk.Done {
+	switch e := event.(type) {
+	case litellm.ContentDelta:
+		if h.captureContent && e.Text != "" {
+			st.content.WriteString(e.Text)
+		}
+	case litellm.DoneEvent:
+		stampResponse(st.span, meta.Model, string(e.FinishReason), nil)
+		if h.captureContent && st.content.Len() > 0 {
+			st.span.SetAttributes(attribute.String(attrCompletion, st.content.String()))
+		}
+		st.span.End()
+		h.mu.Lock()
+		delete(h.spans, meta.CallID)
+		h.mu.Unlock()
+	case litellm.UsageEvent:
+		stampResponse(st.span, meta.Model, "", &e.Usage)
+	default:
 		return
 	}
-	stampResponse(st.span, chunk.Model, chunk.FinishReason, chunk.Usage)
-	if h.captureContent && st.content.Len() > 0 {
-		st.span.SetAttributes(attribute.String(attrCompletion, st.content.String()))
-	}
-	st.span.End()
-	h.mu.Lock()
-	delete(h.spans, meta.CallID)
-	h.mu.Unlock()
 }
 
 // OnStreamEnd finalizes a streaming span that did not complete through a final
 // Done chunk — the stream aborted (provider error, context cancel; err != nil)
 // or the caller closed it early (err == nil). When the stream completed normally
-// the span was already ended in OnStreamChunk and removed from the map, so this
+// the span was already ended in OnStreamEvent and removed from the map, so this
 // is a no-op for the happy path. Whatever output streamed before termination is
 // still flushed, so partial generations remain visible in the trace.
 func (h *OTelHook) OnStreamEnd(ctx context.Context, meta litellm.CallMeta, err error) {
@@ -141,6 +145,10 @@ func (h *OTelHook) OnStreamEnd(ctx context.Context, meta litellm.CallMeta, err e
 		st.span.SetAttributes(attribute.String(attrCompletion, st.content.String()))
 	}
 	st.span.End()
+}
+
+func (h *OTelHook) OnWarning(ctx context.Context, meta litellm.CallMeta, warning litellm.Warning) {
+	defer recoverHook()
 }
 
 // take removes and returns the call state for id, or nil if absent.
@@ -163,11 +171,11 @@ func stampResponse(span trace.Span, model, finishReason string, usage *litellm.U
 	}
 	if usage != nil {
 		span.SetAttributes(
-			attribute.Int(attrInputTokens, usage.PromptTokens),
-			attribute.Int(attrOutputTokens, usage.CompletionTokens),
+			attribute.Int(attrInputTokens, usage.InputTokens),
+			attribute.Int(attrOutputTokens, usage.OutputTokens),
 		)
-		if usage.CacheReadInputTokens > 0 {
-			span.SetAttributes(attribute.Int(attrCacheReadTokens, usage.CacheReadInputTokens))
+		if usage.CacheReadTokens > 0 {
+			span.SetAttributes(attribute.Int(attrCacheReadTokens, usage.CacheReadTokens))
 		}
 	}
 }

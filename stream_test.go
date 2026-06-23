@@ -1,0 +1,170 @@
+package litellm
+
+import (
+	"errors"
+	"io"
+	"strings"
+	"testing"
+)
+
+func TestCollectPreservesBlockOrder(t *testing.T) {
+	stream := &eventSliceStream{events: []Event{
+		ContentDelta{Text: "first "},
+		ReasoningDelta{Text: "think", Signature: "sig"},
+		ContentDelta{Text: "second "},
+		ToolUseStart{ID: "call_1", Name: "lookup"},
+		ToolUseDelta{ID: "call_1", ArgumentsDelta: []byte(`{"q":"x"}`)},
+		ContentDelta{Text: "third"},
+		DoneEvent{FinishReason: FinishReasonToolCall, Provider: "test-provider", Model: "test-model"},
+	}}
+
+	resp, err := Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if len(resp.Blocks) != 5 {
+		t.Fatalf("blocks len = %d, want 5: %#v", len(resp.Blocks), resp.Blocks)
+	}
+	if block, ok := resp.Blocks[0].(TextBlock); !ok || block.Text != "first " {
+		t.Fatalf("blocks[0] = %#v", resp.Blocks[0])
+	}
+	if block, ok := resp.Blocks[1].(ReasoningBlock); !ok || block.Text != "think" || block.Signature != "sig" {
+		t.Fatalf("blocks[1] = %#v", resp.Blocks[1])
+	}
+	if block, ok := resp.Blocks[2].(TextBlock); !ok || block.Text != "second " {
+		t.Fatalf("blocks[2] = %#v", resp.Blocks[2])
+	}
+	if block, ok := resp.Blocks[3].(ToolUseBlock); !ok || block.ID != "call_1" || block.Name != "lookup" || string(block.Arguments) != `{"q":"x"}` {
+		t.Fatalf("blocks[3] = %#v", resp.Blocks[3])
+	}
+	if block, ok := resp.Blocks[4].(TextBlock); !ok || block.Text != "third" {
+		t.Fatalf("blocks[4] = %#v", resp.Blocks[4])
+	}
+	if resp.Provider != "test-provider" || resp.Model != "test-model" {
+		t.Fatalf("provider/model = %q/%q", resp.Provider, resp.Model)
+	}
+}
+
+func TestCollectMergesToolUseWhenStableIDArrivesAfterIndex(t *testing.T) {
+	stream := &eventSliceStream{events: []Event{
+		ToolUseStart{Name: "lookup", Index: IntPtr(0)},
+		ToolUseDelta{Index: IntPtr(0), ArgumentsDelta: []byte(`{"q":`)},
+		ToolUseDelta{ID: "call_1", Index: IntPtr(0), ArgumentsDelta: []byte(`"x"}`)},
+		ToolUseDone{ID: "call_1", Index: IntPtr(0)},
+		DoneEvent{FinishReason: FinishReasonToolCall, Provider: "test", Model: "m"},
+	}}
+	resp, err := Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	calls := resp.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("tool calls len = %d, want 1: %#v", len(calls), calls)
+	}
+	if calls[0].ID != "call_1" || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
+		t.Fatalf("tool call = %#v", calls[0])
+	}
+}
+
+func TestCollectRejectsNilEventWithoutError(t *testing.T) {
+	_, err := Collect(&eventSliceStream{events: []Event{nil}})
+	if err == nil || err.Error() != "stream returned nil event without error" {
+		t.Fatalf("expected nil event error, got %v", err)
+	}
+}
+
+func TestCollectRequiresDoneOrError(t *testing.T) {
+	_, err := Collect(&eventSliceStream{events: []Event{ContentDelta{Text: "partial"}}})
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("expected EOF when stream ends without Done or error, got %v", err)
+	}
+}
+
+func TestCollectRejectsInvalidToolArguments(t *testing.T) {
+	_, err := Collect(&eventSliceStream{events: []Event{
+		ToolUseStart{ID: "call_1", Name: "lookup"},
+		ToolUseDelta{ID: "call_1", ArgumentsDelta: []byte(`{"q":`)},
+		DoneEvent{FinishReason: FinishReasonToolCall, Provider: "test", Model: "m"},
+	}})
+	if err == nil || err.Error() == "" {
+		t.Fatalf("expected invalid tool arguments error, got %v", err)
+	}
+}
+
+func TestCollectRejectsMissingProviderOrModel(t *testing.T) {
+	_, err := Collect(&eventSliceStream{events: []Event{
+		ContentDelta{Text: "ok"},
+		DoneEvent{FinishReason: FinishReasonStop, Model: "m"},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "missing provider") {
+		t.Fatalf("expected missing provider error, got %v", err)
+	}
+
+	_, err = Collect(&eventSliceStream{events: []Event{
+		ContentDelta{Text: "ok"},
+		DoneEvent{FinishReason: FinishReasonStop, Provider: "test"},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "missing model") {
+		t.Fatalf("expected missing model error, got %v", err)
+	}
+}
+
+func TestCollectRejectsToolCallMissingID(t *testing.T) {
+	_, err := Collect(&eventSliceStream{events: []Event{
+		ToolUseStart{Name: "lookup", Index: IntPtr(0)},
+		ToolUseDelta{Index: IntPtr(0), ArgumentsDelta: []byte(`{"q":"x"}`)},
+		DoneEvent{FinishReason: FinishReasonToolCall, Provider: "test", Model: "m"},
+	}})
+	if err == nil || err.Error() == "" {
+		t.Fatalf("expected missing tool id error, got %v", err)
+	}
+}
+
+func TestCollectRejectsToolCallMissingName(t *testing.T) {
+	_, err := Collect(&eventSliceStream{events: []Event{
+		ToolUseDelta{ID: "call_1", ArgumentsDelta: []byte(`{"q":"x"}`)},
+		DoneEvent{FinishReason: FinishReasonToolCall, Provider: "test", Model: "m"},
+	}})
+	if err == nil || err.Error() == "" {
+		t.Fatalf("expected missing tool name error, got %v", err)
+	}
+}
+
+func TestCollectRejectsToolDoneMissingIDAndIndex(t *testing.T) {
+	_, err := Collect(&eventSliceStream{events: []Event{
+		ToolUseDone{},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "missing id and index") {
+		t.Fatalf("expected missing tool done id/index error, got %v", err)
+	}
+}
+
+func TestCollectRejectsToolDoneUnknownToolUse(t *testing.T) {
+	_, err := Collect(&eventSliceStream{events: []Event{
+		ToolUseDone{ID: "call_missing"},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "references unknown tool use") {
+		t.Fatalf("expected unknown tool done error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "missing id and index") {
+		t.Fatalf("unknown tool use must not be reported as missing id/index: %v", err)
+	}
+}
+
+type eventSliceStream struct {
+	events []Event
+	index  int
+}
+
+func (s *eventSliceStream) Next() (Event, error) {
+	if s.index >= len(s.events) {
+		return nil, io.EOF
+	}
+	event := s.events[s.index]
+	s.index++
+	return event, nil
+}
+
+func (s *eventSliceStream) Close() error {
+	return nil
+}

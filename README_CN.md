@@ -1,26 +1,18 @@
-# LiteLLM（Go）— 多平台 LLM API 客户端
+# LiteLLM Go
 
 [English](README.md) | 中文
 
-LiteLLM 是一个小巧的 Go 客户端，用统一 API 访问多个 LLM 平台。
+LiteLLM 是一个小巧、显式、类型化的 Go LLM SDK。根包拥有跨 Provider 的领域模型，具体 Provider 放在 `provider/<name>` 子包。
 
-## 快速上手
+它不是路由器、网关、fallback 引擎、队列、账号系统或 Agent Runtime。
 
-### 安装
+## 安装
 
 ```bash
 go get github.com/voocel/litellm
 ```
 
-### 1) 准备 API Key
-
-```bash
-export OPENAI_API_KEY="your-key"
-```
-
-### 2) 最小可运行示例
-
-#### 文本对话
+## 快速开始
 
 ```go
 package main
@@ -32,403 +24,349 @@ import (
 	"os"
 
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/provider/openai"
 )
 
 func main() {
-	client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
+	client, err := openai.NewClient(openai.Config{
 		APIKey: os.Getenv("OPENAI_API_KEY"),
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	resp, err := client.Chat(context.Background(), &litellm.Request{
-		Model:    "gpt-5.5",
-		Messages: []litellm.Message{litellm.UserMessage("用一句话解释 AI。")},
+	resp, err := client.Chat(context.Background(), litellm.Request{
+		Model: "gpt-5.4-mini",
+		Messages: []litellm.Message{
+			litellm.System("You are concise."),
+			litellm.UserText("用一句话解释 Go interface。"),
+		},
+		MaxTokens: litellm.IntPtr(120),
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(resp.Content)
+	fmt.Println(resp.Text())
 }
 ```
 
-#### 工具调用
+`openai.NewClient(cfg, opts...)` 会先创建 provider，再创建 `*litellm.Client`；每个 provider 包都提供。显式两步写法 —— `provider, _ := openai.New(cfg)` 再 `litellm.New(provider, opts...)` —— 完全等价；当你想把同一个 provider 复用到多个 client 时用它。两种写法接受相同的 `ClientOption`。
+
+## 核心模型
+
+消息和响应都由有序 `Block` 表达：
+
+- `TextBlock`
+- `ImageBlock`
+- `ReasoningBlock`
+- `ToolUseBlock`
+- `ToolResultBlock`
+- `ToolReferenceBlock`
+
+`Response.Blocks` 是规范响应内容；`Text()`、`Reasoning()`、`ToolCalls()` 都只是便利视图。
 
 ```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-	"os"
-
-	"github.com/voocel/litellm"
-)
-
-func main() {
-	client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
-		APIKey: os.Getenv("OPENAI_API_KEY"),
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	tools := []litellm.Tool{
-		litellm.NewTool("get_weather", "Get weather for a city.", map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"city": map[string]any{"type": "string"},
-			},
-			"required": []string{"city"},
-		}),
-	}
-
-	resp, err := client.Chat(context.Background(), &litellm.Request{
-		Model:      "gpt-5.5",
-		Messages:   []litellm.Message{litellm.UserMessage("纽约天气怎么样？")},
-		Tools:      tools,
-		ToolChoice: "auto",
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println(resp.Content)
+msgs := []litellm.Message{
+	litellm.User(litellm.Text("图里有什么？"), litellm.ImageURL("https://example.com/cat.png")),
 }
+
+resp, err := client.Chat(ctx, litellm.Request{Model: "gpt-5.4-mini", Messages: msgs})
+_ = resp
+_ = err
 ```
 
-#### 流式（收集）
+多轮工具调用可以把上一轮响应块原样接回去：
 
 ```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-	"os"
-
-	"github.com/voocel/litellm"
-)
-
-func main() {
-	client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
-		APIKey: os.Getenv("OPENAI_API_KEY"),
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	stream, err := client.Stream(context.Background(), &litellm.Request{
-		Model:    "gpt-5.5",
-		Messages: []litellm.Message{litellm.UserMessage("讲个笑话")},
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer stream.Close()
-
-	resp, err := litellm.CollectStream(stream)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println(resp.Content)
-}
-```
-
-如果你需要实时打印并最终得到聚合结果：
-
-```go
-resp, err := litellm.CollectStreamWithHandler(stream, func(chunk *litellm.StreamChunk) {
-	if chunk.Type == litellm.ChunkTypeContent && chunk.Content != "" {
-		fmt.Print(chunk.Content)
-	}
-	if chunk.ReasoningDone {
-		fmt.Print("\n[reasoning done]")
-	}
-})
+args, err := litellm.JSONRaw(map[string]any{"ok": true})
 if err != nil {
 	log.Fatal(err)
 }
-fmt.Println("\n---")
-fmt.Println(resp.Content)
+
+msgs = append(msgs,
+	litellm.Assistant(resp.Blocks...),
+	litellm.ToolResultText("call_1", string(args)),
+)
 ```
 
-> 说明
-> - `providers` 包是内部实现细节，使用者只需要引入 `github.com/voocel/litellm`。
-> - LiteLLM 不自动发现 Provider，也不自动路由模型，必须显式配置。
+`JSONRaw` 会返回 marshal 错误，不会静默生成非法工具参数。`MustJSONRaw` 只建议用于测试数据或允许 panic 的静态示例。
 
-## 核心 API
-
-- `New(provider, opts...)` 使用显式 Provider 创建客户端。
-- `NewWithProvider(name, config, opts...)` 通过名称与配置创建客户端。
-- `Request` 是跨平台统一的：必填 `Model` 与 `Messages`，可选 `MaxTokens`、`Temperature`、`TopP`、`Stop` 等控制项。
-- `Chat(ctx, req)` 返回统一的 `Response`。
-- `Stream(ctx, req)` 返回 `StreamReader`（不支持多 goroutine 并发读），务必 `defer stream.Close()`。
-- `CollectStream(stream)` 将流式结果收集为统一的 `Response`。
-- `CollectStreamWithHandler(stream, onChunk)` 收集时也会处理每个 chunk。
-- `CollectStreamWithCallbacks(stream, callbacks)` 提供内容/思考/工具回调。
-- `WithHook(h)` / `WithHooks(...)` 可观察请求、响应和流式 chunk，但不改变执行流程。
-- `Request.Thinking` 在显式设置时控制思考输出；未设置时行为由具体 Provider 决定。
-- `ListModels(ctx)` 列出当前 Provider 可用模型（仅部分 Provider 支持，字段为 best-effort）。
-
-### 流式（最小示例）
+SDK 默认严格校验消息历史。脏的工具调用历史、非法 tool ID、缺失 tool result、不支持的 Provider 选项都会直接返回错误。如果需要导入历史数据，必须显式开启 repair：
 
 ```go
-stream, err := client.Stream(ctx, &litellm.Request{
-	Model: "gpt-5.5",
-	Messages: []litellm.Message{
-		{Role: "user", Content: "讲个笑话"},
-	},
+client, err := openai.NewClient(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")}, litellm.WithMessageRepair(litellm.RepairAll))
+```
+
+任何会改变可观察数据的修复或 Provider 规范化都会通过 `Response.Warnings`、`WarningEvent` 和 `Hook.OnWarning` 暴露。
+
+默认不会保存 Provider 原始响应体。调试时需要显式开启：
+
+```go
+client, err := openai.NewClient(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")}, litellm.WithCaptureRawResponse(true))
+```
+
+## 流式
+
+流式返回 typed `Event`。
+`Stream` 设计为单 goroutine 消费；不要并发调用 `Next`。
+如果需要每个事件之间的空闲超时，用 `WithStreamIdleTimeout` 显式开启；默认关闭。
+`WithStreamIdleTimeout` 只覆盖通用 `Client.Stream`；OpenAI Responses 原生流用 `openai.Config.StreamIdleTimeout`。
+例如：
+
+```go
+client, err := openai.NewClient(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")}, litellm.WithStreamIdleTimeout(120*time.Second))
+```
+
+```go
+stream, err := client.Stream(ctx, litellm.Request{
+	Model:    "gpt-5.4-mini",
+	Messages: []litellm.Message{litellm.UserText("讲个短笑话。")},
 })
 if err != nil {
 	log.Fatal(err)
 }
 defer stream.Close()
 
-resp, err := litellm.CollectStream(stream)
+for {
+	event, err := stream.Next()
+	if err != nil {
+		log.Fatal(err)
+	}
+	switch e := event.(type) {
+	case litellm.ContentDelta:
+		fmt.Print(e.Text)
+	case litellm.ReasoningDelta:
+		fmt.Print(e.Text)
+	case litellm.ProviderEvent:
+		// Provider 原生生命周期或 hosted tool 事件。
+	case litellm.DoneEvent:
+		return
+	}
+}
+```
+
+聚合流式响应：
+
+```go
+resp, err := litellm.Collect(stream)
+```
+
+## Retry
+
+默认不重试。需要时在具体 Provider 上显式开启：
+
+```go
+import "github.com/voocel/litellm/retry"
+
+provider, err := openai.New(openai.Config{
+	APIKey: os.Getenv("OPENAI_API_KEY"),
+	Retry:  retry.DefaultPolicy(),
+})
+```
+
+Bedrock 的 retry 会在每次 attempt 内部重新签名，用户不需要手动组合 SigV4 transport。
+
+如果需要代理、trace 或自定义底层链路，使用 `Transport` 搭配 `Retry`。完整 `HTTPClient` 是高级逃生口，不能和 `Retry` 同时使用；这种情况下需要用户在自定义 client 内自行配置 retry。
+
+选择规则：
+
+| 场景 | 配置 |
+| --- | --- |
+| 普通重试 | `Retry: retry.DefaultPolicy()` |
+| 重试 + 代理/trace/自定义底层链路 | `Retry` + `Transport` |
+| 完全自定义请求执行 | `HTTPClient`，不和 `Retry`/`Transport` 混用 |
+
+`APIKeyFunc` 会在请求创建时解析一次；retry attempt 会复用该请求。如果你使用极短有效期的 Bearer token，请用自定义 `Transport` 或 `HTTPClient` 在更底层注入认证。常规 API key 和默认 retry 窗口不需要关心这个细节。
+
+## 工具调用
+
+```go
+tool, err := litellm.NewTool("get_weather", "Get weather for a city.", map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"city": map[string]any{"type": "string"},
+	},
+	"required": []string{"city"},
+})
 if err != nil {
 	log.Fatal(err)
 }
-fmt.Print(resp.Content)
+tool.Strict = litellm.StrictEnabled
+
+resp, err := client.Chat(ctx, litellm.Request{
+	Model:      "gpt-5.4-mini",
+	Messages:   []litellm.Message{litellm.UserText("巴黎天气？")},
+	Tools:      []litellm.Tool{tool},
+	ToolChoice: "auto",
+})
 ```
 
-### Hooks
-
-当你需要对请求执行过程做轻量观测，但又不想修改 Provider 行为时，可以使用 hooks。
+## 结构化输出
 
 ```go
-client, err := litellm.NewWithProvider(
-	"openai",
-	litellm.ProviderConfig{APIKey: os.Getenv("OPENAI_API_KEY")},
-	litellm.WithHook(litellm.HookFuncs{
-		BeforeRequestFunc: func(ctx context.Context, meta litellm.CallMeta, req *litellm.Request) {
-			log.Printf("→ call=%s %s provider=%s model=%s", meta.CallID, meta.Operation, meta.Provider, meta.Model)
-		},
-		AfterResponseFunc: func(ctx context.Context, meta litellm.CallMeta, resp *litellm.Response, err error) {
-			if err != nil {
-				log.Printf("← call=%s %s error=%v", meta.CallID, meta.Operation, err)
-				return
-			}
-			log.Printf("← call=%s %s duration=%s", meta.CallID, meta.Operation, meta.Duration)
-		},
-		OnStreamChunkFunc: func(ctx context.Context, meta litellm.CallMeta, chunk *litellm.StreamChunk) {
-			if chunk.Type == litellm.ChunkTypeContent && chunk.Content != "" {
-				fmt.Print(chunk.Content)
-			}
-		},
-	}),
-)
-if err != nil {
-	log.Fatal(err)
-}
-```
-
-说明：
-- hooks 只做观测，不修改请求、响应或流式控制。
-- `CallMeta.CallID` 在一次调用生命周期内保持稳定，可用于关联前后 hook 事件。
-- 对流式调用来说，`AfterResponse` 会在 stream 建立成功时触发，此时 `resp` 为 `nil`。
-- `OnStreamEnd` 会在流式结束时触发且只触发一次，包括正常结束、提前关闭和异常中断。
-
-### OpenTelemetry
-
-可选的 `github.com/voocel/litellm/otel` 子模块可以把 hooks 转成 OpenTelemetry generation span。核心模块不依赖 OpenTelemetry。
-
-```bash
-go get github.com/voocel/litellm/otel
-```
-
-```go
-client, err := litellm.NewWithProvider(
-	"openai",
-	litellm.ProviderConfig{APIKey: os.Getenv("OPENAI_API_KEY")},
-	litellm.WithHook(litellmotel.New(
-		otel.Tracer("my-app"),
-		litellmotel.WithCaptureContent(false), // 为隐私关闭 prompt/completion 内容采集
-	)),
-)
-if err != nil {
-	log.Fatal(err)
-}
-```
-
-适配器会记录 `gen_ai.*` 属性，包括 Provider/模型、结束原因、token 用量，以及可选的 prompt/completion 文本。需要 Langfuse session ID 等后端元数据时，使用 `WithSpanAttributes`。
-
-## 高级能力（可选）
-
-下面能力都可跨平台使用，更完整的可运行示例在 `examples/` 目录。
-
-### 模型列表（部分 Provider 支持）
-
-> 说明
-> - 目前已支持：OpenAI / Anthropic / Gemini / OpenRouter / DeepSeek / Bedrock
-> - 返回字段因平台差异而不同，`ModelInfo` 为 best-effort（可能为空）
-> - Gemini 返回的模型名会自动去掉 `models/` 前缀，便于直接传给 `Request.Model`
-> - Bedrock 可通过 `ProviderConfig.Extra["control_plane_base_url"]` 指定控制平面域名（默认从 `BaseURL` 推导）
-
-```go
-models, err := client.ListModels(ctx)
-if err != nil {
-	log.Fatal(err)
-}
-for _, m := range models {
-	fmt.Println(m.ID, m.Name)
-}
-```
-
-### 结构化输出
-
-```go
-schema := map[string]any{
+format, err := litellm.NewResponseFormatJSONSchema("person", "", map[string]any{
 	"type": "object",
 	"properties": map[string]any{
 		"name": map[string]any{"type": "string"},
-		"age":  map[string]any{"type": "integer"},
 	},
-	"required": []string{"name", "age"},
+	"required": []string{"name"},
+}, litellm.StrictEnabled)
+if err != nil {
+	log.Fatal(err)
 }
 
-resp, err := client.Chat(ctx, &litellm.Request{
-	Model: "gpt-5.5",
-	Messages: []litellm.Message{{Role: "user", Content: "生成一个人。"}},
-	ResponseFormat: litellm.NewResponseFormatJSONSchema("person", "", schema, true),
+resp, err := client.Chat(ctx, litellm.Request{
+	Model:          "gpt-5.4-mini",
+	Messages:       []litellm.Message{litellm.UserText("生成一个人。")},
+	ResponseFormat: format,
 })
-_ = resp
 ```
 
-### 工具调用（Function Calling）
+## Thinking
+
+Thinking 必须显式设置。`Thinking == nil` 时 SDK 不发送任何 thinking/reasoning 控制字段。
 
 ```go
-tools := []litellm.Tool{
-	{
-		Type: "function",
-		Function: litellm.FunctionDef{
-			Name: "get_weather",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"city": map[string]any{"type": "string"},
-				},
-				"required": []string{"city"},
-			},
-		},
+resp, err := client.Chat(ctx, litellm.Request{
+	Model:    "claude-sonnet-4-5-20250929",
+	Messages: []litellm.Message{litellm.UserText("解释一下取舍。")},
+	MaxTokens: litellm.IntPtr(2048),
+	Thinking: &litellm.Thinking{
+		Mode:  litellm.ThinkingEnabled,
+		Level: "low",
 	},
+})
+```
+
+Provider 约束会在本地校验。例如 Anthropic thinking 要求 `max_tokens >= 1024`，必须有 budget 或 level，且不能和用户显式 temperature 冲突。
+
+## OpenAI Responses
+
+OpenAI Responses 是 provider-native 能力，挂在 `provider/openai.Provider` 上，不进入通用 `Client`。
+
+```go
+oai, err := openai.New(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")})
+if err != nil {
+	log.Fatal(err)
 }
 
-resp, err := client.Chat(ctx, &litellm.Request{
+resp, err := oai.Responses(ctx, &openai.ResponsesRequest{
 	Model: "gpt-5.5",
-	Messages: []litellm.Message{{Role: "user", Content: "纽约天气？"}},
-	Tools: tools,
-	ToolChoice: "auto",
-})
-_ = resp
-```
-
-### 思考输出
-
-```go
-resp, err := client.Chat(ctx, &litellm.Request{
-	Model:    "claude-haiku-4-5-20251001",
-	Messages: []litellm.Message{litellm.UserMessage("说一句笑话。")},
-	Thinking: litellm.NewThinkingEnabled(1024),
-})
-_ = resp
-```
-
-如需关闭：
-
-```go
-req := &litellm.Request{
-	Model:    "claude-haiku-4-5-20251001",
-	Messages: []litellm.Message{litellm.UserMessage("说一句笑话。")},
-	Thinking: litellm.NewThinkingDisabled(),
-}
-_ = req
-```
-
-### OpenAI Responses API
-
-```go
-resp, err := client.Responses(ctx, &litellm.OpenAIResponsesRequest{
-	Model: "gpt-5.5",
-	Messages: []litellm.Message{{Role: "user", Content: "逐步算 15*8"}},
+	Messages: []litellm.Message{
+		litellm.UserText("逐步计算 15*8。"),
+	},
 	ReasoningEffort:  "medium",
 	ReasoningSummary: "auto",
-	Thinking:         litellm.NewThinkingEnabled(0),
 	MaxOutputTokens:  litellm.IntPtr(800),
+	OpenAITools: []openai.ResponsesTool{
+		{"type": "web_search_preview"},
+	},
 })
-_ = resp
 ```
 
-### 重试与超时
+Responses streaming 使用同一套 typed event：
 
 ```go
-res := litellm.DefaultResilienceConfig()
-res.MaxRetries = 3
-res.InitialDelay = 1 * time.Second
-res.RequestTimeout = 60 * time.Second
-
-client, _ := litellm.NewWithProvider("openai", litellm.ProviderConfig{
-	APIKey:     os.Getenv("OPENAI_API_KEY"),
-	Resilience: res,
+oai, err := openai.New(openai.Config{
+	APIKey:            os.Getenv("OPENAI_API_KEY"),
+	StreamIdleTimeout: 120 * time.Second,
 })
-_ = client
+
+stream, err := oai.ResponsesStream(ctx, &openai.ResponsesRequest{
+	Model:    "gpt-5.5",
+	Messages: []litellm.Message{litellm.UserText("搜索并总结。")},
+})
 ```
 
-### 平台特定参数
+## Provider
 
-`Request.Extra` 会按 Provider 进行校验，不支持的 Provider 会直接报错。
+Provider 配置属于各自子包。认证不会被强行收口成一个 API key string。
 
-支持的键：
-- Anthropic 请求参数：`cache_retention`、`metadata`、`metadata_user_id`
-- Gemini：`tool_name`（string），用于 tool response 命名
-
-OpenAI、OpenAI-compatible 和 Anthropic provider 也支持通过
-`ProviderConfig.Extra` 配置 provider 级请求头：
-
-- `user_agent`（string）：设置 `User-Agent`
-- `headers` / `extra_headers`（`map[string]string` 或 `map[string]any`）：设置额外 HTTP 请求头
-- 仅 Anthropic：`anthropic_beta`（string 或 `[]string`）：设置 `anthropic-beta`
+```go
+import (
+	"github.com/voocel/litellm/provider/anthropic"
+	"github.com/voocel/litellm/provider/bedrock"
+	"github.com/voocel/litellm/provider/deepseek"
+	"github.com/voocel/litellm/provider/gemini"
+	"github.com/voocel/litellm/provider/glm"
+	"github.com/voocel/litellm/provider/grok"
+	"github.com/voocel/litellm/provider/minimax"
+	"github.com/voocel/litellm/provider/ollama"
+	"github.com/voocel/litellm/provider/openrouter"
+	"github.com/voocel/litellm/provider/qwen"
+)
+```
 
 示例：
 
 ```go
-client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
-	APIKey:  os.Getenv("OPENAI_API_KEY"),
-	BaseURL: os.Getenv("OPENAI_BASE_URL"),
-	Extra: map[string]any{
-		"user_agent": "my-client/1.0",
-		"headers": map[string]string{
-			"X-Custom-Client": "my-client",
-		},
-	},
+anthropic.New(anthropic.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
+gemini.New(gemini.Config{APIKey: os.Getenv("GEMINI_API_KEY")})
+deepseek.New(deepseek.Config{APIKey: os.Getenv("DEEPSEEK_API_KEY")})
+ollama.New(ollama.Config{})
+
+bedrock.New(bedrock.Config{
+	Region: "us-east-1",
+	Credentials: bedrock.StaticCredentials(
+		os.Getenv("AWS_ACCESS_KEY_ID"),
+		os.Getenv("AWS_SECRET_ACCESS_KEY"),
+		os.Getenv("AWS_SESSION_TOKEN"),
+	),
 })
-_ = client
-_ = err
 ```
 
-### 费用计算
+当前 provider 子包包括 OpenAI、Anthropic、Gemini、Bedrock、DeepSeek、Qwen、GLM、OpenRouter、MiniMax、Grok、MiMo、Ollama。
 
-根据 token 使用量计算请求费用。定价数据来自 [BerriAI/litellm](https://github.com/BerriAI/litellm)，首次使用时自动加载。
+## 模型列表
 
 ```go
-resp, err := client.Chat(ctx, req)
-if err != nil {
-	log.Fatal(err)
-}
+models, err := client.ListModels(ctx)
+```
 
-// 计算费用（定价数据自动加载）
-if cost, err := litellm.CalculateCostForResponse(resp); err == nil {
-	fmt.Printf("费用: $%.6f (输入: $%.6f, 输出: $%.6f)\n",
-		cost.TotalCost, cost.InputCost, cost.OutputCost)
-}
+只有实现了 `ModelLister` 的 Provider 支持该能力，返回字段为 best-effort。
 
-// 或使用独立函数
-cost, err := litellm.CalculateCost(resp.Model, resp.Usage)
+## Provider Options
 
-// 为未收录的模型设置自定义定价
-litellm.SetModelPricing("my-model", litellm.ModelPricing{
+Provider 特定请求选项放在 `Request.ProviderOptions`。未知 key 默认报错。
+
+```go
+resp, err := client.Chat(ctx, litellm.Request{
+	Model:    "gpt-5.4-mini",
+	Messages: []litellm.Message{litellm.UserText("Hello")},
+	ProviderOptions: litellm.ProviderOptions{
+		openai.ProviderOptionPromptCacheRetention: "24h",
+	},
+})
+```
+
+## Hooks 与 OTel
+
+Hooks 只观察请求、响应、warning 和 stream event。Hook 收到的是副本；修改它们不会影响 Provider 调用、最终返回的 response，也不会影响调用方看到的 event。核心 hooks 不 recover panic。
+
+```go
+client, err := litellm.New(provider, litellm.WithHook(litellm.HookFuncs{
+	OnStreamEventFunc: func(ctx context.Context, meta litellm.CallMeta, event litellm.Event) {
+		if delta, ok := event.(litellm.ContentDelta); ok {
+			fmt.Print(delta.Text)
+		}
+	},
+}))
+```
+
+可选的 `github.com/voocel/litellm/otel` 模块会把 hooks 适配成 OpenTelemetry span。
+
+## Pricing
+
+Pricing 是显式行为。成本计算绝不会隐式联网加载远程定价。
+
+```go
+import "github.com/voocel/litellm/pricing"
+
+reg := pricing.NewRegistry()
+err := reg.LoadFromURL(ctx, pricing.DefaultURL)
+cost, err := reg.Calculate(resp.Model, resp.Usage)
+
+err = reg.Set("my-model", pricing.ModelPricing{
 	InputCostPerToken:  0.000001,
 	OutputCostPerToken: 0.000002,
 })
@@ -436,58 +374,14 @@ litellm.SetModelPricing("my-model", litellm.ModelPricing{
 
 ## 自定义 Provider
 
-实现 `litellm.Provider` 并注册即可扩展平台：
+实现很小的 Provider 接口即可：
 
 ```go
-type MyProvider struct {
-	name   string
-	config litellm.ProviderConfig
+type Provider interface {
+	Name() string
+	Chat(context.Context, *litellm.Request) (*litellm.Response, error)
+	Stream(context.Context, *litellm.Request) (litellm.Stream, error)
 }
-
-func (p *MyProvider) Name() string                     { return p.name }
-func (p *MyProvider) Validate() error                 { return nil }
-
-func (p *MyProvider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
-	return &litellm.Response{Content: "hello", Model: req.Model, Provider: p.name}, nil
-}
-func (p *MyProvider) Stream(ctx context.Context, req *litellm.Request) (litellm.StreamReader, error) {
-	return nil, fmt.Errorf("未实现流式")
-}
-
-func init() {
-	_ = litellm.RegisterProviderWithDescriptor(litellm.ProviderDescriptor{
-		Name:       "myprovider",
-		DefaultURL: "https://api.example.com/v1",
-		Factory: func(cfg litellm.ProviderConfig) litellm.Provider {
-			return &MyProvider{name: "myprovider", config: cfg}
-		},
-	})
-}
-```
-
-自定义 Provider 契约：
-
-- `Chat` 应先校验基础请求字段，并尽量返回统一字段：`Response.Provider`、`Response.Model`、`Response.FinishReason`、`Response.Usage`。
-- `Stream` 应将文本增量作为 `ChunkTypeContent` 输出，将思考增量放在 `ReasoningContent`，工具调用增量放在 `ToolCallDelta`，并在结束时发送 `Done=true` 的最终块。
-- 同一个流式工具调用的 `ToolCallDelta.Index` 必须稳定，否则聚合器无法正确重建完整的 tool call。
-- 建议返回 `LiteLLMError`，或者返回经 `WrapError` 包装后的错误，这样上层才能一致地区分认证、限流、超时、模型和参数校验错误。
-
-## 内置 Provider
-
-已内置：OpenAI、Anthropic、Google Gemini、DeepSeek、Qwen（DashScope）、GLM、AWS Bedrock、OpenRouter。
-
-LiteLLM 不会改写模型 ID，请使用官方模型 ID。
-
-## 配置
-
-显式配置 Provider：
-
-```go
-client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
-	APIKey:  os.Getenv("OPENAI_API_KEY"),
-	BaseURL: os.Getenv("OPENAI_BASE_URL"), // 可选
-})
-_ = client
 ```
 
 ## 许可证

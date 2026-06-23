@@ -1,533 +1,515 @@
 package litellm
 
 import (
-	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"sort"
-	"strings"
-	"sync"
-
-	"github.com/voocel/litellm/providers"
 )
 
-// ---------------------------------------------------------------------------
-// ToolCallAccumulator — reusable tool call delta reconstruction
-// ---------------------------------------------------------------------------
-
-// ToolCallAccumulator reconstructs complete ToolCall objects from streaming deltas.
-// Safe for single-goroutine use only.
-type ToolCallAccumulator struct {
-	order []string
-	byKey map[string]*ToolCall
+type Event interface {
+	isEvent()
 }
 
-// NewToolCallAccumulator creates an empty accumulator.
-func NewToolCallAccumulator() *ToolCallAccumulator {
-	return &ToolCallAccumulator{
-		byKey: make(map[string]*ToolCall),
+type ContentDelta struct {
+	Text         string
+	OutputIndex  *int
+	ContentIndex *int
+}
+
+type RefusalDelta struct {
+	Text         string
+	OutputIndex  *int
+	ContentIndex *int
+}
+
+type ReasoningDelta struct {
+	Text      string
+	Summary   bool
+	Signature string
+	Redacted  []byte
+	Index     *int
+}
+
+type ToolUseStart struct {
+	ID          string
+	Name        string
+	Index       *int
+	OutputIndex *int
+	ItemID      string
+	Signature   string
+}
+
+type ToolUseDelta struct {
+	ID             string
+	Index          *int
+	OutputIndex    *int
+	ItemID         string
+	ArgumentsDelta []byte
+	Signature      string
+}
+
+type ToolUseDone struct {
+	ID          string
+	Index       *int
+	OutputIndex *int
+	ItemID      string
+}
+
+type UsageEvent struct {
+	Usage Usage
+}
+
+type WarningEvent struct {
+	Warning Warning
+}
+
+type DoneEvent struct {
+	FinishReason FinishReason
+	Provider     string
+	Model        string
+}
+
+type ErrorEvent struct {
+	Err error
+}
+
+type ProviderEvent struct {
+	Name string
+	Raw  json.RawMessage
+}
+
+func (ContentDelta) isEvent()   {}
+func (RefusalDelta) isEvent()   {}
+func (ReasoningDelta) isEvent() {}
+func (ToolUseStart) isEvent()   {}
+func (ToolUseDelta) isEvent()   {}
+func (ToolUseDone) isEvent()    {}
+func (UsageEvent) isEvent()     {}
+func (WarningEvent) isEvent()   {}
+func (DoneEvent) isEvent()      {}
+func (ErrorEvent) isEvent()     {}
+func (ProviderEvent) isEvent()  {}
+
+func cloneEvent(event Event) Event {
+	switch e := event.(type) {
+	case ContentDelta:
+		return e
+	case RefusalDelta:
+		return e
+	case ReasoningDelta:
+		e.Redacted = cloneBytes(e.Redacted)
+		return e
+	case ToolUseStart:
+		return e
+	case ToolUseDelta:
+		e.ArgumentsDelta = cloneBytes(e.ArgumentsDelta)
+		return e
+	case ToolUseDone:
+		return e
+	case UsageEvent:
+		return e
+	case WarningEvent:
+		return e
+	case DoneEvent:
+		return e
+	case ErrorEvent:
+		return e
+	case ProviderEvent:
+		e.Raw = cloneBytes(e.Raw)
+		return e
+	default:
+		return event
 	}
 }
 
-// Apply processes a single ToolCallDelta, creating or updating the corresponding ToolCall.
-func (a *ToolCallAccumulator) Apply(delta *ToolCallDelta) {
-	if delta == nil {
-		return
-	}
-
-	// Always key by index so that start events (which carry ID/name)
-	// and subsequent delta events (which carry only arguments) merge
-	// into the same ToolCall entry.
-	key := fmt.Sprintf("index:%d", delta.Index)
-
-	tc := a.byKey[key]
-	if tc == nil {
-		tc = &ToolCall{
-			ID:   delta.ID,
-			Type: delta.Type,
-			Function: FunctionCall{
-				Name: delta.FunctionName,
-			},
-		}
-		if tc.Type == "" {
-			tc.Type = "function"
-		}
-		a.byKey[key] = tc
-		a.order = append(a.order, key)
-	}
-
-	if delta.ID != "" {
-		tc.ID = delta.ID
-	}
-	if delta.FunctionName != "" {
-		tc.Function.Name = delta.FunctionName
-	}
-	if delta.ArgumentsDelta != "" {
-		tc.Function.Arguments += delta.ArgumentsDelta
-	}
-	if delta.ThoughtSignature != "" {
-		tc.ThoughtSignature = delta.ThoughtSignature
-	}
+type Stream interface {
+	Next() (Event, error)
+	Close() error
 }
 
-// Build returns the completed ToolCall list in first-seen order.
-func (a *ToolCallAccumulator) Build() []ToolCall {
-	if len(a.order) == 0 {
+type providerErrorStream struct {
+	provider string
+	inner    Stream
+}
+
+func wrapProviderStreamErrors(provider string, stream Stream) Stream {
+	if stream == nil {
 		return nil
 	}
-	result := make([]ToolCall, 0, len(a.order))
-	for _, key := range a.order {
-		if tc := a.byKey[key]; tc != nil {
-			result = append(result, *tc)
-		}
+	return &providerErrorStream{provider: provider, inner: stream}
+}
+
+func (s *providerErrorStream) Next() (Event, error) {
+	event, err := s.inner.Next()
+	if err != nil && !errors.Is(err, io.EOF) {
+		return event, WrapError(err, s.provider)
 	}
-	return result
+	return event, err
 }
 
-// Started reports whether a delta with the given index has been received.
-func (a *ToolCallAccumulator) Started(index int) bool {
-	_, ok := a.byKey[fmt.Sprintf("index:%d", index)]
-	return ok
-}
-
-// Get returns the accumulated ToolCall for the given index, or nil if not found.
-func (a *ToolCallAccumulator) Get(index int) *ToolCall {
-	return a.byKey[fmt.Sprintf("index:%d", index)]
-}
-
-// PartialArguments returns a best-effort parse of the accumulated (possibly incomplete)
-// function arguments for the tool call at the given index.
-// Useful for streaming UIs that want to display arguments as they arrive.
-// Returns nil if the index has no accumulated data.
-func (a *ToolCallAccumulator) PartialArguments(index int) any {
-	tc := a.Get(index)
-	if tc == nil || tc.Function.Arguments == "" {
-		return nil
+func (s *providerErrorStream) Close() error {
+	err := s.inner.Close()
+	if err != nil {
+		return WrapError(err, s.provider)
 	}
-	return ParsePartialJSON(tc.Function.Arguments)
+	return nil
 }
 
-// ---------------------------------------------------------------------------
-// StreamCallbacks & CollectStream
-// ---------------------------------------------------------------------------
-
-// StreamCallbacks provides optional per-chunk handlers during stream collection.
-type StreamCallbacks struct {
-	OnChunk     func(*StreamChunk)
-	OnContent   func(string)
-	OnReasoning func(content string)
-	OnToolCall  func(*ToolCallDelta)
-
-	// Lifecycle callbacks — bracket start/end of each content block.
-	// Transitions are detected automatically from chunk types.
-	OnContentStart   func()
-	OnContentEnd     func(content string) // content = full accumulated block
-	OnReasoningStart func()
-	OnReasoningEnd   func(content string)       // content = full accumulated reasoning
-	OnToolCallStart  func(delta *ToolCallDelta) // carries ID and FunctionName
-	OnToolCallEnd    func(call ToolCall)        // carries complete ToolCall
+type warningPrefixStream struct {
+	warnings []Warning
+	index    int
+	inner    Stream
 }
 
-// CollectStream consumes a StreamReader and returns a unified Response.
-// Callers are responsible for closing the stream.
-func CollectStream(stream StreamReader) (*Response, error) {
-	return CollectStreamWithHandler(stream, nil)
+func prependWarningEvents(stream Stream, warnings []Warning) Stream {
+	if len(warnings) == 0 || stream == nil {
+		return stream
+	}
+	copied := append([]Warning(nil), warnings...)
+	return &warningPrefixStream{warnings: copied, inner: stream}
 }
 
-// CollectStreamWithCallbacks consumes a StreamReader, calls callbacks for each chunk, and returns a unified Response.
-// Callers are responsible for closing the stream.
-func CollectStreamWithCallbacks(stream StreamReader, callbacks StreamCallbacks) (*Response, error) {
-	dispatcher := newStreamCallbackDispatcher(callbacks)
-	return CollectStreamWithHandler(stream, func(chunk *StreamChunk) {
-		dispatcher.process(chunk)
-	})
+func (s *warningPrefixStream) Next() (Event, error) {
+	if s.index < len(s.warnings) {
+		warning := s.warnings[s.index]
+		s.index++
+		return WarningEvent{Warning: warning}, nil
+	}
+	return s.inner.Next()
 }
 
-// CollectStreamWithHandler consumes a StreamReader, calls onChunk for each chunk, and returns a unified Response.
-// Callers are responsible for closing the stream.
-func CollectStreamWithHandler(stream StreamReader, onChunk func(*StreamChunk)) (*Response, error) {
+func (s *warningPrefixStream) Close() error {
+	return s.inner.Close()
+}
+
+func Collect(stream Stream) (*Response, error) {
 	if stream == nil {
 		return nil, fmt.Errorf("stream cannot be nil")
 	}
-
-	collector := newStreamCollector()
-
+	collector := newEventCollector()
 	for {
-		chunk, err := stream.Next()
+		event, err := stream.Next()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil, fmt.Errorf("stream ended before Done event: %w", err)
+			}
+			return nil, err
+		}
+		if event == nil {
+			return nil, fmt.Errorf("stream returned nil event without error")
+		}
+		done, err := collector.Apply(event)
 		if err != nil {
 			return nil, err
 		}
-		if chunk == nil {
-			continue
-		}
-
-		if onChunk != nil {
-			onChunk(chunk)
-		}
-		collector.applyChunk(chunk)
-
-		if chunk.Done {
-			break
+		if done {
+			resp := collector.Response()
+			if err := validateResponse(resp, resp.Provider, resp.Model); err != nil {
+				return nil, err
+			}
+			return resp, nil
 		}
 	}
-	return collector.buildResponse()
 }
 
-type streamCollector struct {
-	contentBuilder       strings.Builder
-	refusalBuilder       strings.Builder
-	contentByOutputIndex map[int]*strings.Builder
-	refusalByOutputIndex map[int]*strings.Builder
-	reasoningContent     strings.Builder
-	toolAcc              *ToolCallAccumulator
-	resp                 Response
+type EventCollector struct {
+	blocks      []Block
+	toolIndexes map[string]int
+	usage       Usage
+	finish      FinishReason
+	provider    string
+	model       string
+	warnings    []Warning
+	tools       *ToolUseAccumulator
 }
 
-func newStreamCollector() *streamCollector {
-	return &streamCollector{
-		contentByOutputIndex: make(map[int]*strings.Builder),
-		refusalByOutputIndex: make(map[int]*strings.Builder),
-		toolAcc:              NewToolCallAccumulator(),
+func newEventCollector() *EventCollector {
+	return &EventCollector{
+		toolIndexes: make(map[string]int),
+		tools:       NewToolUseAccumulator(),
 	}
 }
 
-func (c *streamCollector) applyChunk(chunk *StreamChunk) {
-	if chunk == nil {
+func (c *EventCollector) Apply(event Event) (bool, error) {
+	switch e := event.(type) {
+	case ContentDelta:
+		c.appendContent(e.Text)
+	case RefusalDelta:
+		c.appendContent(e.Text)
+	case ReasoningDelta:
+		c.appendReasoning(e)
+	case ToolUseStart:
+		key, tool, err := c.tools.Start(e)
+		if err != nil {
+			return false, err
+		}
+		c.appendTool(key, tool)
+	case ToolUseDelta:
+		key, tool, err := c.tools.Delta(e)
+		if err != nil {
+			return false, err
+		}
+		c.appendTool(key, tool)
+	case ToolUseDone:
+		key, tool, err := c.tools.Done(e)
+		if err != nil {
+			return false, err
+		}
+		c.appendTool(key, tool)
+	case UsageEvent:
+		c.usage = e.Usage
+		if e.Usage.Provider != "" {
+			c.provider = e.Usage.Provider
+		}
+		if e.Usage.Model != "" {
+			c.model = e.Usage.Model
+		}
+	case WarningEvent:
+		c.warnings = append(c.warnings, e.Warning)
+	case ErrorEvent:
+		if e.Err == nil {
+			return false, fmt.Errorf("stream error event missing error")
+		}
+		return false, e.Err
+	case ProviderEvent:
+		// Provider-native events are observable by stream consumers. The core
+		// collector ignores them unless they are promoted to typed events.
+	case DoneEvent:
+		c.finish = e.FinishReason
+		if e.Provider != "" {
+			c.provider = e.Provider
+		}
+		if e.Model != "" {
+			c.model = e.Model
+		}
+		return true, nil
+	default:
+		return false, fmt.Errorf("unknown stream event %T", event)
+	}
+	return false, nil
+}
+
+func (c *EventCollector) Response() *Response {
+	return &Response{
+		Blocks:       c.cloneBlocks(),
+		Usage:        c.usage,
+		Model:        c.model,
+		Provider:     c.provider,
+		FinishReason: c.finish,
+		Warnings:     append([]Warning(nil), c.warnings...),
+	}
+}
+
+func (c *EventCollector) appendContent(text string) {
+	if text == "" {
 		return
 	}
-
-	if c.resp.Provider == "" && chunk.Provider != "" {
-		c.resp.Provider = chunk.Provider
+	if len(c.blocks) > 0 {
+		if block, ok := c.blocks[len(c.blocks)-1].(TextBlock); ok {
+			block.Text += text
+			c.blocks[len(c.blocks)-1] = block
+			return
+		}
 	}
-	if chunk.Model != "" {
-		c.resp.Model = chunk.Model
-	}
-	if c.resp.FinishReason == "" && chunk.FinishReason != "" {
-		c.resp.FinishReason = chunk.FinishReason
-	}
-
-	c.collectContent(chunk)
-	c.collectReasoning(chunk)
-	c.collectToolCall(chunk)
-
-	if chunk.Usage != nil {
-		usage := *chunk.Usage
-		usage.StampModel(chunk.Provider, chunk.Model)
-		usage.StampModel(c.resp.Provider, c.resp.Model)
-		c.resp.Usage = usage
-	}
+	c.blocks = append(c.blocks, TextBlock{Text: text})
 }
 
-func (c *streamCollector) collectContent(chunk *StreamChunk) {
-	if chunk.Content == "" {
+func (c *EventCollector) appendReasoning(delta ReasoningDelta) {
+	if delta.Text == "" && delta.Signature == "" && len(delta.Redacted) == 0 {
 		return
 	}
-
-	switch chunk.Type {
-	case ChunkTypeContent:
-		c.outputBuilder(chunk.OutputIndex, c.contentByOutputIndex, &c.contentBuilder).WriteString(chunk.Content)
-	case "refusal":
-		c.outputBuilder(chunk.OutputIndex, c.refusalByOutputIndex, &c.refusalBuilder).WriteString(chunk.Content)
-	}
-}
-
-func (c *streamCollector) collectReasoning(chunk *StreamChunk) {
-	if chunk.ReasoningContent == "" {
+	if len(delta.Redacted) > 0 {
+		c.blocks = append(c.blocks, ReasoningBlock{
+			Signature: delta.Signature,
+			Redacted:  cloneBytes(delta.Redacted),
+		})
 		return
 	}
-	if c.reasoningContent.Len() > 0 {
-		c.reasoningContent.WriteString("\n")
-	}
-	c.reasoningContent.WriteString(chunk.ReasoningContent)
-}
-
-func (c *streamCollector) collectToolCall(chunk *StreamChunk) {
-	if chunk.ToolCallDelta != nil {
-		c.toolAcc.Apply(chunk.ToolCallDelta)
-	}
-}
-
-func (c *streamCollector) outputBuilder(index *int, byIndex map[int]*strings.Builder, fallback *strings.Builder) *strings.Builder {
-	if index == nil {
-		return fallback
-	}
-
-	builder := byIndex[*index]
-	if builder == nil {
-		builder = &strings.Builder{}
-		byIndex[*index] = builder
-	}
-	return builder
-}
-
-func (c *streamCollector) buildResponse() (*Response, error) {
-	c.resp.Content = c.mergedContent()
-	if c.reasoningContent.Len() > 0 {
-		c.resp.ReasoningContent = c.reasoningContent.String()
-	}
-
-	c.resp.ToolCalls = c.toolAcc.Build()
-	if err := validateToolCalls(c.resp.Provider, c.resp.ToolCalls); err != nil {
-		return nil, err
-	}
-	c.resp.Usage.StampModel(c.resp.Provider, c.resp.Model)
-
-	if c.resp.Content == "" && c.resp.ReasoningContent == "" && len(c.resp.ToolCalls) == 0 && c.resp.FinishReason == "" {
-		return nil, providers.NewNetworkError(c.resp.Provider,
-			"stream completed but produced no output (0 content, 0 reasoning, 0 tool calls, no finish reason)", nil)
-	}
-
-	return &c.resp, nil
-}
-
-func (c *streamCollector) mergedContent() string {
-	if len(c.contentByOutputIndex) == 0 && len(c.refusalByOutputIndex) == 0 {
-		if c.contentBuilder.Len() == 0 && c.refusalBuilder.Len() > 0 {
-			return c.refusalBuilder.String()
-		}
-		return c.contentBuilder.String()
-	}
-
-	indices := make([]int, 0, len(c.contentByOutputIndex)+len(c.refusalByOutputIndex))
-	for index := range c.contentByOutputIndex {
-		indices = append(indices, index)
-	}
-	for index := range c.refusalByOutputIndex {
-		indices = append(indices, index)
-	}
-	sort.Ints(indices)
-
-	var merged strings.Builder
-	seen := make(map[int]bool, len(indices))
-	for _, index := range indices {
-		if seen[index] {
-			continue
-		}
-		seen[index] = true
-		if builder := c.contentByOutputIndex[index]; builder != nil && builder.Len() > 0 {
-			merged.WriteString(builder.String())
-			continue
-		}
-		if builder := c.refusalByOutputIndex[index]; builder != nil {
-			merged.WriteString(builder.String())
+	if len(c.blocks) > 0 {
+		if block, ok := c.blocks[len(c.blocks)-1].(ReasoningBlock); ok && len(block.Redacted) == 0 && block.Summary == delta.Summary {
+			block.Text += delta.Text
+			if delta.Signature != "" {
+				block.Signature = delta.Signature
+			}
+			c.blocks[len(c.blocks)-1] = block
+			return
 		}
 	}
-
-	merged.WriteString(c.contentBuilder.String())
-	if merged.Len() == 0 && c.refusalBuilder.Len() > 0 {
-		return c.refusalBuilder.String()
-	}
-	return merged.String()
+	c.blocks = append(c.blocks, ReasoningBlock{Text: delta.Text, Summary: delta.Summary, Signature: delta.Signature})
 }
 
-type streamCallbackDispatcher struct {
-	callbacks StreamCallbacks
-	lifecycle *lifecycleTracker
-}
-
-func newStreamCallbackDispatcher(callbacks StreamCallbacks) *streamCallbackDispatcher {
-	return &streamCallbackDispatcher{
-		callbacks: callbacks,
-		lifecycle: newLifecycleTracker(&callbacks),
-	}
-}
-
-func (d *streamCallbackDispatcher) process(chunk *StreamChunk) {
-	d.lifecycle.process(chunk)
-
-	if d.callbacks.OnChunk != nil {
-		d.callbacks.OnChunk(chunk)
-	}
-	if d.callbacks.OnContent != nil && chunk.Type == ChunkTypeContent && chunk.Content != "" {
-		d.callbacks.OnContent(chunk.Content)
-	}
-	if d.callbacks.OnReasoning != nil && chunk.ReasoningContent != "" {
-		d.callbacks.OnReasoning(chunk.ReasoningContent)
-	}
-	if d.callbacks.OnToolCall != nil && chunk.ToolCallDelta != nil {
-		d.callbacks.OnToolCall(chunk.ToolCallDelta)
-	}
-}
-
-type lifecycleTracker struct {
-	cb          *StreamCallbacks
-	active      string
-	contentAcc  strings.Builder
-	reasonAcc   strings.Builder
-	toolStarted map[int]bool
-	toolAcc     *ToolCallAccumulator
-	closed      bool
-}
-
-func newLifecycleTracker(cb *StreamCallbacks) *lifecycleTracker {
-	return &lifecycleTracker{
-		cb:          cb,
-		toolStarted: make(map[int]bool),
-		toolAcc:     NewToolCallAccumulator(),
-	}
-}
-
-func (t *lifecycleTracker) hasCallbacks() bool {
-	cb := t.cb
-	return cb.OnContentStart != nil || cb.OnContentEnd != nil ||
-		cb.OnReasoningStart != nil || cb.OnReasoningEnd != nil ||
-		cb.OnToolCallStart != nil || cb.OnToolCallEnd != nil
-}
-
-func (t *lifecycleTracker) process(chunk *StreamChunk) {
-	if !t.hasCallbacks() {
+func (c *EventCollector) appendTool(key string, tool *ToolUseBlock) {
+	if key == "" || tool == nil {
 		return
 	}
-
-	switch chunk.Type {
-	case ChunkTypeContent:
-		if t.active != "content" {
-			t.closeActive()
-			t.active = "content"
-			if t.cb.OnContentStart != nil {
-				t.cb.OnContentStart()
-			}
-		}
-		t.contentAcc.WriteString(chunk.Content)
-
-	case ChunkTypeReasoning:
-		if t.active != "reasoning" {
-			t.closeActive()
-			t.active = "reasoning"
-			if t.cb.OnReasoningStart != nil {
-				t.cb.OnReasoningStart()
-			}
-		}
-		t.reasonAcc.WriteString(chunk.ReasoningContent)
-
-	case ChunkTypeToolCallDelta, ChunkTypeToolCallStart:
-		if chunk.ToolCallDelta != nil {
-			idx := chunk.ToolCallDelta.Index
-			t.toolAcc.Apply(chunk.ToolCallDelta)
-			if !t.toolStarted[idx] {
-				if len(t.toolStarted) == 0 {
-					t.closeActive()
-				}
-				t.toolStarted[idx] = true
-				if t.cb.OnToolCallStart != nil {
-					t.cb.OnToolCallStart(chunk.ToolCallDelta)
-				}
-			}
-		}
-
-	case ChunkTypeToolCallEnd, "tool_call_done":
-		if chunk.ToolCallDelta != nil {
-			idx := chunk.ToolCallDelta.Index
-			t.toolAcc.Apply(chunk.ToolCallDelta)
-			if t.cb.OnToolCallEnd != nil {
-				if tc := t.toolAcc.Get(idx); tc != nil {
-					t.cb.OnToolCallEnd(*tc)
-				}
-			}
-			delete(t.toolStarted, idx)
-		}
-
-	case "reasoning_done":
-		if t.active == "reasoning" {
-			t.closeActive()
-		}
-	}
-
-	if chunk.Done || chunk.FinishReason != "" {
-		t.finish()
-	}
-}
-
-func (t *lifecycleTracker) closeActive() {
-	switch t.active {
-	case "content":
-		if t.cb.OnContentEnd != nil {
-			t.cb.OnContentEnd(t.contentAcc.String())
-		}
-		t.contentAcc.Reset()
-	case "reasoning":
-		if t.cb.OnReasoningEnd != nil {
-			t.cb.OnReasoningEnd(t.reasonAcc.String())
-		}
-		t.reasonAcc.Reset()
-	}
-	t.active = ""
-}
-
-func (t *lifecycleTracker) finish() {
-	if t.closed {
+	if index, ok := c.toolIndexes[key]; ok {
+		c.blocks[index] = cloneToolUseBlock(*tool)
 		return
 	}
-	t.closed = true
-	t.closeActive()
-	if t.cb.OnToolCallEnd != nil {
-		for idx := range t.toolStarted {
-			if tc := t.toolAcc.Get(idx); tc != nil {
-				t.cb.OnToolCallEnd(*tc)
-			}
+	c.toolIndexes[key] = len(c.blocks)
+	c.blocks = append(c.blocks, cloneToolUseBlock(*tool))
+}
+
+func (c *EventCollector) cloneBlocks() []Block {
+	if len(c.blocks) == 0 {
+		return nil
+	}
+	out := make([]Block, len(c.blocks))
+	for i, block := range c.blocks {
+		switch b := block.(type) {
+		case TextBlock:
+			out[i] = b
+		case ReasoningBlock:
+			out[i] = b
+		case ToolUseBlock:
+			out[i] = cloneToolUseBlock(b)
+		default:
+			out[i] = block
 		}
 	}
+	return out
 }
 
-type hookedStreamReader struct {
-	ctx    context.Context
-	meta   CallMeta
-	hooks  []Hook
-	stream StreamReader
-	ended  sync.Once
+func cloneToolUseBlock(block ToolUseBlock) ToolUseBlock {
+	block.Arguments = json.RawMessage(cloneBytes(block.Arguments))
+	block.Extra = json.RawMessage(cloneBytes(block.Extra))
+	return block
 }
 
-func newHookedStreamReader(ctx context.Context, meta CallMeta, hooks []Hook, stream StreamReader) StreamReader {
-	if stream == nil {
-		return stream
+type ToolUseAccumulator struct {
+	order   []string
+	byKey   map[string]*ToolUseBlock
+	aliases map[string]string
+}
+
+func NewToolUseAccumulator() *ToolUseAccumulator {
+	return &ToolUseAccumulator{
+		byKey:   make(map[string]*ToolUseBlock),
+		aliases: make(map[string]string),
 	}
-	return &hookedStreamReader{
-		ctx:    ctx,
-		meta:   meta,
-		hooks:  hooks,
-		stream: stream,
-	}
 }
 
-func (r *hookedStreamReader) Next() (*StreamChunk, error) {
-	chunk, err := r.stream.Next()
+func (a *ToolUseAccumulator) Start(start ToolUseStart) (string, *ToolUseBlock, error) {
+	key, tool, err := a.ensureFor(start.ID, start.Index, start.OutputIndex, start.ItemID)
 	if err != nil {
-		// A clean EOF carries no error semantics; anything else aborted the stream.
-		if errors.Is(err, io.EOF) {
-			r.notifyEnd(nil)
-		} else {
-			r.notifyEnd(err)
-		}
-		return nil, err
+		return "", nil, fmt.Errorf("tool use start: %w", err)
 	}
-	if chunk != nil {
-		if chunk.Provider == "" {
-			chunk.Provider = r.meta.Provider
-		}
-		if chunk.Model == "" {
-			chunk.Model = r.meta.Model
-		}
-		for _, h := range r.hooks {
-			h.OnStreamChunk(r.ctx, r.meta, chunk)
-		}
+	if start.ID != "" {
+		tool.ID = start.ID
 	}
-	return chunk, nil
+	if start.Name != "" {
+		tool.Name = start.Name
+	}
+	if start.Signature != "" {
+		tool.Signature = start.Signature
+	}
+	return key, tool, nil
 }
 
-func (r *hookedStreamReader) Close() error {
-	r.notifyEnd(nil)
-	return r.stream.Close()
+func (a *ToolUseAccumulator) Delta(delta ToolUseDelta) (string, *ToolUseBlock, error) {
+	key, tool, err := a.ensureFor(delta.ID, delta.Index, delta.OutputIndex, delta.ItemID)
+	if err != nil {
+		return "", nil, fmt.Errorf("tool use delta: %w", err)
+	}
+	if delta.ID != "" {
+		tool.ID = delta.ID
+	}
+	if delta.Signature != "" {
+		tool.Signature = delta.Signature
+	}
+	if len(delta.ArgumentsDelta) > 0 {
+		tool.Arguments = append(tool.Arguments, delta.ArgumentsDelta...)
+	}
+	return key, tool, nil
 }
 
-// notifyEnd delivers the stream-termination signal to every hook exactly once,
-// regardless of whether the stream ended via error, EOF, or caller Close. This
-// is what lets hooks finalize state (e.g. close an observability span) even when
-// the stream aborts before a final Done chunk.
-func (r *hookedStreamReader) notifyEnd(err error) {
-	r.ended.Do(func() {
-		for _, h := range r.hooks {
-			h.OnStreamEnd(r.ctx, r.meta, err)
+func (a *ToolUseAccumulator) Done(done ToolUseDone) (string, *ToolUseBlock, error) {
+	key, tool, err := a.findFor(done.ID, done.Index, done.OutputIndex, done.ItemID)
+	if err != nil {
+		return "", nil, fmt.Errorf("tool use done: %w", err)
+	}
+	if done.ID != "" {
+		tool.ID = done.ID
+	}
+	return key, tool, nil
+}
+
+func (a *ToolUseAccumulator) Build() []Block {
+	if len(a.order) == 0 {
+		return nil
+	}
+	blocks := make([]Block, 0, len(a.order))
+	for _, key := range a.order {
+		if tool := a.byKey[key]; tool != nil {
+			blocks = append(blocks, cloneToolUseBlock(*tool))
 		}
-	})
+	}
+	return blocks
+}
+
+func (a *ToolUseAccumulator) ensureFor(id string, index, outputIndex *int, itemID string) (string, *ToolUseBlock, error) {
+	keys := toolUseKeys(id, index, outputIndex, itemID)
+	if len(keys) == 0 {
+		return "", nil, fmt.Errorf("tool use missing id and index")
+	}
+	primary := keys[0]
+	if key, tool := a.lookup(keys); tool != nil {
+		a.aliasAll(key, keys)
+		return key, tool, nil
+	}
+	tool := &ToolUseBlock{}
+	a.byKey[primary] = tool
+	a.order = append(a.order, primary)
+	a.aliasAll(primary, keys)
+	return primary, tool, nil
+}
+
+func (a *ToolUseAccumulator) findFor(id string, index, outputIndex *int, itemID string) (string, *ToolUseBlock, error) {
+	keys := toolUseKeys(id, index, outputIndex, itemID)
+	if len(keys) == 0 {
+		return "", nil, fmt.Errorf("tool use missing id and index")
+	}
+	if key, tool := a.lookup(keys); tool != nil {
+		a.aliasAll(key, keys)
+		return key, tool, nil
+	}
+	return "", nil, fmt.Errorf("tool use done references unknown tool use")
+}
+
+func (a *ToolUseAccumulator) lookup(keys []string) (string, *ToolUseBlock) {
+	for _, key := range keys {
+		if canonical := a.aliases[key]; canonical != "" {
+			if tool := a.byKey[canonical]; tool != nil {
+				return canonical, tool
+			}
+		}
+		if tool := a.byKey[key]; tool != nil {
+			return key, tool
+		}
+	}
+	return "", nil
+}
+
+func (a *ToolUseAccumulator) aliasAll(canonical string, keys []string) {
+	for _, key := range keys {
+		a.aliases[key] = canonical
+	}
+}
+
+func toolUseKeys(id string, index, outputIndex *int, itemID string) []string {
+	keys := make([]string, 0, 4)
+	if id != "" {
+		keys = append(keys, "id:"+id)
+	}
+	if itemID != "" {
+		keys = append(keys, "item:"+itemID)
+	}
+	if index != nil {
+		keys = append(keys, fmt.Sprintf("index:%d", *index))
+	}
+	if outputIndex != nil {
+		keys = append(keys, fmt.Sprintf("output:%d", *outputIndex))
+	}
+	return keys
 }

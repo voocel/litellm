@@ -1,26 +1,18 @@
-# LiteLLM (Go) — Multi‑Provider LLM Client
+# LiteLLM Go
 
 [中文](README_CN.md) | English
 
-LiteLLM is a small, typed Go client that lets you call multiple LLM providers through one API.
+LiteLLM is a small, explicit Go SDK for calling LLM providers through one typed core model. The root package owns the provider-agnostic API; concrete providers live in `provider/<name>` subpackages.
 
-## Get Started
+It is not a router, gateway, fallback engine, queue, account system, or agent runtime.
 
-### Install
+## Install
 
 ```bash
 go get github.com/voocel/litellm
 ```
 
-### 1) Prepare an API key
-
-```bash
-export OPENAI_API_KEY="your-key"
-```
-
-### 2) Quick examples (minimal runnable)
-
-#### Text (chat)
+## Quick Start
 
 ```go
 package main
@@ -32,403 +24,349 @@ import (
 	"os"
 
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/provider/openai"
 )
 
 func main() {
-	client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
+	client, err := openai.NewClient(openai.Config{
 		APIKey: os.Getenv("OPENAI_API_KEY"),
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	resp, err := client.Chat(context.Background(), &litellm.Request{
-		Model:    "gpt-5.5",
-		Messages: []litellm.Message{litellm.UserMessage("Explain AI in one sentence.")},
+	resp, err := client.Chat(context.Background(), litellm.Request{
+		Model: "gpt-5.4-mini",
+		Messages: []litellm.Message{
+			litellm.System("You are concise."),
+			litellm.UserText("Explain Go interfaces in one sentence."),
+		},
+		MaxTokens: litellm.IntPtr(120),
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(resp.Content)
+	fmt.Println(resp.Text())
 }
 ```
 
-#### Tool calling
+`openai.NewClient(cfg, opts...)` builds the provider first, then returns a ready `*litellm.Client`; every provider package exposes it. The explicit two-step form — `provider, _ := openai.New(cfg)` then `litellm.New(provider, opts...)` — is equivalent; prefer it when you want to share one provider across multiple clients. Both forms accept the same `ClientOption`s.
+
+## Core Model
+
+Messages and responses use ordered `Block` values:
+
+- `TextBlock`
+- `ImageBlock`
+- `ReasoningBlock`
+- `ToolUseBlock`
+- `ToolResultBlock`
+- `ToolReferenceBlock`
+
+`Response.Blocks` is the canonical response content. `Text()`, `Reasoning()`, and `ToolCalls()` are convenience views.
 
 ```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-	"os"
-
-	"github.com/voocel/litellm"
-)
-
-func main() {
-	client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
-		APIKey: os.Getenv("OPENAI_API_KEY"),
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	tools := []litellm.Tool{
-		litellm.NewTool("get_weather", "Get weather for a city.", map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"city": map[string]any{"type": "string"},
-			},
-			"required": []string{"city"},
-		}),
-	}
-
-	resp, err := client.Chat(context.Background(), &litellm.Request{
-		Model:      "gpt-5.5",
-		Messages:   []litellm.Message{litellm.UserMessage("Weather in New York?")},
-		Tools:      tools,
-		ToolChoice: "auto",
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println(resp.Content)
+msgs := []litellm.Message{
+	litellm.User(litellm.Text("What is in this image?"), litellm.ImageURL("https://example.com/cat.png")),
 }
+
+resp, err := client.Chat(ctx, litellm.Request{Model: "gpt-5.4-mini", Messages: msgs})
+_ = resp
+_ = err
 ```
 
-#### Streaming (collect)
+For multi-turn tool workflows, append the previous response blocks directly:
 
 ```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-	"os"
-
-	"github.com/voocel/litellm"
-)
-
-func main() {
-	client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
-		APIKey: os.Getenv("OPENAI_API_KEY"),
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	stream, err := client.Stream(context.Background(), &litellm.Request{
-		Model:    "gpt-5.5",
-		Messages: []litellm.Message{litellm.UserMessage("Tell me a joke.")},
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer stream.Close()
-
-	resp, err := litellm.CollectStream(stream)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println(resp.Content)
-}
-```
-
-If you need real-time streaming and a final aggregated response:
-
-```go
-resp, err := litellm.CollectStreamWithHandler(stream, func(chunk *litellm.StreamChunk) {
-	if chunk.Type == litellm.ChunkTypeContent && chunk.Content != "" {
-		fmt.Print(chunk.Content)
-	}
-	if chunk.ReasoningDone {
-		fmt.Print("\n[reasoning done]")
-	}
-})
+args, err := litellm.JSONRaw(map[string]any{"ok": true})
 if err != nil {
 	log.Fatal(err)
 }
-fmt.Println("\n---")
-fmt.Println(resp.Content)
+
+msgs = append(msgs,
+	litellm.Assistant(resp.Blocks...),
+	litellm.ToolResultText("call_1", string(args)),
+)
 ```
 
-> Notes
-> - The `providers` package is an internal implementation detail. End users should only import `github.com/voocel/litellm`.
-> - LiteLLM does not auto-discover providers or auto-route models. You must configure providers explicitly.
+`JSONRaw` returns marshal errors instead of silently producing invalid tool arguments. Use `MustJSONRaw` only for static test data or package-level examples where panic is acceptable.
 
-## Core API
-
-- `New(provider, opts...)` builds a client with an explicit provider.
-- `NewWithProvider(name, config, opts...)` builds a client from a provider name and config.
-- `Request` is provider‑agnostic: set `Model` and `Messages`, then optional controls like `MaxTokens`, `Temperature`, `TopP`, `Stop`, etc.
-- `Chat(ctx, req)` returns a unified `Response`.
-- `Stream(ctx, req)` returns a `StreamReader` (not goroutine‑safe). Always `defer stream.Close()`.
-- `CollectStream(stream)` collects a stream into a unified `Response`.
-- `CollectStreamWithHandler(stream, onChunk)` collects and also handles each chunk.
-- `CollectStreamWithCallbacks(stream, callbacks)` adds content/reasoning/tool callbacks.
-- `WithHook(h)` / `WithHooks(...)` observe requests, responses, and stream chunks without changing control flow.
-- `Request.Thinking` controls thinking output when explicitly set; otherwise behavior is provider-specific.
-- `ListModels(ctx)` lists available models for the current provider (only some providers; fields are best‑effort).
-
-### Streaming (minimal)
+By default the SDK validates message history strictly. Dirty tool histories, invalid tool IDs, missing tool results, and unsupported provider options return errors. If you need to import legacy history, enable repair explicitly:
 
 ```go
-stream, err := client.Stream(ctx, &litellm.Request{
-	Model: "gpt-5.5",
-	Messages: []litellm.Message{
-		{Role: "user", Content: "Tell me a joke."},
-	},
+client, err := openai.NewClient(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")}, litellm.WithMessageRepair(litellm.RepairAll))
+```
+
+Repairs and provider normalizations that change observable data are exposed through `Response.Warnings`, `WarningEvent`, and `Hook.OnWarning`.
+
+Raw provider response bodies are not retained by default. Enable them explicitly when debugging:
+
+```go
+client, err := openai.NewClient(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")}, litellm.WithCaptureRawResponse(true))
+```
+
+## Streaming
+
+Streams emit typed `Event` values.
+`Stream` is intended for single-goroutine consumption; do not call `Next` concurrently.
+Use `WithStreamIdleTimeout` when you want an explicit per-event idle timeout; it is off by default.
+`WithStreamIdleTimeout` only covers generic `Client.Stream`; OpenAI Responses native streaming uses `openai.Config.StreamIdleTimeout`.
+For example:
+
+```go
+client, err := openai.NewClient(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")}, litellm.WithStreamIdleTimeout(120*time.Second))
+```
+
+```go
+stream, err := client.Stream(ctx, litellm.Request{
+	Model:    "gpt-5.4-mini",
+	Messages: []litellm.Message{litellm.UserText("Tell me a short joke.")},
 })
 if err != nil {
 	log.Fatal(err)
 }
 defer stream.Close()
 
-resp, err := litellm.CollectStream(stream)
+for {
+	event, err := stream.Next()
+	if err != nil {
+		log.Fatal(err)
+	}
+	switch e := event.(type) {
+	case litellm.ContentDelta:
+		fmt.Print(e.Text)
+	case litellm.ReasoningDelta:
+		fmt.Print(e.Text)
+	case litellm.ProviderEvent:
+		// Provider-native lifecycle/hosted-tool event.
+	case litellm.DoneEvent:
+		return
+	}
+}
+```
+
+To aggregate a stream:
+
+```go
+resp, err := litellm.Collect(stream)
+```
+
+## Retry
+
+Retries are off by default. Enable them per provider:
+
+```go
+import "github.com/voocel/litellm/retry"
+
+provider, err := openai.New(openai.Config{
+	APIKey: os.Getenv("OPENAI_API_KEY"),
+	Retry:  retry.DefaultPolicy(),
+})
+```
+
+Bedrock retries re-sign each attempt internally, so users do not need to compose SigV4 transports by hand.
+
+If you need a proxy, tracing, or a custom base transport, pass `Transport` together with `Retry`. A custom `HTTPClient` is an advanced escape hatch and cannot be combined with `Retry`; configure retry inside that client yourself.
+
+Choose the smallest configuration that matches your use case:
+
+| Use case | Config |
+| --- | --- |
+| Normal retries | `Retry: retry.DefaultPolicy()` |
+| Retries plus proxy/tracing/custom base transport | `Retry` + `Transport` |
+| Fully custom request execution | `HTTPClient`, without `Retry`/`Transport` |
+
+`APIKeyFunc` is resolved once when a request is created; retry attempts reuse that request. If you use extremely short-lived Bearer tokens, inject auth in a lower-level custom `Transport` or `HTTPClient`. Normal API keys and the default retry window do not need special handling.
+
+## Tools
+
+```go
+tool, err := litellm.NewTool("get_weather", "Get weather for a city.", map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"city": map[string]any{"type": "string"},
+	},
+	"required": []string{"city"},
+})
 if err != nil {
 	log.Fatal(err)
 }
-fmt.Print(resp.Content)
+tool.Strict = litellm.StrictEnabled
+
+resp, err := client.Chat(ctx, litellm.Request{
+	Model:      "gpt-5.4-mini",
+	Messages:   []litellm.Message{litellm.UserText("Weather in Paris?")},
+	Tools:      []litellm.Tool{tool},
+	ToolChoice: "auto",
+})
 ```
 
-### Hooks
-
-Use hooks when you want lightweight observability around requests without modifying provider behavior.
+## Structured Output
 
 ```go
-client, err := litellm.NewWithProvider(
-	"openai",
-	litellm.ProviderConfig{APIKey: os.Getenv("OPENAI_API_KEY")},
-	litellm.WithHook(litellm.HookFuncs{
-		BeforeRequestFunc: func(ctx context.Context, meta litellm.CallMeta, req *litellm.Request) {
-			log.Printf("→ call=%s %s provider=%s model=%s", meta.CallID, meta.Operation, meta.Provider, meta.Model)
-		},
-		AfterResponseFunc: func(ctx context.Context, meta litellm.CallMeta, resp *litellm.Response, err error) {
-			if err != nil {
-				log.Printf("← call=%s %s error=%v", meta.CallID, meta.Operation, err)
-				return
-			}
-			log.Printf("← call=%s %s duration=%s", meta.CallID, meta.Operation, meta.Duration)
-		},
-		OnStreamChunkFunc: func(ctx context.Context, meta litellm.CallMeta, chunk *litellm.StreamChunk) {
-			if chunk.Type == litellm.ChunkTypeContent && chunk.Content != "" {
-				fmt.Print(chunk.Content)
-			}
-		},
-	}),
-)
-if err != nil {
-	log.Fatal(err)
-}
-```
-
-Notes:
-- Hooks are observational. They do not modify requests, responses, or stream flow.
-- `CallMeta.CallID` is stable for the lifetime of a single call and can be used to correlate hook events.
-- For streaming calls, `AfterResponse` runs when the stream is established; `resp` is `nil` in that case.
-- `OnStreamEnd` runs exactly once when a stream ends, including early close or abort.
-
-### OpenTelemetry
-
-The optional `github.com/voocel/litellm/otel` module turns hooks into OpenTelemetry generation spans. The core module has no OpenTelemetry dependency.
-
-```bash
-go get github.com/voocel/litellm/otel
-```
-
-```go
-client, err := litellm.NewWithProvider(
-	"openai",
-	litellm.ProviderConfig{APIKey: os.Getenv("OPENAI_API_KEY")},
-	litellm.WithHook(litellmotel.New(
-		otel.Tracer("my-app"),
-		litellmotel.WithCaptureContent(false), // disable prompt/completion capture for privacy
-	)),
-)
-if err != nil {
-	log.Fatal(err)
-}
-```
-
-It records `gen_ai.*` attributes for provider/model, finish reason, token usage, and optional prompt/completion text. Use `WithSpanAttributes` for backend-specific metadata such as Langfuse session IDs.
-
-## Advanced Features (optional)
-
-Each feature below works across providers. Longer runnable examples live in `examples/`.
-
-### Model listing (some providers)
-
-> Notes
-> - Supported today: OpenAI / Anthropic / Gemini / OpenRouter / DeepSeek / Bedrock
-> - Returned fields vary by provider; `ModelInfo` is best‑effort
-> - Gemini model IDs are normalized (the `models/` prefix is removed)
-> - Bedrock control plane can be overridden via `ProviderConfig.Extra["control_plane_base_url"]`
-
-```go
-models, err := client.ListModels(ctx)
-if err != nil {
-	log.Fatal(err)
-}
-for _, m := range models {
-	fmt.Println(m.ID, m.Name)
-}
-```
-
-### Structured outputs
-
-```go
-schema := map[string]any{
+format, err := litellm.NewResponseFormatJSONSchema("person", "", map[string]any{
 	"type": "object",
 	"properties": map[string]any{
 		"name": map[string]any{"type": "string"},
-		"age":  map[string]any{"type": "integer"},
 	},
-	"required": []string{"name", "age"},
-}
-
-resp, err := client.Chat(ctx, &litellm.Request{
-	Model: "gpt-5.5",
-	Messages: []litellm.Message{{Role: "user", Content: "Generate a person."}},
-	ResponseFormat: litellm.NewResponseFormatJSONSchema("person", "", schema, true),
-})
-_ = resp
-```
-
-### Function calling
-
-```go
-tools := []litellm.Tool{
-	{
-		Type: "function",
-		Function: litellm.FunctionDef{
-			Name: "get_weather",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"city": map[string]any{"type": "string"},
-				},
-				"required": []string{"city"},
-			},
-		},
-	},
-}
-
-resp, err := client.Chat(ctx, &litellm.Request{
-	Model: "gpt-5.5",
-	Messages: []litellm.Message{{Role: "user", Content: "Weather in New York?"}},
-	Tools: tools,
-	ToolChoice: "auto",
-})
-_ = resp
-```
-
-### Thinking output
-
-```go
-resp, err := client.Chat(ctx, &litellm.Request{
-	Model:    "claude-haiku-4-5-20251001",
-	Messages: []litellm.Message{litellm.UserMessage("Explain the tradeoffs.")},
-	Thinking: litellm.NewThinkingEnabled(1024),
-})
-_ = resp
-```
-
-To disable:
-
-```go
-req := &litellm.Request{
-	Model:    "claude-haiku-4-5-20251001",
-	Messages: []litellm.Message{litellm.UserMessage("Explain the tradeoffs.")},
-	Thinking: litellm.NewThinkingDisabled(),
-}
-_ = req
-```
-
-### OpenAI Responses API
-
-```go
-resp, err := client.Responses(ctx, &litellm.OpenAIResponsesRequest{
-	Model: "gpt-5.5",
-	Messages: []litellm.Message{{Role: "user", Content: "Solve 15*8 step by step."}},
-	ReasoningEffort:  "medium",
-	ReasoningSummary: "auto",
-	Thinking:         litellm.NewThinkingEnabled(0),
-	MaxOutputTokens:  litellm.IntPtr(800),
-})
-_ = resp
-```
-
-### Retries & timeouts
-
-```go
-res := litellm.DefaultResilienceConfig()
-res.MaxRetries = 3
-res.InitialDelay = 1 * time.Second
-res.RequestTimeout = 60 * time.Second
-
-client, _ := litellm.NewWithProvider("openai", litellm.ProviderConfig{
-	APIKey:     os.Getenv("OPENAI_API_KEY"),
-	Resilience: res,
-})
-_ = client
-```
-
-### Provider‑specific knobs
-
-`Request.Extra` is validated per provider. Unsupported providers will return an error.
-
-Supported keys:
-- Anthropic request extra: `cache_retention`, `metadata`, `metadata_user_id`
-- Gemini: `tool_name` (string) for tool response naming
-
-OpenAI, OpenAI-compatible, and Anthropic providers also support provider-level
-request headers via `ProviderConfig.Extra`:
-
-- `user_agent` (string): sets `User-Agent`
-- `headers` / `extra_headers` (`map[string]string` or `map[string]any`): sets extra HTTP headers
-- Anthropic only: `anthropic_beta` (string or `[]string`): sets `anthropic-beta`
-
-Example:
-
-```go
-client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
-	APIKey:  os.Getenv("OPENAI_API_KEY"),
-	BaseURL: os.Getenv("OPENAI_BASE_URL"),
-	Extra: map[string]any{
-		"user_agent": "my-client/1.0",
-		"headers": map[string]string{
-			"X-Custom-Client": "my-client",
-		},
-	},
-})
-_ = client
-_ = err
-```
-
-### Cost calculation
-
-Calculate request costs based on token usage. Pricing data is fetched from [BerriAI/litellm](https://github.com/BerriAI/litellm) and loaded automatically on first use.
-
-```go
-resp, err := client.Chat(ctx, req)
+	"required": []string{"name"},
+}, litellm.StrictEnabled)
 if err != nil {
 	log.Fatal(err)
 }
 
-// Calculate cost (pricing data loads automatically)
-if cost, err := litellm.CalculateCostForResponse(resp); err == nil {
-	fmt.Printf("Cost: $%.6f (input: $%.6f, output: $%.6f)\n",
-		cost.TotalCost, cost.InputCost, cost.OutputCost)
+resp, err := client.Chat(ctx, litellm.Request{
+	Model:          "gpt-5.4-mini",
+	Messages:       []litellm.Message{litellm.UserText("Generate a person.")},
+	ResponseFormat: format,
+})
+```
+
+## Thinking
+
+Thinking is explicit. If `Thinking` is nil, the SDK sends no thinking control fields.
+
+```go
+resp, err := client.Chat(ctx, litellm.Request{
+	Model:    "claude-sonnet-4-5-20250929",
+	Messages: []litellm.Message{litellm.UserText("Explain the tradeoffs.")},
+	MaxTokens: litellm.IntPtr(2048),
+	Thinking: &litellm.Thinking{
+		Mode:  litellm.ThinkingEnabled,
+		Level: "low",
+	},
+})
+```
+
+Provider constraints are validated locally. For example, Anthropic thinking requires `max_tokens >= 1024`, a budget or level, and no conflicting explicit temperature.
+
+## OpenAI Responses
+
+OpenAI Responses is provider-native and lives on `provider/openai.Provider`, not the generic client.
+
+```go
+oai, err := openai.New(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")})
+if err != nil {
+	log.Fatal(err)
 }
 
-// Or use the standalone function
-cost, err := litellm.CalculateCost(resp.Model, resp.Usage)
+resp, err := oai.Responses(ctx, &openai.ResponsesRequest{
+	Model: "gpt-5.5",
+	Messages: []litellm.Message{
+		litellm.UserText("Solve 15*8 step by step."),
+	},
+	ReasoningEffort:  "medium",
+	ReasoningSummary: "auto",
+	MaxOutputTokens:  litellm.IntPtr(800),
+	OpenAITools: []openai.ResponsesTool{
+		{"type": "web_search_preview"},
+	},
+})
+```
 
-// Set custom pricing for unlisted models
-litellm.SetModelPricing("my-model", litellm.ModelPricing{
+Streaming Responses uses the same typed event model:
+
+```go
+oai, err := openai.New(openai.Config{
+	APIKey:            os.Getenv("OPENAI_API_KEY"),
+	StreamIdleTimeout: 120 * time.Second,
+})
+
+stream, err := oai.ResponsesStream(ctx, &openai.ResponsesRequest{
+	Model:    "gpt-5.5",
+	Messages: []litellm.Message{litellm.UserText("Search and summarize.")},
+})
+```
+
+## Providers
+
+Provider configs are provider-specific. Authentication is not forced into a single API-key shape.
+
+```go
+import (
+	"github.com/voocel/litellm/provider/anthropic"
+	"github.com/voocel/litellm/provider/bedrock"
+	"github.com/voocel/litellm/provider/deepseek"
+	"github.com/voocel/litellm/provider/gemini"
+	"github.com/voocel/litellm/provider/glm"
+	"github.com/voocel/litellm/provider/grok"
+	"github.com/voocel/litellm/provider/minimax"
+	"github.com/voocel/litellm/provider/ollama"
+	"github.com/voocel/litellm/provider/openrouter"
+	"github.com/voocel/litellm/provider/qwen"
+)
+```
+
+Examples:
+
+```go
+anthropic.New(anthropic.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
+gemini.New(gemini.Config{APIKey: os.Getenv("GEMINI_API_KEY")})
+deepseek.New(deepseek.Config{APIKey: os.Getenv("DEEPSEEK_API_KEY")})
+ollama.New(ollama.Config{})
+
+bedrock.New(bedrock.Config{
+	Region: "us-east-1",
+	Credentials: bedrock.StaticCredentials(
+		os.Getenv("AWS_ACCESS_KEY_ID"),
+		os.Getenv("AWS_SECRET_ACCESS_KEY"),
+		os.Getenv("AWS_SESSION_TOKEN"),
+	),
+})
+```
+
+Supported provider packages currently include OpenAI, Anthropic, Gemini, Bedrock, DeepSeek, Qwen, GLM, OpenRouter, MiniMax, Grok, MiMo, and Ollama.
+
+## Model Listing
+
+```go
+models, err := client.ListModels(ctx)
+```
+
+Only providers that implement `ModelLister` support this. Returned fields are best-effort.
+
+## Provider Options
+
+Provider-specific request options go in `Request.ProviderOptions`. Unknown keys error by default.
+
+```go
+resp, err := client.Chat(ctx, litellm.Request{
+	Model:    "gpt-5.4-mini",
+	Messages: []litellm.Message{litellm.UserText("Hello")},
+	ProviderOptions: litellm.ProviderOptions{
+		openai.ProviderOptionPromptCacheRetention: "24h",
+	},
+})
+```
+
+## Hooks And OTel
+
+Hooks observe requests, responses, warnings, and stream events. Hook inputs are copies; mutating them does not affect provider calls, returned responses, or events seen by the caller. Core hooks do not recover panics.
+
+```go
+client, err := litellm.New(provider, litellm.WithHook(litellm.HookFuncs{
+	OnStreamEventFunc: func(ctx context.Context, meta litellm.CallMeta, event litellm.Event) {
+		if delta, ok := event.(litellm.ContentDelta); ok {
+			fmt.Print(delta.Text)
+		}
+	},
+}))
+```
+
+The optional `github.com/voocel/litellm/otel` module adapts hooks to OpenTelemetry spans.
+
+## Pricing
+
+Pricing is explicit. Cost calculation never loads remote pricing implicitly.
+
+```go
+import "github.com/voocel/litellm/pricing"
+
+reg := pricing.NewRegistry()
+err := reg.LoadFromURL(ctx, pricing.DefaultURL)
+cost, err := reg.Calculate(resp.Model, resp.Usage)
+
+err = reg.Set("my-model", pricing.ModelPricing{
 	InputCostPerToken:  0.000001,
 	OutputCostPerToken: 0.000002,
 })
@@ -436,58 +374,14 @@ litellm.SetModelPricing("my-model", litellm.ModelPricing{
 
 ## Custom Providers
 
-Implement `litellm.Provider` and register it:
+Implement the small provider interface:
 
 ```go
-type MyProvider struct {
-	name   string
-	config litellm.ProviderConfig
+type Provider interface {
+	Name() string
+	Chat(context.Context, *litellm.Request) (*litellm.Response, error)
+	Stream(context.Context, *litellm.Request) (litellm.Stream, error)
 }
-
-func (p *MyProvider) Name() string                     { return p.name }
-func (p *MyProvider) Validate() error                 { return nil }
-
-func (p *MyProvider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
-	return &litellm.Response{Content: "hello", Model: req.Model, Provider: p.name}, nil
-}
-func (p *MyProvider) Stream(ctx context.Context, req *litellm.Request) (litellm.StreamReader, error) {
-	return nil, fmt.Errorf("streaming not implemented")
-}
-
-func init() {
-	_ = litellm.RegisterProviderWithDescriptor(litellm.ProviderDescriptor{
-		Name:       "myprovider",
-		DefaultURL: "https://api.example.com/v1",
-		Factory: func(cfg litellm.ProviderConfig) litellm.Provider {
-			return &MyProvider{name: "myprovider", config: cfg}
-		},
-	})
-}
-```
-
-Custom provider contract:
-
-- `Chat` should validate basic request fields and return canonical fields when possible: `Response.Provider`, `Response.Model`, `Response.FinishReason`, and `Response.Usage`.
-- `Stream` should emit text deltas as `ChunkTypeContent`, reasoning deltas via `ReasoningContent`, tool deltas via `ToolCallDelta`, and finish with a chunk where `Done=true`.
-- `ToolCallDelta.Index` must stay stable for the same streamed tool call so the accumulator can rebuild complete tool calls.
-- Prefer returning `LiteLLMError` values, or errors wrapped by `WrapError`, so upper layers can classify auth, rate limit, timeout, model, and validation failures consistently.
-
-## Supported Providers
-
-Builtin providers: OpenAI, Anthropic, Google Gemini, DeepSeek, Qwen (DashScope), GLM, AWS Bedrock, OpenRouter.
-
-LiteLLM does not rewrite model IDs. Always use official model IDs.
-
-## Configuration
-
-Configure providers explicitly:
-
-```go
-client, err := litellm.NewWithProvider("openai", litellm.ProviderConfig{
-	APIKey:  os.Getenv("OPENAI_API_KEY"),
-	BaseURL: os.Getenv("OPENAI_BASE_URL"), // optional
-})
-_ = client
 ```
 
 ## License

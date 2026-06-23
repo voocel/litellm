@@ -4,551 +4,895 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
+	"strings"
 	"testing"
+	"time"
 )
 
-func assertCallMeta(t *testing.T, before, after CallMeta, operation, model string, streaming bool) {
-	t.Helper()
-
-	if before.CallID == "" {
-		t.Fatal("call_id is empty")
-	}
-	if after.CallID != before.CallID {
-		t.Fatalf("after call_id = %q, want %q", after.CallID, before.CallID)
-	}
-	if before.Operation != operation {
-		t.Fatalf("operation = %q, want %q", before.Operation, operation)
-	}
-	if before.Model != model {
-		t.Fatalf("model = %q, want %q", before.Model, model)
-	}
-	if before.Streaming != streaming {
-		t.Fatalf("streaming = %v, want %v", before.Streaming, streaming)
-	}
-	if after.Duration <= 0 {
-		t.Fatalf("duration = %v, want > 0", after.Duration)
-	}
-}
-
-func assertInternalErrorModel(t *testing.T, err error, model string) {
-	t.Helper()
-
-	var llmErr *LiteLLMError
-	if !errors.As(err, &llmErr) {
-		t.Fatalf("error type = %T, want *LiteLLMError", err)
-	}
-	if llmErr.Type != ErrorTypeInternal {
-		t.Fatalf("error type = %q, want %q", llmErr.Type, ErrorTypeInternal)
-	}
-	if llmErr.Model != model {
-		t.Fatalf("error model = %q, want %q", llmErr.Model, model)
-	}
-}
-
-type pipelineTestProvider struct {
+type testProvider struct {
 	name       string
 	chatFunc   func(context.Context, *Request) (*Response, error)
-	streamFunc func(context.Context, *Request) (StreamReader, error)
+	streamFunc func(context.Context, *Request) (Stream, error)
 	lastReq    *Request
 }
 
-func (p *pipelineTestProvider) Name() string { return p.name }
+func (p *testProvider) Name() string { return p.name }
 
-func (p *pipelineTestProvider) Validate() error { return nil }
-
-func (p *pipelineTestProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
+func (p *testProvider) Chat(ctx context.Context, req *Request) (*Response, error) {
 	p.lastReq = req
-	if p.chatFunc == nil {
-		return &Response{Model: req.Model, Provider: p.name}, nil
+	if p.chatFunc != nil {
+		return p.chatFunc(ctx, req)
 	}
-	return p.chatFunc(ctx, req)
+	return &Response{Blocks: []Block{TextBlock{Text: "ok"}}}, nil
 }
 
-func (p *pipelineTestProvider) Stream(ctx context.Context, req *Request) (StreamReader, error) {
+func (p *testProvider) Stream(ctx context.Context, req *Request) (Stream, error) {
 	p.lastReq = req
-	if p.streamFunc == nil {
-		return &pipelineTestStream{
-			chunks: []*StreamChunk{{Type: ChunkTypeContent, Content: "ok", Done: true}},
-		}, nil
+	if p.streamFunc != nil {
+		return p.streamFunc(ctx, req)
 	}
-	return p.streamFunc(ctx, req)
+	return &testStream{events: []Event{ContentDelta{Text: "ok"}, DoneEvent{FinishReason: FinishReasonStop, Provider: p.name, Model: req.Model}}}, nil
 }
 
-type pipelineTestStream struct {
-	chunks []*StreamChunk
+type testModelProvider struct {
+	*testProvider
+	listFunc func(context.Context) ([]ModelInfo, error)
+}
+
+func (p *testModelProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	if p.listFunc != nil {
+		return p.listFunc(ctx)
+	}
+	return []ModelInfo{{ID: "m", Provider: p.Name()}}, nil
+}
+
+type testStream struct {
+	events []Event
 	index  int
 	closed bool
 }
 
-func (s *pipelineTestStream) Next() (*StreamChunk, error) {
-	if s.index >= len(s.chunks) {
+func (s *testStream) Next() (Event, error) {
+	if s.index >= len(s.events) {
 		return nil, io.EOF
 	}
-	chunk := s.chunks[s.index]
+	event := s.events[s.index]
 	s.index++
-	return chunk, nil
+	return event, nil
 }
 
-func (s *pipelineTestStream) Close() error {
+func (s *testStream) Close() error {
 	s.closed = true
 	return nil
 }
 
-type responsesPipelineTestProvider struct {
-	*pipelineTestProvider
-	responsesFunc       func(context.Context, *OpenAIResponsesRequest) (*Response, error)
-	responsesStreamFunc func(context.Context, *OpenAIResponsesRequest) (StreamReader, error)
-	lastResponsesReq    *OpenAIResponsesRequest
+type blockingStream struct {
+	ctx context.Context
 }
 
-func (p *responsesPipelineTestProvider) Responses(ctx context.Context, req *OpenAIResponsesRequest) (*Response, error) {
-	p.lastResponsesReq = req
-	if p.responsesFunc == nil {
-		return &Response{Model: req.Model, Provider: p.name}, nil
-	}
-	return p.responsesFunc(ctx, req)
+func (s blockingStream) Next() (Event, error) {
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
 }
 
-func (p *responsesPipelineTestProvider) ResponsesStream(ctx context.Context, req *OpenAIResponsesRequest) (StreamReader, error) {
-	p.lastResponsesReq = req
-	if p.responsesStreamFunc == nil {
-		return &pipelineTestStream{
-			chunks: []*StreamChunk{{Type: ChunkTypeContent, Content: "ok", Done: true}},
-		}, nil
-	}
-	return p.responsesStreamFunc(ctx, req)
+func (s blockingStream) Close() error {
+	return nil
 }
 
-func TestClientChatHooks(t *testing.T) {
-	provider := &pipelineTestProvider{
-		name: "hook-test",
-		chatFunc: func(ctx context.Context, req *Request) (*Response, error) {
-			return &Response{
-				Model:        req.Model,
-				Provider:     "hook-test",
-				Content:      "pong",
-				FinishReason: FinishReasonStop,
-			}, nil
-		},
-	}
-
-	var beforeMeta CallMeta
-	var afterMeta CallMeta
-	var beforeCalled int
-	var afterCalled int
-	var afterResp *Response
-
-	client, err := New(provider, WithHook(HookFuncs{
-		BeforeRequestFunc: func(ctx context.Context, meta CallMeta, req *Request) {
-			beforeCalled++
-			beforeMeta = meta
-		},
-		AfterResponseFunc: func(ctx context.Context, meta CallMeta, resp *Response, err error) {
-			afterCalled++
-			afterMeta = meta
-			afterResp = resp
-			if err != nil {
-				t.Fatalf("AfterResponse returned unexpected error: %v", err)
-			}
-		},
-	}))
+func TestClientDoesNotInjectDefaults(t *testing.T) {
+	provider := &testProvider{name: "test"}
+	client, err := New(provider)
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
-
-	resp, err := client.Chat(context.Background(), NewRequest("test-model", "ping"))
+	_, err = client.Chat(context.Background(), Request{
+		Model:    "model",
+		Messages: []Message{UserText("hi")},
+	})
 	if err != nil {
 		t.Fatalf("Chat returned error: %v", err)
 	}
-
-	if beforeCalled != 1 {
-		t.Fatalf("BeforeRequest called %d times, want 1", beforeCalled)
-	}
-	if afterCalled != 1 {
-		t.Fatalf("AfterResponse called %d times, want 1", afterCalled)
-	}
-	if resp != afterResp {
-		t.Fatal("AfterResponse did not receive the final response")
-	}
-	assertCallMeta(t, beforeMeta, afterMeta, "chat", "test-model", false)
-	if provider.lastReq == nil || provider.lastReq.MaxTokens == nil {
-		t.Fatal("prepared request defaults were not applied")
+	if provider.lastReq.MaxTokens != nil || provider.lastReq.Temperature != nil || provider.lastReq.TopP != nil {
+		t.Fatalf("unexpected defaults injected: %+v", provider.lastReq)
 	}
 }
 
-func TestClientStreamHooks(t *testing.T) {
-	baseStream := &pipelineTestStream{
-		chunks: []*StreamChunk{
-			{Type: ChunkTypeContent, Content: "a", Done: false},
-			{Type: ChunkTypeContent, Content: "b", Done: true},
+func TestJSONRawReturnsMarshalError(t *testing.T) {
+	_, err := JSONRaw(math.Inf(1))
+	if err == nil {
+		t.Fatalf("expected marshal error")
+	}
+}
+
+func TestClientAppliesExplicitDefaults(t *testing.T) {
+	maxTokens := 123
+	temp := 0.4
+	client, err := New(&testProvider{name: "test"}, WithDefaults(RequestDefaults{
+		MaxTokens:   &maxTokens,
+		Temperature: &temp,
+	}))
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	resp, err := client.Chat(context.Background(), Request{
+		Model:    "model",
+		Messages: []Message{UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	if resp.Text() != "ok" {
+		t.Fatalf("response text = %q", resp.Text())
+	}
+}
+
+func TestClientDeepClonesRequestForProvider(t *testing.T) {
+	maxTokens := 10
+	temp := 0.2
+	topP := 0.9
+	budget := 2048
+	schema := Schema(`{"type":"object"}`)
+	req := Request{
+		Model:       "model",
+		MaxTokens:   &maxTokens,
+		Temperature: &temp,
+		TopP:        &topP,
+		Messages: []Message{
+			User(TextBlock{
+				Text: "hi",
+				Annotations: []Annotation{
+					{Type: "note", Extra: MustJSONRaw(map[string]any{"n": 1})},
+				},
+			}),
+			Assistant(ToolUseBlock{
+				ID:        "call_1",
+				Name:      "tool",
+				Arguments: MustJSONRaw(map[string]any{}),
+				Cache:     &CacheControl{Type: CacheTypeEphemeral, TTL: CacheTTL1h},
+			}),
+			ToolResultText("call_1", "ok"),
+		},
+		ToolChoice: map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name": "tool",
+			},
+		},
+		ResponseFormat: &ResponseFormat{
+			Type: ResponseFormatJSONSchema,
+			JSONSchema: &JSONSchema{
+				Name:   "out",
+				Schema: schema,
+			},
+		},
+		Thinking: &Thinking{Mode: ThinkingEnabled, BudgetTokens: &budget},
+		Cache:    &CachePolicy{Retention: CacheTTL1h, Placement: CachePlacementPrefix},
+		ProviderOptions: ProviderOptions{
+			"metadata": map[string]any{
+				"tags":   []any{"a", "b"},
+				"nested": map[string]any{"k": "v"},
+			},
 		},
 	}
-	provider := &pipelineTestProvider{
-		name: "hook-test",
-		streamFunc: func(ctx context.Context, req *Request) (StreamReader, error) {
-			return baseStream, nil
+	provider := &testProvider{
+		name: "test",
+		chatFunc: func(ctx context.Context, cloned *Request) (*Response, error) {
+			*cloned.MaxTokens = 99
+			*cloned.Temperature = 1.5
+			*cloned.TopP = 0.1
+			cloned.ResponseFormat.JSONSchema.Schema[0] = '['
+			*cloned.Thinking.BudgetTokens = 4096
+			cloned.Cache.Retention = CacheTTL5m
+			text := cloned.Messages[0].Blocks[0].(TextBlock)
+			text.Annotations[0].Extra[0] = '['
+			cloned.Messages[0].Blocks[0] = text
+			tool := cloned.Messages[1].Blocks[0].(ToolUseBlock)
+			tool.Arguments[0] = '['
+			tool.Cache.TTL = CacheTTL5m
+			cloned.Messages[1].Blocks[0] = tool
+			choice := cloned.ToolChoice.(map[string]any)
+			choice["type"] = "mutated"
+			choice["function"].(map[string]any)["name"] = "mutated"
+			metadata := cloned.ProviderOptions["metadata"].(map[string]any)
+			metadata["tags"].([]any)[0] = "mutated"
+			metadata["nested"].(map[string]any)["k"] = "mutated"
+			return &Response{Blocks: []Block{Text("ok")}}, nil
 		},
 	}
+	client, err := New(provider)
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	if _, err := client.Chat(context.Background(), req); err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	if *req.MaxTokens != 10 || *req.Temperature != 0.2 || *req.TopP != 0.9 {
+		t.Fatalf("scalar pointers were mutated: %+v", req)
+	}
+	if string(req.ResponseFormat.JSONSchema.Schema) != `{"type":"object"}` {
+		t.Fatalf("schema was mutated: %s", req.ResponseFormat.JSONSchema.Schema)
+	}
+	if *req.Thinking.BudgetTokens != 2048 || req.Cache.Retention != CacheTTL1h {
+		t.Fatalf("thinking/cache mutated: %+v %+v", req.Thinking, req.Cache)
+	}
+	text := req.Messages[0].Blocks[0].(TextBlock)
+	if string(text.Annotations[0].Extra) != `{"n":1}` {
+		t.Fatalf("annotation extra mutated: %s", text.Annotations[0].Extra)
+	}
+	tool := req.Messages[1].Blocks[0].(ToolUseBlock)
+	if string(tool.Arguments) != `{}` || tool.Cache.TTL != CacheTTL1h {
+		t.Fatalf("tool block mutated: %#v", tool)
+	}
+	choice := req.ToolChoice.(map[string]any)
+	if choice["type"] != "function" || choice["function"].(map[string]any)["name"] != "tool" {
+		t.Fatalf("tool choice mutated: %#v", choice)
+	}
+	metadata := req.ProviderOptions["metadata"].(map[string]any)
+	if metadata["tags"].([]any)[0] != "a" || metadata["nested"].(map[string]any)["k"] != "v" {
+		t.Fatalf("provider options mutated: %#v", metadata)
+	}
+}
 
-	var beforeMeta CallMeta
-	var afterMeta CallMeta
-	var chunkMetas []CallMeta
-	var chunkContents []string
-	var afterResp *Response
-	var beforeCalled int
-	var afterCalled int
-	var endCalled int
-	var endErr error
+func TestValidateRejectsInvalidScalars(t *testing.T) {
+	temp := 2.1
+	client, err := New(&testProvider{name: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.Chat(context.Background(), Request{
+		Model:       "model",
+		Messages:    []Message{UserText("hi")},
+		Temperature: &temp,
+	})
+	if err == nil || !IsValidationError(err) {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+}
 
-	client, err := New(provider, WithHook(HookFuncs{
+func TestValidateRejectsInvalidCachePolicy(t *testing.T) {
+	client, err := New(&testProvider{name: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.Chat(context.Background(), Request{
+		Model:    "model",
+		Messages: []Message{UserText("hi")},
+		Cache:    &CachePolicy{Retention: "forever", Placement: CachePlacementPrefix},
+	})
+	if err == nil || !IsValidationError(err) || !strings.Contains(err.Error(), "cache retention") {
+		t.Fatalf("expected cache retention validation error, got %v", err)
+	}
+
+	_, err = client.Chat(context.Background(), Request{
+		Model:    "model",
+		Messages: []Message{UserText("hi")},
+		Cache:    &CachePolicy{Retention: CacheTTL1h, Placement: CachePlacement("suffix")},
+	})
+	if err == nil || !IsValidationError(err) || !strings.Contains(err.Error(), "cache placement") {
+		t.Fatalf("expected cache placement validation error, got %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidBlockCacheControl(t *testing.T) {
+	client, err := New(&testProvider{name: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.Chat(context.Background(), Request{
+		Model: "model",
+		Messages: []Message{
+			User(TextBlock{Text: "hi", Cache: &CacheControl{Type: "persistent"}}),
+		},
+	})
+	if err == nil || !IsValidationError(err) || !strings.Contains(err.Error(), "cache type") {
+		t.Fatalf("expected cache type validation error, got %v", err)
+	}
+
+	_, err = client.Chat(context.Background(), Request{
+		Model: "model",
+		Messages: []Message{
+			User(TextBlock{Text: "hi", Cache: &CacheControl{Type: CacheTypeEphemeral, TTL: "24h"}}),
+		},
+	})
+	if err == nil || !IsValidationError(err) || !strings.Contains(err.Error(), "cache ttl") {
+		t.Fatalf("expected cache ttl validation error, got %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidUTF8Text(t *testing.T) {
+	client, err := New(&testProvider{name: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.Chat(context.Background(), Request{
+		Model: "model",
+		Messages: []Message{
+			UserText(string([]byte{'h', 'i', 0xff})),
+		},
+	})
+	if err == nil || !IsValidationError(err) || !strings.Contains(err.Error(), "valid UTF-8") {
+		t.Fatalf("expected UTF-8 validation error, got %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidUTF8ProviderOptions(t *testing.T) {
+	client, err := New(&testProvider{name: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.Chat(context.Background(), Request{
+		Model:    "model",
+		Messages: []Message{UserText("hi")},
+		ProviderOptions: ProviderOptions{
+			"metadata": map[string]any{
+				"bad": string([]byte{0xff}),
+			},
+		},
+	})
+	if err == nil || !IsValidationError(err) || !strings.Contains(err.Error(), "valid UTF-8") {
+		t.Fatalf("expected UTF-8 validation error, got %v", err)
+	}
+}
+
+func TestStreamIdleTimeout(t *testing.T) {
+	client, err := New(&testProvider{
+		name: "test",
+		streamFunc: func(ctx context.Context, req *Request) (Stream, error) {
+			return blockingStream{ctx: ctx}, nil
+		},
+	}, WithStreamIdleTimeout(10*time.Millisecond))
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	stream, err := client.Stream(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil || !IsTimeoutError(err) || !IsStreamIdleError(err) {
+		t.Fatalf("expected stream idle timeout, got %v", err)
+	}
+}
+
+func TestStreamIdleTimeoutStopsAfterDoneEvent(t *testing.T) {
+	client, err := New(&testProvider{
+		name: "test",
+		streamFunc: func(ctx context.Context, req *Request) (Stream, error) {
+			return &testStream{events: []Event{DoneEvent{FinishReason: FinishReasonStop}}}, nil
+		},
+	}, WithStreamIdleTimeout(10*time.Millisecond))
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	stream, err := client.Stream(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if _, ok := event.(DoneEvent); !ok {
+		t.Fatalf("event = %#v, want DoneEvent", event)
+	}
+	time.Sleep(20 * time.Millisecond)
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("expected EOF after done, got %v", err)
+	}
+}
+
+func TestClientHooks(t *testing.T) {
+	var before, after int
+	client, err := New(&testProvider{name: "hook"}, WithHook(HookFuncs{
 		BeforeRequestFunc: func(ctx context.Context, meta CallMeta, req *Request) {
-			beforeCalled++
-			beforeMeta = meta
-		},
-		AfterResponseFunc: func(ctx context.Context, meta CallMeta, resp *Response, err error) {
-			afterCalled++
-			afterMeta = meta
-			afterResp = resp
-			if err != nil {
-				t.Fatalf("AfterResponse returned unexpected error: %v", err)
+			before++
+			if meta.Provider != "hook" || meta.Model != "m" {
+				t.Fatalf("bad meta: %+v", meta)
 			}
 		},
-		OnStreamChunkFunc: func(ctx context.Context, meta CallMeta, chunk *StreamChunk) {
-			chunkMetas = append(chunkMetas, meta)
-			chunkContents = append(chunkContents, chunk.Content)
-		},
-		OnStreamEndFunc: func(ctx context.Context, meta CallMeta, err error) {
-			endCalled++
-			endErr = err
+		AfterResponseFunc: func(ctx context.Context, meta CallMeta, resp *Response, err error) {
+			after++
+			if err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			if resp == nil || resp.Text() != "ok" {
+				t.Fatalf("bad hook response: %#v", resp)
+			}
 		},
 	}))
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
-
-	stream, err := client.Stream(context.Background(), NewRequest("stream-model", "say hi"))
+	resp, err := client.Chat(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}})
 	if err != nil {
-		t.Fatalf("Stream returned error: %v", err)
+		t.Fatalf("Chat returned error: %v", err)
 	}
+	if before != 1 || after != 1 || resp.Text() != "ok" {
+		t.Fatalf("hooks before=%d after=%d resp=%v", before, after, resp)
+	}
+}
 
-	resp, err := CollectStream(stream)
+func TestHooksCannotMutateProviderRequestOrReturnedResponse(t *testing.T) {
+	provider := &testProvider{
+		name: "hook",
+		chatFunc: func(ctx context.Context, req *Request) (*Response, error) {
+			if req.Model != "m" {
+				t.Fatalf("provider saw mutated model %q", req.Model)
+			}
+			if got := req.Messages[0].Blocks[0].(TextBlock).Text; got != "hi" {
+				t.Fatalf("provider saw mutated message %q", got)
+			}
+			return &Response{Blocks: []Block{Text("ok")}, Warnings: []Warning{{Code: "w"}}}, nil
+		},
+	}
+	client, err := New(provider, WithHook(HookFuncs{
+		BeforeRequestFunc: func(ctx context.Context, meta CallMeta, req *Request) {
+			req.Model = "mutated"
+			req.Messages[0].Blocks[0] = Text("mutated")
+		},
+		AfterResponseFunc: func(ctx context.Context, meta CallMeta, resp *Response, err error) {
+			resp.Blocks[0] = Text("mutated")
+			resp.Warnings[0].Code = "mutated"
+		},
+	}))
 	if err != nil {
-		t.Fatalf("CollectStream returned error: %v", err)
+		t.Fatalf("New returned error: %v", err)
 	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("Close returned error: %v", err)
+	resp, err := client.Chat(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}})
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	if resp.Text() != "ok" {
+		t.Fatalf("response text = %q, want ok", resp.Text())
+	}
+	if len(resp.Warnings) != 1 || resp.Warnings[0].Code != "w" {
+		t.Fatalf("warnings = %#v", resp.Warnings)
+	}
+}
+
+func TestClientCaptureRawResponseOption(t *testing.T) {
+	raw := []byte(`{"ok":true}`)
+	client, err := New(&testProvider{
+		name: "test",
+		chatFunc: func(ctx context.Context, req *Request) (*Response, error) {
+			resp := &Response{Blocks: []Block{Text("ok")}}
+			CaptureRawResponse(req, resp, raw)
+			return resp, nil
+		},
+	}, WithCaptureRawResponse(true))
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	resp, err := client.Chat(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}})
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	if string(resp.Raw) != string(raw) {
+		t.Fatalf("raw = %s, want %s", resp.Raw, raw)
+	}
+}
+
+func TestClientDoesNotCaptureRawResponseByDefault(t *testing.T) {
+	raw := []byte(`{"ok":true}`)
+	client, err := New(&testProvider{
+		name: "test",
+		chatFunc: func(ctx context.Context, req *Request) (*Response, error) {
+			resp := &Response{Blocks: []Block{Text("ok")}}
+			CaptureRawResponse(req, resp, raw)
+			return resp, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	resp, err := client.Chat(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}})
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	if len(resp.Raw) != 0 {
+		t.Fatalf("raw should be empty by default: %s", resp.Raw)
+	}
+}
+
+func TestClientRejectsNilResponseWithoutError(t *testing.T) {
+	client, err := New(&testProvider{
+		name: "test",
+		chatFunc: func(context.Context, *Request) (*Response, error) {
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.Chat(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}})
+	if err == nil || !strings.Contains(err.Error(), "nil response without error") {
+		t.Fatalf("error = %v, want nil response contract", err)
+	}
+}
+
+func TestClientRejectsNilStreamWithoutError(t *testing.T) {
+	client, err := New(&testProvider{
+		name: "test",
+		streamFunc: func(context.Context, *Request) (Stream, error) {
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.Stream(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}})
+	if err == nil || !strings.Contains(err.Error(), "nil stream without error") {
+		t.Fatalf("expected nil stream error, got %v", err)
+	}
+}
+
+func TestClientWrapsProviderChatErrors(t *testing.T) {
+	boom := errors.New("boom")
+	client, err := New(&testProvider{
+		name: "test",
+		chatFunc: func(context.Context, *Request) (*Response, error) {
+			return nil, boom
+		},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.Chat(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}})
+	if err == nil || !IsProviderError(err) || !errors.Is(err, boom) {
+		t.Fatalf("expected wrapped provider error, got %v", err)
+	}
+}
+
+func TestClientWrapsProviderStreamStartErrors(t *testing.T) {
+	boom := errors.New("boom")
+	client, err := New(&testProvider{
+		name: "test",
+		streamFunc: func(context.Context, *Request) (Stream, error) {
+			return nil, boom
+		},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.Stream(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}})
+	if err == nil || !IsProviderError(err) || !errors.Is(err, boom) {
+		t.Fatalf("expected wrapped provider stream error, got %v", err)
+	}
+}
+
+func TestClientListModelsWrapsProviderErrors(t *testing.T) {
+	boom := errors.New("boom")
+	client, err := New(&testModelProvider{
+		testProvider: &testProvider{name: "test"},
+		listFunc: func(context.Context) ([]ModelInfo, error) {
+			return nil, boom
+		},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.ListModels(context.Background())
+	if err == nil || !IsProviderError(err) || !errors.Is(err, boom) {
+		t.Fatalf("expected wrapped model list error, got %v", err)
+	}
+}
+
+func TestCollect(t *testing.T) {
+	stream := &testStream{events: []Event{
+		ReasoningDelta{Text: "think"},
+		ContentDelta{Text: "hel"},
+		ContentDelta{Text: "lo"},
+		ToolUseStart{ID: "call_1", Name: "tool"},
+		ToolUseDelta{ID: "call_1", ArgumentsDelta: []byte(`{"x":`)},
+		ToolUseDelta{ID: "call_1", ArgumentsDelta: []byte(`1}`)},
+		DoneEvent{FinishReason: FinishReasonToolCall, Provider: "test", Model: "m"},
+	}}
+	resp, err := Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+	if resp.Text() != "hello" {
+		t.Fatalf("text = %q", resp.Text())
+	}
+	if resp.Reasoning() != "think" {
+		t.Fatalf("reasoning = %q", resp.Reasoning())
+	}
+	if resp.Provider != "test" || resp.Model != "m" {
+		t.Fatalf("provider/model = %q/%q", resp.Provider, resp.Model)
+	}
+	calls := resp.ToolCalls()
+	if len(calls) != 1 || string(calls[0].Arguments) != `{"x":1}` {
+		t.Fatalf("tool calls = %+v", calls)
+	}
+}
+
+func TestValidateRejectsDirtyToolHistory(t *testing.T) {
+	client, err := New(&testProvider{name: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.Chat(context.Background(), Request{
+		Model: "m",
+		Messages: []Message{
+			Assistant(ToolUseBlock{ID: "call_1", Name: "tool", Arguments: MustJSONRaw(map[string]any{})}),
+			UserText("next"),
+		},
+	})
+	if err == nil || !IsValidationError(err) {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+}
+
+func TestValidateRejectsToolResultOutsideToolRole(t *testing.T) {
+	client, err := New(&testProvider{name: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.Chat(context.Background(), Request{
+		Model: "m",
+		Messages: []Message{
+			Assistant(
+				ToolUseBlock{ID: "call_1", Name: "tool", Arguments: MustJSONRaw(map[string]any{})},
+				ToolResultBlock{ToolUseID: "call_1", Content: []Block{Text("ok")}},
+			),
+		},
+	})
+	if err == nil || !IsValidationError(err) || !strings.Contains(err.Error(), "tool result block requires tool role") {
+		t.Fatalf("expected tool role validation error, got %v", err)
+	}
+}
+
+func TestValidateRejectsTopLevelToolReference(t *testing.T) {
+	client, err := New(&testProvider{name: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.Chat(context.Background(), Request{
+		Model:    "m",
+		Messages: []Message{User(ToolReferenceBlock{ToolName: "lookup"})},
+	})
+	if err == nil || !IsValidationError(err) || !strings.Contains(err.Error(), "tool reference block is only valid inside tool result content") {
+		t.Fatalf("expected tool reference validation error, got %v", err)
+	}
+}
+
+func TestValidateAllowsToolReferenceInsideToolResult(t *testing.T) {
+	client, err := New(&testProvider{name: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.Chat(context.Background(), Request{
+		Model: "m",
+		Messages: []Message{
+			Assistant(ToolUseBlock{ID: "call_1", Name: "tool", Arguments: MustJSONRaw(map[string]any{})}),
+			ToolResult("call_1", ToolReferenceBlock{ToolName: "lookup"}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+}
+
+func TestMessageRepairIsExplicitAndWarns(t *testing.T) {
+	provider := &testProvider{name: "test"}
+	var hookWarnings []Warning
+	client, err := New(provider,
+		WithMessageRepair(RepairAll),
+		WithHook(HookFuncs{
+			OnWarningFunc: func(ctx context.Context, meta CallMeta, warning Warning) {
+				hookWarnings = append(hookWarnings, warning)
+			},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
 	}
 
-	if beforeCalled != 1 {
-		t.Fatalf("BeforeRequest called %d times, want 1", beforeCalled)
+	resp, err := client.Chat(context.Background(), Request{
+		Model: "m",
+		Messages: []Message{
+			Assistant(ToolUseBlock{ID: "bad id!", Name: "tool", Arguments: MustJSONRaw(map[string]any{})}),
+			UserText("next"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
 	}
-	if afterCalled != 1 {
-		t.Fatalf("AfterResponse called %d times, want 1", afterCalled)
+	if len(resp.Warnings) != 2 {
+		t.Fatalf("warnings len = %d, want 2: %#v", len(resp.Warnings), resp.Warnings)
 	}
-	assertCallMeta(t, beforeMeta, afterMeta, "stream", "stream-model", true)
-	if afterResp != nil {
-		t.Fatal("stream AfterResponse should receive nil response when stream is established")
+	if len(hookWarnings) != 2 {
+		t.Fatalf("hook warnings len = %d, want 2: %#v", len(hookWarnings), hookWarnings)
 	}
-	if len(chunkContents) != 2 {
-		t.Fatalf("OnStreamChunk called %d times, want 2", len(chunkContents))
+	if got := provider.lastReq.Messages[0].Blocks[0].(ToolUseBlock).ID; got != "bad_id_" {
+		t.Fatalf("tool use id = %q, want bad_id_", got)
 	}
-	if chunkContents[0] != "a" || chunkContents[1] != "b" {
-		t.Fatalf("unexpected chunk contents: %#v", chunkContents)
+	if provider.lastReq.Messages[1].Role != RoleTool {
+		t.Fatalf("messages[1].Role = %q, want tool", provider.lastReq.Messages[1].Role)
 	}
-	for i, meta := range chunkMetas {
-		if meta.CallID != beforeMeta.CallID {
-			t.Fatalf("chunk meta %d call_id = %q, want %q", i, meta.CallID, beforeMeta.CallID)
+	if provider.lastReq.Messages[2].Role != RoleUser {
+		t.Fatalf("messages[2].Role = %q, want user", provider.lastReq.Messages[2].Role)
+	}
+	for _, warning := range resp.Warnings {
+		if warning.Provider != "test" {
+			t.Fatalf("warning provider = %q, want test", warning.Provider)
 		}
 	}
-	if resp.Content != "ab" {
-		t.Fatalf("stream response content = %q, want %q", resp.Content, "ab")
-	}
-	if endCalled != 1 {
-		t.Fatalf("OnStreamEnd called %d times, want 1", endCalled)
-	}
-	if endErr != nil {
-		t.Fatalf("OnStreamEnd err = %v, want nil on clean completion", endErr)
-	}
 }
 
-// errorAfterStream emits its chunks then aborts with a non-EOF error, modeling a
-// provider failure / idle timeout mid-stream.
-type errorAfterStream struct {
-	chunks []*StreamChunk
-	index  int
-	err    error
-	closed bool
-}
-
-func (s *errorAfterStream) Next() (*StreamChunk, error) {
-	if s.index >= len(s.chunks) {
-		return nil, s.err
+func TestMessageRepairSynthesizesMissingToolUseID(t *testing.T) {
+	provider := &testProvider{name: "test"}
+	client, err := New(provider, WithMessageRepair(RepairAll))
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
 	}
-	chunk := s.chunks[s.index]
-	s.index++
-	return chunk, nil
-}
 
-func (s *errorAfterStream) Close() error {
-	s.closed = true
-	return nil
-}
-
-// TestClientStreamHookEndsOnError verifies the terminal hook fires exactly once
-// with the abort error when a stream dies before a Done chunk — the path that
-// previously leaked: no Done chunk, so OnStreamChunk never finalizes.
-func TestClientStreamHookEndsOnError(t *testing.T) {
-	boom := errors.New("stream blew up")
-	provider := &pipelineTestProvider{
-		name: "hook-test",
-		streamFunc: func(ctx context.Context, req *Request) (StreamReader, error) {
-			return &errorAfterStream{
-				chunks: []*StreamChunk{{Type: ChunkTypeContent, Content: "partial"}},
-				err:    boom,
-			}, nil
+	resp, err := client.Chat(context.Background(), Request{
+		Model: "m",
+		Messages: []Message{
+			Assistant(ToolUseBlock{Name: "tool", Arguments: MustJSONRaw(map[string]any{})}),
 		},
+	})
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
 	}
+	if len(resp.Warnings) != 2 {
+		t.Fatalf("warnings len = %d, want 2: %#v", len(resp.Warnings), resp.Warnings)
+	}
+	generated := provider.lastReq.Messages[0].Blocks[0].(ToolUseBlock).ID
+	if !strings.HasPrefix(generated, "call_") {
+		t.Fatalf("generated id = %q, want call_ prefix", generated)
+	}
+	result := provider.lastReq.Messages[1].Blocks[0].(ToolResultBlock)
+	if result.ToolUseID != generated || !result.IsError {
+		t.Fatalf("synthetic result = %#v, generated=%q", result, generated)
+	}
+}
 
-	var endCalled int
+func TestStreamEmitsRepairWarnings(t *testing.T) {
+	client, err := New(&testProvider{name: "test"}, WithMessageRepair(RepairAll))
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	stream, err := client.Stream(context.Background(), Request{
+		Model: "m",
+		Messages: []Message{
+			Assistant(ToolUseBlock{ID: "bad id!", Name: "tool", Arguments: MustJSONRaw(map[string]any{})}),
+			UserText("next"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	warning, ok := first.(WarningEvent)
+	if !ok {
+		t.Fatalf("first event = %#v, want WarningEvent", first)
+	}
+	if warning.Warning.Code != "message.tool_use_id_normalized" {
+		t.Fatalf("warning code = %q", warning.Warning.Code)
+	}
+}
+
+func TestStreamHookEndsOnError(t *testing.T) {
+	boom := errors.New("boom")
 	var endErr error
-	var sawDone bool
-
-	client, err := New(provider, WithHook(HookFuncs{
-		OnStreamChunkFunc: func(ctx context.Context, meta CallMeta, chunk *StreamChunk) {
-			if chunk.Done {
-				sawDone = true
-			}
+	client, err := New(&testProvider{
+		name: "stream",
+		streamFunc: func(ctx context.Context, req *Request) (Stream, error) {
+			return &testStreamWithError{events: []Event{ContentDelta{Text: "partial"}}, err: boom}, nil
 		},
+	}, WithHook(HookFuncs{
 		OnStreamEndFunc: func(ctx context.Context, meta CallMeta, err error) {
-			endCalled++
 			endErr = err
 		},
 	}))
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
-
-	stream, err := client.Stream(context.Background(), NewRequest("stream-model", "go"))
+	stream, err := client.Stream(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}})
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
-	if _, err := CollectStream(stream); !errors.Is(err, boom) {
-		t.Fatalf("CollectStream err = %v, want %v", err, boom)
-	}
-	_ = stream.Close()
-
-	if sawDone {
-		t.Fatal("test setup invalid: stream should abort without a Done chunk")
-	}
-	if endCalled != 1 {
-		t.Fatalf("OnStreamEnd called %d times, want exactly 1", endCalled)
+	_, err = Collect(stream)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Collect err = %v, want %v", err, boom)
 	}
 	if !errors.Is(endErr, boom) {
-		t.Fatalf("OnStreamEnd err = %v, want %v", endErr, boom)
+		t.Fatalf("end err = %v, want %v", endErr, boom)
 	}
 }
 
-func TestClientChatNilResponseReturnsInternalError(t *testing.T) {
-	provider := &pipelineTestProvider{
-		name: "hook-test",
-		chatFunc: func(ctx context.Context, req *Request) (*Response, error) {
-			return nil, nil
+func TestStreamWrapsRuntimeProviderErrors(t *testing.T) {
+	boom := errors.New("boom")
+	client, err := New(&testProvider{
+		name: "stream",
+		streamFunc: func(ctx context.Context, req *Request) (Stream, error) {
+			return &testStreamWithError{events: []Event{ContentDelta{Text: "partial"}}, err: boom}, nil
 		},
-	}
-
-	var hookErr error
-	client, err := New(provider, WithHook(HookFuncs{
-		AfterResponseFunc: func(ctx context.Context, meta CallMeta, resp *Response, err error) {
-			hookErr = err
-		},
-	}))
+	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
-
-	_, err = client.Chat(context.Background(), NewRequest("test-model", "ping"))
-	if err == nil {
-		t.Fatal("Chat returned nil error, want internal error")
-	}
-
-	assertInternalErrorModel(t, err, "test-model")
-	if hookErr == nil {
-		t.Fatal("AfterResponse did not receive the internal error")
-	}
-}
-
-func TestClientStreamNilStreamReturnsInternalError(t *testing.T) {
-	provider := &pipelineTestProvider{
-		name: "hook-test",
-		streamFunc: func(ctx context.Context, req *Request) (StreamReader, error) {
-			return nil, nil
-		},
-	}
-
-	var hookErr error
-	client, err := New(provider, WithHook(HookFuncs{
-		AfterResponseFunc: func(ctx context.Context, meta CallMeta, resp *Response, err error) {
-			hookErr = err
-		},
-	}))
+	stream, err := client.Stream(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}})
 	if err != nil {
-		t.Fatalf("New returned error: %v", err)
+		t.Fatalf("Stream returned error: %v", err)
 	}
-
-	_, err = client.Stream(context.Background(), NewRequest("test-model", "ping"))
-	if err == nil {
-		t.Fatal("Stream returned nil error, want internal error")
-	}
-
-	assertInternalErrorModel(t, err, "test-model")
-	if hookErr == nil {
-		t.Fatal("AfterResponse did not receive the internal error")
+	_, err = Collect(stream)
+	if err == nil || !IsProviderError(err) || !errors.Is(err, boom) {
+		t.Fatalf("expected wrapped runtime stream error, got %v", err)
 	}
 }
 
-func TestClientResponsesHooks(t *testing.T) {
-	provider := &responsesPipelineTestProvider{
-		pipelineTestProvider: &pipelineTestProvider{name: "openai"},
-		responsesFunc: func(ctx context.Context, req *OpenAIResponsesRequest) (*Response, error) {
-			return &Response{
-				Model:        req.Model,
-				Provider:     "openai",
-				Content:      "response-pong",
-				FinishReason: FinishReasonStop,
-			}, nil
+func TestStreamHooksCannotMutateReturnedEvents(t *testing.T) {
+	client, err := New(&testProvider{
+		name: "stream",
+		streamFunc: func(ctx context.Context, req *Request) (Stream, error) {
+			return &testStream{events: []Event{
+				ToolUseDelta{ID: "call_1", ArgumentsDelta: []byte(`{"q":"x"}`)},
+				ProviderEvent{Name: "provider.event", Raw: []byte(`{"ok":true}`)},
+				DoneEvent{FinishReason: FinishReasonStop, Provider: "stream", Model: req.Model},
+			}}, nil
 		},
-	}
-
-	var beforeMeta CallMeta
-	var afterMeta CallMeta
-	var beforeCalled int
-	var afterCalled int
-	var afterResp *Response
-
-	client, err := New(provider, WithHook(HookFuncs{
-		BeforeRequestFunc: func(ctx context.Context, meta CallMeta, req *Request) {
-			beforeCalled++
-			beforeMeta = meta
-		},
-		AfterResponseFunc: func(ctx context.Context, meta CallMeta, resp *Response, err error) {
-			afterCalled++
-			afterMeta = meta
-			afterResp = resp
-			if err != nil {
-				t.Fatalf("AfterResponse returned unexpected error: %v", err)
+	}, WithHook(HookFuncs{
+		OnStreamEventFunc: func(ctx context.Context, meta CallMeta, event Event) {
+			switch e := event.(type) {
+			case ToolUseDelta:
+				e.ArgumentsDelta[0] = '['
+			case ProviderEvent:
+				e.Raw[0] = '['
 			}
 		},
 	}))
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
-
-	req := &OpenAIResponsesRequest{
-		Model:    "gpt-5.4",
-		Messages: []Message{{Role: "user", Content: "ping"}},
-	}
-	resp, err := client.Responses(context.Background(), req)
+	stream, err := client.Stream(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}})
 	if err != nil {
-		t.Fatalf("Responses returned error: %v", err)
+		t.Fatalf("Stream returned error: %v", err)
 	}
-
-	if beforeCalled != 1 {
-		t.Fatalf("BeforeRequest called %d times, want 1", beforeCalled)
+	toolEvent, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next tool event: %v", err)
 	}
-	if afterCalled != 1 {
-		t.Fatalf("AfterResponse called %d times, want 1", afterCalled)
+	toolDelta := toolEvent.(ToolUseDelta)
+	if string(toolDelta.ArgumentsDelta) != `{"q":"x"}` {
+		t.Fatalf("tool delta mutated: %s", toolDelta.ArgumentsDelta)
 	}
-	if resp != afterResp {
-		t.Fatal("AfterResponse did not receive the final response")
+	providerEvent, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next provider event: %v", err)
 	}
-	assertCallMeta(t, beforeMeta, afterMeta, "responses", "gpt-5.4", false)
-	if provider.lastResponsesReq == nil || provider.lastResponsesReq.MaxOutputTokens == nil {
-		t.Fatal("prepared responses request defaults were not applied")
+	providerDelta := providerEvent.(ProviderEvent)
+	if string(providerDelta.Raw) != `{"ok":true}` {
+		t.Fatalf("provider event mutated: %s", providerDelta.Raw)
 	}
 }
 
-func TestClientResponsesStreamHooks(t *testing.T) {
-	baseStream := &pipelineTestStream{
-		chunks: []*StreamChunk{
-			{Type: ChunkTypeContent, Content: "x", Done: false},
-			{Type: ChunkTypeContent, Content: "y", Done: true},
-		},
-	}
-	provider := &responsesPipelineTestProvider{
-		pipelineTestProvider: &pipelineTestProvider{name: "openai"},
-		responsesStreamFunc: func(ctx context.Context, req *OpenAIResponsesRequest) (StreamReader, error) {
-			return baseStream, nil
-		},
-	}
-
-	var beforeMeta CallMeta
-	var afterMeta CallMeta
-	var chunkContents []string
-	var afterResp *Response
-	var beforeCalled int
-	var afterCalled int
-
-	client, err := New(provider, WithHook(HookFuncs{
-		BeforeRequestFunc: func(ctx context.Context, meta CallMeta, req *Request) {
-			beforeCalled++
-			beforeMeta = meta
-		},
-		AfterResponseFunc: func(ctx context.Context, meta CallMeta, resp *Response, err error) {
-			afterCalled++
-			afterMeta = meta
-			afterResp = resp
-			if err != nil {
-				t.Fatalf("AfterResponse returned unexpected error: %v", err)
-			}
-		},
-		OnStreamChunkFunc: func(ctx context.Context, meta CallMeta, chunk *StreamChunk) {
-			if beforeMeta.CallID != "" && meta.CallID != beforeMeta.CallID {
-				t.Fatalf("unexpected chunk call_id: %q, want %q", meta.CallID, beforeMeta.CallID)
-			}
-			chunkContents = append(chunkContents, chunk.Content)
-		},
-	}))
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-
-	req := &OpenAIResponsesRequest{
-		Model:    "gpt-5.4",
-		Messages: []Message{{Role: "user", Content: "say hi"}},
-	}
-	stream, err := client.ResponsesStream(context.Background(), req)
-	if err != nil {
-		t.Fatalf("ResponsesStream returned error: %v", err)
-	}
-
-	resp, err := CollectStream(stream)
-	if err != nil {
-		t.Fatalf("CollectStream returned error: %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("Close returned error: %v", err)
-	}
-
-	if beforeCalled != 1 {
-		t.Fatalf("BeforeRequest called %d times, want 1", beforeCalled)
-	}
-	if afterCalled != 1 {
-		t.Fatalf("AfterResponse called %d times, want 1", afterCalled)
-	}
-	assertCallMeta(t, beforeMeta, afterMeta, "responses_stream", "gpt-5.4", true)
-	if afterResp != nil {
-		t.Fatal("stream AfterResponse should receive nil response when stream is established")
-	}
-	if len(chunkContents) != 2 {
-		t.Fatalf("OnStreamChunk called %d times, want 2", len(chunkContents))
-	}
-	if chunkContents[0] != "x" || chunkContents[1] != "y" {
-		t.Fatalf("unexpected chunk contents: %#v", chunkContents)
-	}
-	if resp.Content != "xy" {
-		t.Fatalf("stream response content = %q, want %q", resp.Content, "xy")
-	}
-	if provider.lastResponsesReq == nil || provider.lastResponsesReq.MaxOutputTokens == nil {
-		t.Fatal("prepared responses request defaults were not applied")
-	}
+type testStreamWithError struct {
+	events []Event
+	index  int
+	err    error
 }
+
+func (s *testStreamWithError) Next() (Event, error) {
+	if s.index >= len(s.events) {
+		return nil, s.err
+	}
+	event := s.events[s.index]
+	s.index++
+	return event, nil
+}
+
+func (s *testStreamWithError) Close() error { return nil }
