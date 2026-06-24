@@ -23,6 +23,10 @@ func New(cfg Config) (*compat.Provider, error) {
 		},
 		Response: compat.ResponseSpec{
 			ModelFromResponse: true,
+			ReasoningFields:   []string{"reasoning", "reasoning_content", "thinking"},
+		},
+		Stream: compat.StreamSpec{
+			ReasoningFields: []string{"reasoning", "reasoning_content", "thinking"},
 		},
 	})
 }
@@ -42,25 +46,43 @@ func mapThinking(thinking *litellm.Thinking, _ string) (map[string]any, error) {
 		return nil, fmt.Errorf("ollama: unsupported thinking mode %d", thinking.Mode)
 	}
 	if thinking.Effort != "" {
-		return map[string]any{"reasoning_effort": thinking.Effort}, nil
+		effort, err := reasoningEffort(thinking.Effort)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"reasoning_effort": effort}, nil
 	}
-	if effort := reasoningEffort(thinking.Level); effort != "" {
+	if thinking.Level != "" {
+		effort, err := reasoningLevel(thinking.Level)
+		if err != nil {
+			return nil, err
+		}
 		return map[string]any{"reasoning_effort": effort}, nil
 	}
 	return nil, fmt.Errorf("ollama: thinking level or effort is required")
 }
 
-func reasoningEffort(level string) string {
-	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "":
-		return ""
-	case "minimal", "low":
-		return "low"
-	case "medium":
-		return "medium"
-	case "high", "xhigh":
-		return "high"
+func reasoningEffort(effort string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(effort))
+	switch normalized {
+	case "high", "medium", "low", "max", "none":
+		return normalized, nil
 	default:
-		return strings.TrimSpace(level)
+		return "", fmt.Errorf("ollama: unsupported reasoning effort %q", effort)
+	}
+}
+
+func reasoningLevel(level string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "minimal", "low":
+		return "low", nil
+	case "medium":
+		return "medium", nil
+	case "high":
+		return "high", nil
+	case "xhigh", "max":
+		return "max", nil
+	default:
+		return "", fmt.Errorf("ollama: unsupported thinking level %q", level)
 	}
 }

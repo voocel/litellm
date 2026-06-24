@@ -243,6 +243,7 @@ func convertStreamUsage(u *anthropicUsage, model string) litellm.Usage {
 		InputTokens:      u.InputTokens + u.CacheReadInputTokens,
 		OutputTokens:     u.OutputTokens,
 		TotalTokens:      u.InputTokens + u.CacheReadInputTokens + u.OutputTokens,
+		ReasoningTokens:  u.reasoningTokens(),
 		CacheReadTokens:  u.CacheReadInputTokens,
 		CacheWriteTokens: u.CacheCreationInputTokens,
 		Provider:         "anthropic",
@@ -258,6 +259,9 @@ func (s *stream) mergeUsage(u *anthropicUsage) {
 	}
 	if next.OutputTokens > 0 {
 		s.usage.OutputTokens = next.OutputTokens
+	}
+	if next.ReasoningTokens > 0 {
+		s.usage.ReasoningTokens = next.ReasoningTokens
 	}
 	if next.CacheWriteTokens > 0 {
 		s.usage.CacheWriteTokens = next.CacheWriteTokens

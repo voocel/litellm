@@ -472,6 +472,29 @@ func TestConvertResponsePreservesRedactedThinkingData(t *testing.T) {
 	}
 }
 
+func TestConvertResponseMapsThinkingTokenUsage(t *testing.T) {
+	resp, err := convertResponse(&anthropicResponse{
+		Model: "claude",
+		Usage: anthropicUsage{
+			InputTokens:  5,
+			OutputTokens: 9,
+			OutputTokensDetails: &anthropicOutputTokensDetails{
+				ThinkingTokens: 4,
+			},
+		},
+		Content: []anthropicContent{{Type: "text", Text: "ok"}},
+	}, "fallback")
+	if err != nil {
+		t.Fatalf("convertResponse returned error: %v", err)
+	}
+	if resp.Usage.ReasoningTokens != 4 {
+		t.Fatalf("reasoning tokens = %d, want 4", resp.Usage.ReasoningTokens)
+	}
+	if resp.Usage.OutputTokens != 9 || resp.Usage.TotalTokens != 14 {
+		t.Fatalf("usage = %+v", resp.Usage)
+	}
+}
+
 func TestConvertResponseRejectsUnsupportedContentType(t *testing.T) {
 	_, err := convertResponse(&anthropicResponse{
 		Model: "claude",
@@ -556,6 +579,36 @@ func TestStreamPreservesRedactedThinkingData(t *testing.T) {
 	reasoning, ok := resp.Blocks[0].(litellm.ReasoningBlock)
 	if !ok || string(reasoning.Redacted) != "opaque" {
 		t.Fatalf("reasoning block = %#v", resp.Blocks[0])
+	}
+}
+
+func TestStreamMapsThinkingTokenUsage(t *testing.T) {
+	stream := newStream(streamResponse(strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"model":"claude","usage":{"input_tokens":5}}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":9,"output_tokens_details":{"thinking_tokens":4}}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")), &litellm.Request{Model: "claude"})
+	resp, err := litellm.Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+	if resp.Text() != "ok" {
+		t.Fatalf("text = %q", resp.Text())
+	}
+	if resp.Usage.ReasoningTokens != 4 {
+		t.Fatalf("reasoning tokens = %d, want 4", resp.Usage.ReasoningTokens)
+	}
+	if resp.Usage.OutputTokens != 9 || resp.Usage.TotalTokens != 14 {
+		t.Fatalf("usage = %+v", resp.Usage)
 	}
 }
 

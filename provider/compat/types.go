@@ -26,6 +26,7 @@ type message struct {
 	ReasoningContent string          `json:"reasoning_content,omitempty"`
 	Reasoning        string          `json:"reasoning,omitempty"`
 	ReasoningText    string          `json:"reasoning_text,omitempty"`
+	Thinking         string          `json:"thinking,omitempty"`
 }
 
 type toolCall struct {
@@ -50,7 +51,8 @@ type usage struct {
 }
 
 type promptTokensDetails struct {
-	CachedTokens int `json:"cached_tokens,omitempty"`
+	CachedTokens     int `json:"cached_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 }
 
 type completionTokensDetails struct {

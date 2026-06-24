@@ -50,6 +50,28 @@ func TestHeadersReasoningAndCache(t *testing.T) {
 }
 
 func TestThinkingRequiresBudgetEffortOrLevel(t *testing.T) {
+	body := captureBody(t, nil, nil, &litellm.Request{
+		Model:    "anthropic/claude-sonnet-4",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled},
+	})
+	reasoning := body["reasoning"].(map[string]any)
+	if reasoning["enabled"] != true {
+		t.Fatalf("reasoning = %#v", reasoning)
+	}
+}
+
+func TestThinkingDisabledAndEffortValidation(t *testing.T) {
+	body := captureBody(t, nil, nil, &litellm.Request{
+		Model:    "anthropic/claude-sonnet-4",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingDisabled},
+	})
+	reasoning := body["reasoning"].(map[string]any)
+	if reasoning["effort"] != "none" {
+		t.Fatalf("reasoning = %#v", reasoning)
+	}
+
 	p, err := New(compat.Config{APIKey: "key", BaseURL: "https://openrouter.test", HTTPClient: roundTripFunc(nil)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -57,10 +79,10 @@ func TestThinkingRequiresBudgetEffortOrLevel(t *testing.T) {
 	_, err = p.Chat(context.Background(), &litellm.Request{
 		Model:    "anthropic/claude-sonnet-4",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "extreme"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "budget_tokens, effort, or level is required") {
-		t.Fatalf("expected thinking requirement error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "unsupported reasoning effort") {
+		t.Fatalf("expected effort error, got %v", err)
 	}
 }
 
@@ -85,6 +107,30 @@ func TestCacheRetentionValidation(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "only supported for anthropic models") {
 		t.Fatalf("expected non-anthropic cache error, got %v", err)
+	}
+}
+
+func TestSessionIDProviderOption(t *testing.T) {
+	body := captureBody(t, nil, nil, &litellm.Request{
+		Model:           "anthropic/claude-sonnet-4",
+		Messages:        []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{ProviderOptionSessionID: "agent-session"},
+	})
+	if body["session_id"] != "agent-session" {
+		t.Fatalf("body = %#v", body)
+	}
+
+	p, err := New(compat.Config{APIKey: "key", BaseURL: "https://openrouter.test", HTTPClient: roundTripFunc(nil)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = p.Chat(context.Background(), &litellm.Request{
+		Model:           "anthropic/claude-sonnet-4",
+		Messages:        []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{ProviderOptionSessionID: strings.Repeat("x", 257)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "at most 256") {
+		t.Fatalf("expected session_id length error, got %v", err)
 	}
 }
 
@@ -149,12 +195,103 @@ func TestResponseReasoningBlocksRoundTrip(t *testing.T) {
 	}
 }
 
-func TestRejectsOpaqueReasoningBlockHistory(t *testing.T) {
+func TestReasoningDetailsRoundTrip(t *testing.T) {
+	var capturedBody map[string]any
+	p, err := New(compat.Config{
+		APIKey:  "key",
+		BaseURL: "https://openrouter.test",
+		HTTPClient: roundTripFunc(func(httpReq *http.Request) (*http.Response, error) {
+			if err := json.NewDecoder(httpReq.Body).Decode(&capturedBody); err != nil {
+				t.Fatalf("decode request body: %v", err)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{
+				"model":"anthropic/claude-sonnet-4",
+				"choices":[{
+					"message":{
+						"content":"ok",
+						"reasoning_details":[
+							{"type":"reasoning.summary","summary":"sum"},
+							{"type":"reasoning.encrypted","data":"cipher","format":"anthropic-claude-v1"}
+						]
+					}
+				}]
+			}`)), Header: make(http.Header)}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	resp, err := p.Chat(context.Background(), &litellm.Request{
+		Model:    "anthropic/claude-sonnet-4",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if resp.Reasoning() != "sum" {
+		t.Fatalf("reasoning = %q", resp.Reasoning())
+	}
+	_, err = p.Chat(context.Background(), &litellm.Request{
+		Model:    "anthropic/claude-sonnet-4",
+		Messages: []litellm.Message{litellm.Assistant(resp.Blocks...)},
+	})
+	if err != nil {
+		t.Fatalf("round-trip Chat: %v", err)
+	}
+	message := capturedBody["messages"].([]any)[0].(map[string]any)
+	if _, hasPlain := message["reasoning"]; hasPlain {
+		t.Fatalf("message should preserve reasoning_details, got %#v", message)
+	}
+	details := message["reasoning_details"].([]any)
+	if len(details) != 2 || details[1].(map[string]any)["data"] != "cipher" {
+		t.Fatalf("reasoning_details = %#v", details)
+	}
+}
+
+func TestRejectsSignedOrRedactedReasoningBlockHistory(t *testing.T) {
 	_, _, _, err := mapBlocks([]litellm.Block{
+		litellm.ReasoningBlock{Text: "think", Signature: "sig"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "signed or redacted") {
+		t.Fatalf("expected signed reasoning error, got %v", err)
+	}
+
+	_, _, _, err = mapBlocks([]litellm.Block{
 		litellm.ReasoningBlock{Text: "think", Extra: litellm.MustJSONRaw(map[string]any{"provider": "state"})},
 	})
-	if err == nil || !strings.Contains(err.Error(), "provider-extra reasoning") {
-		t.Fatalf("expected opaque reasoning error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "valid JSON array") {
+		t.Fatalf("expected reasoning_details shape error, got %v", err)
+	}
+}
+
+func TestUsageIncludesCacheWriteTokens(t *testing.T) {
+	p, err := New(compat.Config{
+		APIKey:  "key",
+		BaseURL: "https://openrouter.test",
+		HTTPClient: roundTripFunc(func(httpReq *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{
+				"choices":[{"message":{"content":"ok"}}],
+				"usage":{
+					"prompt_tokens":10,
+					"completion_tokens":1,
+					"total_tokens":11,
+					"prompt_tokens_details":{"cached_tokens":6,"cache_write_tokens":4}
+				}
+			}`)), Header: make(http.Header)}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	resp, err := p.Chat(context.Background(), &litellm.Request{
+		Model:    "anthropic/claude-sonnet-4",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if resp.Usage.CacheReadTokens != 6 || resp.Usage.CacheWriteTokens != 4 {
+		t.Fatalf("usage = %+v", resp.Usage)
 	}
 }
 

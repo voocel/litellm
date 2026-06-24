@@ -128,20 +128,21 @@ func (s *stream) events(chunk streamChunk) ([]litellm.Event, error) {
 				events = append(events, litellm.RefusalDelta{Text: refusal, OutputIndex: litellm.IntPtr(choice.Index)})
 			}
 			if s.reasoningAllowed() {
-				if reasoning := findReasoning(delta, s.reasoningFields()); reasoning != "" {
-					extra, err := reasoningExtra(delta)
-					if err != nil {
-						return nil, litellm.NewProviderErrorWithCause(s.spec.providerName(), litellm.ErrorTypeProvider, fmt.Sprintf("%s: convert reasoning details", s.spec.providerName()), err)
-					}
+				reasoning := findReasoning(delta, s.reasoningFields())
+				extra, err := reasoningExtra(delta)
+				if err != nil {
+					return nil, litellm.NewProviderErrorWithCause(s.spec.providerName(), litellm.ErrorTypeProvider, fmt.Sprintf("%s: convert reasoning details", s.spec.providerName()), err)
+				}
+				if reasoning != "" || len(extra) > 0 {
 					extraFull := s.spec.Stream.ReasoningCumulative
-					if s.spec.Stream.ReasoningCumulative {
+					if s.spec.Stream.ReasoningCumulative && reasoning != "" {
 						next, err := s.reasoningDelta(reasoning)
 						if err != nil {
 							return nil, err
 						}
 						reasoning = next
 					}
-					if reasoning != "" {
+					if reasoning != "" || len(extra) > 0 {
 						events = append(events, litellm.ReasoningDelta{Text: reasoning, Extra: extra, ExtraFull: extraFull, Index: litellm.IntPtr(choice.Index)})
 					}
 				}

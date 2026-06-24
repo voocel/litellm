@@ -13,7 +13,10 @@ const defaultBaseURL = "https://openrouter.ai/api/v1"
 
 type Config = compat.Config
 
-const ProviderOptionCacheRetention = "cache_retention"
+const (
+	ProviderOptionCacheRetention = "cache_retention"
+	ProviderOptionSessionID      = "session_id"
+)
 
 func New(cfg Config) (*compat.Provider, error) {
 	return compat.New(cfg, compat.Spec{
@@ -36,16 +39,17 @@ func New(cfg Config) (*compat.Provider, error) {
 			CleanSchema:        cleanStrictSchema,
 			AllowedProviderOptions: map[string]struct{}{
 				ProviderOptionCacheRetention: {},
+				ProviderOptionSessionID:      {},
 			},
 		},
 		Response: compat.ResponseSpec{
 			ModelFromResponse:         true,
 			ContentAsInterface:        true,
-			ReasoningFields:           []string{"reasoning"},
+			ReasoningFields:           []string{"reasoning_details", "reasoning", "reasoning_content"},
 			HasCompletionTokenDetails: true,
 		},
 		Stream: compat.StreamSpec{
-			ReasoningFields: []string{"reasoning"},
+			ReasoningFields: []string{"reasoning_details", "reasoning", "reasoning_content"},
 		},
 	})
 }
@@ -59,19 +63,43 @@ func mapThinking(thinking *litellm.Thinking, _ string) (map[string]any, error) {
 		return nil, nil
 	}
 	if thinking.Mode == litellm.ThinkingDisabled {
-		return nil, fmt.Errorf("openrouter: disabling thinking is not supported")
+		return map[string]any{"reasoning": map[string]any{"effort": "none"}}, nil
+	}
+	if thinking.Mode != litellm.ThinkingEnabled {
+		return nil, fmt.Errorf("openrouter: unsupported thinking mode %d", thinking.Mode)
 	}
 	reasoning := map[string]any{}
-	if thinking.BudgetTokens != nil && *thinking.BudgetTokens > 0 {
+	if thinking.BudgetTokens != nil {
+		if *thinking.BudgetTokens <= 0 {
+			return nil, fmt.Errorf("openrouter: thinking budget_tokens must be positive")
+		}
 		reasoning["max_tokens"] = *thinking.BudgetTokens
 	} else if thinking.Effort != "" {
-		reasoning["effort"] = thinking.Effort
+		effort, err := reasoningEffort(thinking.Effort)
+		if err != nil {
+			return nil, err
+		}
+		reasoning["effort"] = effort
 	} else if thinking.Level != "" {
-		reasoning["effort"] = thinking.Level
+		effort, err := reasoningEffort(thinking.Level)
+		if err != nil {
+			return nil, err
+		}
+		reasoning["effort"] = effort
 	} else {
-		return nil, fmt.Errorf("openrouter: thinking budget_tokens, effort, or level is required")
+		reasoning["enabled"] = true
 	}
 	return map[string]any{"reasoning": reasoning}, nil
+}
+
+func reasoningEffort(effort string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(effort))
+	switch normalized {
+	case "max", "xhigh", "high", "medium", "low", "minimal", "none":
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("openrouter: unsupported reasoning effort %q", effort)
+	}
 }
 
 func mapExtra(options litellm.ProviderOptions, body map[string]any, req *litellm.Request) error {
@@ -89,6 +117,15 @@ func mapExtra(options litellm.ProviderOptions, body map[string]any, req *litellm
 			if cc != nil {
 				body["cache_control"] = cc
 			}
+		case ProviderOptionSessionID:
+			sessionID, ok := value.(string)
+			if !ok {
+				return fmt.Errorf("openrouter: provider option %q must be string", key)
+			}
+			if len(sessionID) > 256 {
+				return fmt.Errorf("openrouter: provider option %q must be at most 256 characters", key)
+			}
+			body["session_id"] = sessionID
 		default:
 			return fmt.Errorf("openrouter: unsupported provider option %q", key)
 		}
@@ -127,8 +164,8 @@ func mapMessages(messages []litellm.Message) (any, error) {
 			if len(toolCalls) > 0 {
 				converted["tool_calls"] = toolCalls
 			}
-			if reasoning != nil {
-				converted["reasoning"] = reasoning
+			for key, value := range reasoning {
+				converted[key] = value
 			}
 			out = append(out, converted)
 		case litellm.RoleTool:
@@ -150,11 +187,11 @@ func mapMessages(messages []litellm.Message) (any, error) {
 	return out, nil
 }
 
-func mapBlocks(blocks []litellm.Block) (any, []map[string]any, any, error) {
+func mapBlocks(blocks []litellm.Block) (any, []map[string]any, map[string]any, error) {
 	parts := make([]map[string]any, 0, len(blocks))
 	var text strings.Builder
 	var tools []map[string]any
-	var reasoning []map[string]string
+	reasoning := make(map[string]any)
 	for _, block := range blocks {
 		switch b := block.(type) {
 		case litellm.TextBlock:
@@ -201,31 +238,46 @@ func mapBlocks(blocks []litellm.Block) (any, []map[string]any, any, error) {
 				},
 			})
 		case litellm.ReasoningBlock:
-			if b.Signature != "" || len(b.Redacted) > 0 || len(b.Extra) > 0 {
-				return nil, nil, nil, fmt.Errorf("OpenRouter Chat does not accept signed, redacted, or provider-extra reasoning blocks in message history")
+			if b.Signature != "" || len(b.Redacted) > 0 {
+				return nil, nil, nil, fmt.Errorf("OpenRouter Chat does not accept signed or redacted reasoning blocks in message history")
 			}
-			if b.Text != "" {
-				reasoning = append(reasoning, map[string]string{"type": "reasoning.text", "text": b.Text})
+			if err := putReasoning(reasoning, b); err != nil {
+				return nil, nil, nil, err
 			}
 		default:
 			return nil, nil, nil, fmt.Errorf("unsupported block %T", block)
 		}
 	}
-	var reasoningValue any
-	if len(reasoning) == 1 {
-		reasoningValue = reasoning[0]["text"]
-	} else if len(reasoning) > 1 {
-		reasoningValue = reasoning
-	}
 	if len(parts) == 0 {
-		return nil, tools, reasoningValue, nil
+		return nil, tools, reasoning, nil
 	}
 	if len(parts) == 1 && parts[0]["type"] == "text" {
 		if _, hasCache := parts[0]["cache_control"]; !hasCache {
-			return text.String(), tools, reasoningValue, nil
+			return text.String(), tools, reasoning, nil
 		}
 	}
-	return parts, tools, reasoningValue, nil
+	return parts, tools, reasoning, nil
+}
+
+func putReasoning(out map[string]any, block litellm.ReasoningBlock) error {
+	if len(block.Extra) > 0 {
+		var details []any
+		if err := json.Unmarshal(block.Extra, &details); err != nil {
+			return fmt.Errorf("OpenRouter reasoning_details must be a valid JSON array: %w", err)
+		}
+		out["reasoning_details"] = details
+		delete(out, "reasoning")
+		return nil
+	}
+	if block.Text == "" || out["reasoning_details"] != nil {
+		return nil
+	}
+	if current, _ := out["reasoning"].(string); current != "" {
+		out["reasoning"] = current + "\n\n" + block.Text
+		return nil
+	}
+	out["reasoning"] = block.Text
+	return nil
 }
 
 func mapCache(cache *litellm.CacheControl) (map[string]any, error) {

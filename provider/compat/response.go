@@ -22,11 +22,12 @@ func (p *Provider) convertResponse(resp *chatResponse, req *litellm.Request) (*l
 	}
 	choice := resp.Choices[0]
 	out.FinishReason = litellm.NormalizeFinishReason(choice.FinishReason)
-	if reasoning := findReasoning(messageReasoningMap(choice.Message), p.reasoningFields(false)); reasoning != "" {
-		extra, err := rawReasoningExtra(choice.Message)
-		if err != nil {
-			return nil, fmt.Errorf("%s: convert reasoning details: %w", p.Name(), err)
-		}
+	reasoning := findReasoning(messageReasoningMap(choice.Message), p.reasoningFields(false))
+	extra, err := rawReasoningExtra(choice.Message)
+	if err != nil {
+		return nil, fmt.Errorf("%s: convert reasoning details: %w", p.Name(), err)
+	}
+	if reasoning != "" || len(extra) > 0 {
 		out.Blocks = append(out.Blocks, litellm.ReasoningBlock{Text: reasoning, Extra: extra})
 	}
 	blocks, err := contentBlocks(choice.Message.Content)
@@ -63,6 +64,7 @@ func convertUsage(u usage, spec Spec, provider, model string) litellm.Usage {
 	}
 	if u.PromptTokensDetails != nil {
 		out.CacheReadTokens = u.PromptTokensDetails.CachedTokens
+		out.CacheWriteTokens = u.PromptTokensDetails.CacheWriteTokens
 	}
 	if out.CacheReadTokens == 0 && spec.Response.HasCacheTokens {
 		out.CacheReadTokens = u.PromptCacheHitTokens
@@ -122,6 +124,7 @@ func messageReasoningMap(msg message) map[string]any {
 		"reasoning_content": msg.ReasoningContent,
 		"reasoning":         msg.Reasoning,
 		"reasoning_text":    msg.ReasoningText,
+		"thinking":          msg.Thinking,
 	}
 }
 
@@ -135,6 +138,9 @@ func findReasoning(m map[string]any, fields []string) string {
 			}
 		case map[string]any:
 			if text, _ := v["text"].(string); text != "" {
+				return text
+			}
+			if text, _ := v["summary"].(string); text != "" {
 				return text
 			}
 		case []any:
@@ -155,6 +161,9 @@ func reasoningDetailsText(details []any) string {
 			text = v
 		case map[string]any:
 			text, _ = v["text"].(string)
+			if text == "" {
+				text, _ = v["summary"].(string)
+			}
 		}
 		if text == "" {
 			continue
