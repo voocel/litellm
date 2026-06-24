@@ -62,6 +62,109 @@ func TestStrictToolsOmittedOutsideBeta(t *testing.T) {
 	}
 }
 
+func TestProviderOptions(t *testing.T) {
+	body, _ := captureBody(t, compat.Config{APIKey: "key"}, &litellm.Request{
+		Model:    "deepseek-v4-flash",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{
+			ProviderOptionLogprobs:    true,
+			ProviderOptionTopLogprobs: 5,
+			ProviderOptionUserID:      "user-123",
+		},
+	})
+	if body["logprobs"] != true ||
+		body["top_logprobs"] != float64(5) ||
+		body["user_id"] != "user-123" {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
+func TestRejectsUnknownProviderOptions(t *testing.T) {
+	p, err := New(compat.Config{
+		APIKey: "key",
+		HTTPClient: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("request should not be sent")
+			return nil, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = p.Chat(context.Background(), &litellm.Request{
+		Model:           "deepseek-v4-flash",
+		Messages:        []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{"unknown": true},
+	})
+	if err == nil || !strings.Contains(err.Error(), `unsupported provider option "unknown"`) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRejectsUnknownThinkingLevel(t *testing.T) {
+	p, err := New(compat.Config{
+		APIKey: "key",
+		HTTPClient: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("request should not be sent")
+			return nil, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = p.Chat(context.Background(), &litellm.Request{
+		Model:    "deepseek-v4-flash",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "extreme"},
+	})
+	if err == nil || !strings.Contains(err.Error(), `unsupported thinking level "extreme"`) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRoundTripsThinkingToolCallAssistantMessage(t *testing.T) {
+	var capturedBody map[string]any
+	p, err := New(compat.Config{
+		APIKey: "key",
+		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if err := json.NewDecoder(req.Body).Decode(&capturedBody); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			return jsonResponse(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`), nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = p.Chat(context.Background(), &litellm.Request{
+		Model: "deepseek-v4-flash",
+		Messages: []litellm.Message{
+			litellm.Assistant(
+				litellm.ReasoningBlock{Text: "Need the tool."},
+				litellm.ToolUseBlock{
+					ID:        "call_1",
+					Name:      "lookup",
+					Arguments: json.RawMessage(`{"q":"weather"}`),
+				},
+			),
+			litellm.ToolResultText("call_1", "sunny"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	messages := capturedBody["messages"].([]any)
+	assistant := messages[0].(map[string]any)
+	if assistant["content"] != "" {
+		t.Fatalf("assistant content = %#v, want empty string", assistant["content"])
+	}
+	if assistant["reasoning_content"] != "Need the tool." {
+		t.Fatalf("assistant reasoning_content = %#v", assistant["reasoning_content"])
+	}
+	if _, ok := assistant["tool_calls"].([]any); !ok {
+		t.Fatalf("assistant tool_calls = %#v", assistant["tool_calls"])
+	}
+}
+
 func captureBody(t *testing.T, cfg compat.Config, req *litellm.Request) (map[string]any, *litellm.Response) {
 	t.Helper()
 	var body map[string]any

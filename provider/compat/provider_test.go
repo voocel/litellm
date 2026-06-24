@@ -293,6 +293,61 @@ func TestResponseReasoningBlocksRoundTripThroughConfiguredField(t *testing.T) {
 	}
 }
 
+func TestAssistantToolCallsCanEmitEmptyContentWhenConfigured(t *testing.T) {
+	tests := []struct {
+		name        string
+		spec        Spec
+		wantContent bool
+	}{
+		{name: "default_omits_empty_content", spec: Spec{Name: "compat"}},
+		{name: "configured_emits_empty_content", spec: Spec{
+			Name: "deepseek",
+			Request: RequestSpec{
+				EmitEmptyAssistantContentWithToolCalls: true,
+			},
+		}, wantContent: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedBody map[string]any
+			provider, err := New(Config{
+				BaseURL: "https://compat.example",
+				HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					if err := json.NewDecoder(req.Body).Decode(&capturedBody); err != nil {
+						t.Fatalf("decode body: %v", err)
+					}
+					return jsonResponse(http.StatusOK, `{"choices":[{"message":{"content":"ok"}}]}`), nil
+				}),
+			}, tt.spec)
+			if err != nil {
+				t.Fatalf("New returned error: %v", err)
+			}
+			_, err = provider.Chat(context.Background(), &litellm.Request{
+				Model: "m",
+				Messages: []litellm.Message{
+					litellm.Assistant(litellm.ToolUseBlock{
+						ID:        "call_1",
+						Name:      "lookup",
+						Arguments: json.RawMessage(`{"q":"weather"}`),
+					}),
+				},
+			})
+			if err != nil {
+				t.Fatalf("Chat returned error: %v", err)
+			}
+			messages := capturedBody["messages"].([]any)
+			assistant := messages[0].(map[string]any)
+			_, hasContent := assistant["content"]
+			if hasContent != tt.wantContent {
+				t.Fatalf("has content = %v, want %v; assistant=%#v", hasContent, tt.wantContent, assistant)
+			}
+			if tt.wantContent && assistant["content"] != "" {
+				t.Fatalf("content = %#v, want empty string", assistant["content"])
+			}
+		})
+	}
+}
+
 func TestChatConvertsPromptTokensDetailsCachedTokens(t *testing.T) {
 	provider, err := New(Config{
 		BaseURL: "https://compat.example",

@@ -141,6 +141,8 @@ func convertMessagesWithSpec(messages []litellm.Message, spec Spec) ([]map[strin
 			converted := map[string]any{"role": string(msg.Role)}
 			if content != nil {
 				converted["content"] = content
+			} else if msg.Role == litellm.RoleAssistant && len(toolCalls) > 0 && spec.Request.EmitEmptyAssistantContentWithToolCalls {
+				converted["content"] = ""
 			}
 			if len(toolCalls) > 0 {
 				converted["tool_calls"] = toolCalls

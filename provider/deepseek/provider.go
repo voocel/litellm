@@ -12,6 +12,18 @@ const defaultBaseURL = "https://api.deepseek.com"
 
 type Config = compat.Config
 
+const (
+	ProviderOptionLogprobs    = "logprobs"
+	ProviderOptionTopLogprobs = "top_logprobs"
+	ProviderOptionUserID      = "user_id"
+)
+
+var allowedProviderOptions = map[string]struct{}{
+	ProviderOptionLogprobs:    {},
+	ProviderOptionTopLogprobs: {},
+	ProviderOptionUserID:      {},
+}
+
 func New(cfg Config) (*compat.Provider, error) {
 	supportsStrict := strings.HasSuffix(strings.TrimRight(cfg.BaseURL, "/"), "/beta")
 	strictTools := compat.StrictToolsOmit
@@ -25,7 +37,9 @@ func New(cfg Config) (*compat.Provider, error) {
 		},
 		Auth: compat.AuthSpec{APIKeyRequired: true},
 		Request: compat.RequestSpec{
-			Thinking: mapThinking,
+			Thinking:                               mapThinking,
+			AllowedProviderOptions:                 allowedProviderOptions,
+			EmitEmptyAssistantContentWithToolCalls: true,
 		},
 		Response: compat.ResponseSpec{
 			ModelFromResponse:         true,
@@ -55,7 +69,11 @@ func mapThinking(thinking *litellm.Thinking, _ string) (map[string]any, error) {
 		return map[string]any{"thinking": map[string]any{"type": "disabled"}}, nil
 	case litellm.ThinkingEnabled:
 		body := map[string]any{"thinking": map[string]any{"type": "enabled"}}
-		if effort := thinkingEffort(thinking.Level); effort != "" {
+		effort, err := thinkingEffort(thinking.Level)
+		if err != nil {
+			return nil, err
+		}
+		if effort != "" {
 			body["reasoning_effort"] = effort
 		}
 		return body, nil
@@ -64,15 +82,15 @@ func mapThinking(thinking *litellm.Thinking, _ string) (map[string]any, error) {
 	}
 }
 
-func thinkingEffort(level string) string {
+func thinkingEffort(level string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "":
-		return ""
+		return "", nil
 	case "low", "medium", "high":
-		return "high"
+		return "high", nil
 	case "xhigh", "max":
-		return "max"
+		return "max", nil
 	default:
-		return strings.TrimSpace(level)
+		return "", fmt.Errorf("deepseek: unsupported thinking level %q; use high or max", level)
 	}
 }

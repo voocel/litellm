@@ -50,9 +50,10 @@ type HeaderSpec struct {
 }
 
 type RequestSpec struct {
-	MaxTokensField   string
-	OmitStop         bool
-	MaxStopSequences int
+	MaxTokensField                         string
+	OmitStop                               bool
+	MaxStopSequences                       int
+	EmitEmptyAssistantContentWithToolCalls bool
 
 	SupportsJSONSchema bool
 	JSONSchemaToPrompt bool

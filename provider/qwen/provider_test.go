@@ -21,25 +21,93 @@ func (f roundTripFunc) Do(req *http.Request) (*http.Response, error) {
 
 func TestThinkingBudget(t *testing.T) {
 	budget := 4096
+	maxTokens := 8192
 	body := captureBody(t, &litellm.Request{
-		Model:    "qwen-plus",
-		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, BudgetTokens: &budget},
+		Model:     "qwen3.7-plus",
+		Messages:  []litellm.Message{litellm.UserText("hi")},
+		MaxTokens: &maxTokens,
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, BudgetTokens: &budget},
 	})
 	if body["enable_thinking"] != true || body["thinking_budget"] != float64(4096) {
 		t.Fatalf("body = %#v", body)
+	}
+	if body["max_completion_tokens"] != float64(8192) {
+		t.Fatalf("max_completion_tokens = %#v", body["max_completion_tokens"])
+	}
+	if _, ok := body["max_tokens"]; ok {
+		t.Fatalf("max_tokens should be omitted: %#v", body)
 	}
 	testgolden.AssertJSON(t, "../../testdata/compat/qwen_request.golden.json", body)
 }
 
 func TestThinkingDisabled(t *testing.T) {
 	body := captureBody(t, &litellm.Request{
-		Model:    "qwen-plus",
+		Model:    "qwen3.7-plus",
 		Messages: []litellm.Message{litellm.UserText("hi")},
 		Thinking: &litellm.Thinking{Mode: litellm.ThinkingDisabled},
 	})
 	if body["enable_thinking"] != false {
 		t.Fatalf("body = %#v", body)
+	}
+}
+
+func TestProviderOptions(t *testing.T) {
+	body := captureBody(t, &litellm.Request{
+		Model:    "qwen3.7-plus",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{
+			ProviderOptionTopK:              50,
+			ProviderOptionRepetitionPenalty: 1.05,
+			ProviderOptionPresencePenalty:   0.2,
+			ProviderOptionPreserveThinking:  true,
+			ProviderOptionToolStream:        true,
+			ProviderOptionEnableSearch:      true,
+			ProviderOptionSearchOptions: map[string]any{
+				"forced_search": true,
+			},
+			ProviderOptionSeed:              1234,
+			ProviderOptionLogprobs:          true,
+			ProviderOptionTopLogprobs:       3,
+			ProviderOptionParallelToolCalls: false,
+		},
+	})
+	if body["top_k"] != float64(50) ||
+		body["repetition_penalty"] != 1.05 ||
+		body["presence_penalty"] != 0.2 ||
+		body["preserve_thinking"] != true ||
+		body["tool_stream"] != true ||
+		body["enable_search"] != true ||
+		body["seed"] != float64(1234) ||
+		body["logprobs"] != true ||
+		body["top_logprobs"] != float64(3) ||
+		body["parallel_tool_calls"] != false {
+		t.Fatalf("body = %#v", body)
+	}
+	options, ok := body["search_options"].(map[string]any)
+	if !ok || options["forced_search"] != true {
+		t.Fatalf("search_options = %#v", body["search_options"])
+	}
+}
+
+func TestRejectsUnknownProviderOptions(t *testing.T) {
+	p, err := New(compat.Config{
+		APIKey:  "key",
+		BaseURL: "https://qwen.test",
+		HTTPClient: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("request should not be sent")
+			return nil, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = p.Chat(context.Background(), &litellm.Request{
+		Model:           "qwen3.7-plus",
+		Messages:        []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{"unknown": true},
+	})
+	if err == nil || !strings.Contains(err.Error(), `unsupported provider option "unknown"`) {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -61,7 +129,7 @@ func TestResponseReasoningContent(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	resp, err := p.Chat(context.Background(), &litellm.Request{
-		Model:    "qwen-plus",
+		Model:    "qwen3.7-plus",
 		Messages: []litellm.Message{litellm.UserText("hi")},
 	})
 	if err != nil {

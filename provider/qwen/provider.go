@@ -11,6 +11,46 @@ const defaultBaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 type Config = compat.Config
 
+const (
+	ProviderOptionTopK                   = "top_k"
+	ProviderOptionRepetitionPenalty      = "repetition_penalty"
+	ProviderOptionPresencePenalty        = "presence_penalty"
+	ProviderOptionVLHighResolutionImages = "vl_high_resolution_images"
+	ProviderOptionN                      = "n"
+	ProviderOptionModalities             = "modalities"
+	ProviderOptionAudio                  = "audio"
+	ProviderOptionPreserveThinking       = "preserve_thinking"
+	ProviderOptionToolStream             = "tool_stream"
+	ProviderOptionEnableCodeInterpreter  = "enable_code_interpreter"
+	ProviderOptionSeed                   = "seed"
+	ProviderOptionLogprobs               = "logprobs"
+	ProviderOptionTopLogprobs            = "top_logprobs"
+	ProviderOptionParallelToolCalls      = "parallel_tool_calls"
+	ProviderOptionEnableSearch           = "enable_search"
+	ProviderOptionSearchOptions          = "search_options"
+	ProviderOptionSkill                  = "skill"
+)
+
+var allowedProviderOptions = map[string]struct{}{
+	ProviderOptionTopK:                   {},
+	ProviderOptionRepetitionPenalty:      {},
+	ProviderOptionPresencePenalty:        {},
+	ProviderOptionVLHighResolutionImages: {},
+	ProviderOptionN:                      {},
+	ProviderOptionModalities:             {},
+	ProviderOptionAudio:                  {},
+	ProviderOptionPreserveThinking:       {},
+	ProviderOptionToolStream:             {},
+	ProviderOptionEnableCodeInterpreter:  {},
+	ProviderOptionSeed:                   {},
+	ProviderOptionLogprobs:               {},
+	ProviderOptionTopLogprobs:            {},
+	ProviderOptionParallelToolCalls:      {},
+	ProviderOptionEnableSearch:           {},
+	ProviderOptionSearchOptions:          {},
+	ProviderOptionSkill:                  {},
+}
+
 func New(cfg Config) (*compat.Provider, error) {
 	return compat.New(cfg, compat.Spec{
 		Name: "qwen",
@@ -19,7 +59,9 @@ func New(cfg Config) (*compat.Provider, error) {
 		},
 		Auth: compat.AuthSpec{APIKeyRequired: true},
 		Request: compat.RequestSpec{
-			Thinking: mapThinking,
+			MaxTokensField:         "max_completion_tokens",
+			Thinking:               mapThinking,
+			AllowedProviderOptions: allowedProviderOptions,
 		},
 		Response: compat.ResponseSpec{
 			ModelFromResponse:         true,
