@@ -12,13 +12,20 @@ const (
 	ProviderOptionLogprobs             = "logprobs"
 	ProviderOptionTopLogprobs          = "top_logprobs"
 	ProviderOptionStore                = "store"
+	ProviderOptionModeration           = "moderation"
+	ProviderOptionStreamOptions        = "stream_options"
 	ProviderOptionPromptCacheKey       = "prompt_cache_key"
 	ProviderOptionPromptCacheRetention = "prompt_cache_retention"
 	ProviderOptionPrediction           = "prediction"
 	ProviderOptionMetadata             = "metadata"
 	ProviderOptionModalities           = "modalities"
+	ProviderOptionAudio                = "audio"
 	ProviderOptionServiceTier          = "service_tier"
+	ProviderOptionSafetyIdentifier     = "safety_identifier"
 	ProviderOptionUser                 = "user"
+	ProviderOptionVerbosity            = "verbosity"
+	ProviderOptionWebSearchOptions     = "web_search_options"
+	ProviderOptionParallelToolCalls    = "parallel_tool_calls"
 	ProviderOptionSeed                 = "seed"
 )
 
@@ -30,13 +37,20 @@ var providerOptionKeys = map[string]struct{}{
 	ProviderOptionLogprobs:             {},
 	ProviderOptionTopLogprobs:          {},
 	ProviderOptionStore:                {},
+	ProviderOptionModeration:           {},
+	ProviderOptionStreamOptions:        {},
 	ProviderOptionPromptCacheKey:       {},
 	ProviderOptionPromptCacheRetention: {},
 	ProviderOptionPrediction:           {},
 	ProviderOptionMetadata:             {},
 	ProviderOptionModalities:           {},
+	ProviderOptionAudio:                {},
 	ProviderOptionServiceTier:          {},
+	ProviderOptionSafetyIdentifier:     {},
 	ProviderOptionUser:                 {},
+	ProviderOptionVerbosity:            {},
+	ProviderOptionWebSearchOptions:     {},
+	ProviderOptionParallelToolCalls:    {},
 	ProviderOptionSeed:                 {},
 }
 
@@ -90,6 +104,17 @@ func applyProviderOptions(req *chatRequest, options map[string]any) error {
 				return err
 			}
 			req.Store = &v
+		case ProviderOptionModeration:
+			req.Moderation = cloneAny(value)
+		case ProviderOptionStreamOptions:
+			v, err := optionStreamOptions(key, value)
+			if err != nil {
+				return err
+			}
+			if !req.Stream {
+				return fmt.Errorf("openai: provider option %q requires stream request", key)
+			}
+			req.StreamOptions = v
 		case ProviderOptionPromptCacheKey:
 			v, err := optionString(key, value)
 			if err != nil {
@@ -123,18 +148,40 @@ func applyProviderOptions(req *chatRequest, options map[string]any) error {
 				return err
 			}
 			req.Modalities = v
+		case ProviderOptionAudio:
+			req.Audio = cloneAny(value)
 		case ProviderOptionServiceTier:
 			v, err := optionString(key, value)
 			if err != nil {
 				return err
 			}
 			req.ServiceTier = v
+		case ProviderOptionSafetyIdentifier:
+			v, err := optionString(key, value)
+			if err != nil {
+				return err
+			}
+			req.SafetyIdentifier = v
 		case ProviderOptionUser:
 			v, err := optionString(key, value)
 			if err != nil {
 				return err
 			}
 			req.User = v
+		case ProviderOptionVerbosity:
+			v, err := optionString(key, value)
+			if err != nil {
+				return err
+			}
+			req.Verbosity = v
+		case ProviderOptionWebSearchOptions:
+			req.WebSearchOptions = cloneAny(value)
+		case ProviderOptionParallelToolCalls:
+			v, err := optionBool(key, value)
+			if err != nil {
+				return err
+			}
+			req.ParallelToolCalls = &v
 		case ProviderOptionSeed:
 			v, err := optionInt(key, value)
 			if err != nil {
@@ -276,4 +323,31 @@ func optionPrediction(key string, value any) (*prediction, error) {
 	default:
 		return nil, fmt.Errorf("openai: provider option %q must be prediction object", key)
 	}
+}
+
+func optionStreamOptions(key string, value any) (*streamOptions, error) {
+	options, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("openai: provider option %q must be stream_options object", key)
+	}
+	out := &streamOptions{IncludeUsage: true}
+	for optionKey, optionValue := range options {
+		switch optionKey {
+		case "include_usage":
+			v, err := optionBool(key+"."+optionKey, optionValue)
+			if err != nil {
+				return nil, err
+			}
+			out.IncludeUsage = v
+		case "include_obfuscation":
+			v, err := optionBool(key+"."+optionKey, optionValue)
+			if err != nil {
+				return nil, err
+			}
+			out.IncludeObfuscation = &v
+		default:
+			return nil, fmt.Errorf("openai: unsupported stream_options field %q", optionKey)
+		}
+	}
+	return out, nil
 }

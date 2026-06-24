@@ -16,15 +16,17 @@ import (
 type ResponsesRequest struct {
 	Model    string
 	Messages []litellm.Message
+	Input    any
 
 	Instructions       string
 	Conversation       any
 	PreviousResponseID string
 
-	MaxOutputTokens *int
-	MaxToolCalls    *int
-	Include         []string
-	TopLogprobs     *int
+	ContextManagement []map[string]any
+	MaxOutputTokens   *int
+	MaxToolCalls      *int
+	Include           []string
+	TopLogprobs       *int
 
 	Temperature *float64
 	TopP        *float64
@@ -47,9 +49,10 @@ type ResponsesRequest struct {
 	Metadata             map[string]string
 	SafetyIdentifier     string
 
-	ServiceTier string
-	Background  *bool
-	Store       *bool
+	ServiceTier   string
+	Background    *bool
+	Store         *bool
+	StreamOptions *ResponsesStreamOptions
 
 	Prompt map[string]any
 
@@ -57,6 +60,10 @@ type ResponsesRequest struct {
 }
 
 type ResponsesTool map[string]any
+
+type ResponsesStreamOptions struct {
+	IncludeObfuscation *bool `json:"include_obfuscation,omitempty"`
+}
 
 type responsesRequest struct {
 	Model string `json:"model"`
@@ -66,11 +73,13 @@ type responsesRequest struct {
 	Conversation       any    `json:"conversation,omitempty"`
 	PreviousResponseID string `json:"previous_response_id,omitempty"`
 
-	MaxOutputTokens *int     `json:"max_output_tokens,omitempty"`
-	MaxToolCalls    *int     `json:"max_tool_calls,omitempty"`
-	Include         []string `json:"include,omitempty"`
-	TopLogprobs     *int     `json:"top_logprobs,omitempty"`
-	Stream          *bool    `json:"stream,omitempty"`
+	ContextManagement []map[string]any        `json:"context_management,omitempty"`
+	MaxOutputTokens   *int                    `json:"max_output_tokens,omitempty"`
+	MaxToolCalls      *int                    `json:"max_tool_calls,omitempty"`
+	Include           []string                `json:"include,omitempty"`
+	TopLogprobs       *int                    `json:"top_logprobs,omitempty"`
+	Stream            *bool                   `json:"stream,omitempty"`
+	StreamOptions     *ResponsesStreamOptions `json:"stream_options,omitempty"`
 
 	Temperature *float64 `json:"temperature,omitempty"`
 	TopP        *float64 `json:"top_p,omitempty"`
@@ -350,13 +359,14 @@ func (p *Provider) ResponsesStream(ctx context.Context, req *ResponsesRequest) (
 }
 
 func (p *Provider) buildResponsesRequest(req *ResponsesRequest, stream bool) (*responsesRequest, error) {
-	if err := validateResponsesRequest(req); err != nil {
+	if err := validateResponsesRequest(req, stream); err != nil {
 		return nil, err
 	}
 	out := &responsesRequest{
 		Model:                req.Model,
 		Conversation:         req.Conversation,
 		PreviousResponseID:   req.PreviousResponseID,
+		ContextManagement:    cloneMapAnySlice(req.ContextManagement),
 		MaxOutputTokens:      req.MaxOutputTokens,
 		MaxToolCalls:         req.MaxToolCalls,
 		Include:              append([]string(nil), req.Include...),
@@ -373,27 +383,40 @@ func (p *Provider) buildResponsesRequest(req *ResponsesRequest, stream bool) (*r
 		ServiceTier:          req.ServiceTier,
 		Background:           req.Background,
 		Store:                req.Store,
+		StreamOptions:        cloneResponsesStreamOptions(req.StreamOptions),
 		Prompt:               cloneMapAny(req.Prompt),
 	}
 	if stream {
 		out.Stream = litellm.Bool(true)
 	}
-	instructions, messages, err := responsesInstructions(req.Messages)
-	if err != nil {
-		return nil, err
-	}
-	if req.Instructions != "" {
-		instructions = strings.TrimSpace(strings.Join([]string{req.Instructions, instructions}, "\n"))
-	}
-	out.Instructions = instructions
-	if text, ok := responsesInputString(messages); ok {
-		out.Input = text
-	} else {
-		items, err := responsesInputItems(messages)
+	out.Input = cloneAny(req.Input)
+	if len(req.Messages) > 0 {
+		instructions, messages, err := responsesInstructions(req.Messages)
 		if err != nil {
 			return nil, err
 		}
-		out.Input = items
+		if req.Instructions != "" {
+			instructions = strings.TrimSpace(strings.Join([]string{req.Instructions, instructions}, "\n"))
+		}
+		out.Instructions = instructions
+		if out.Input != nil && len(messages) > 0 {
+			return nil, fmt.Errorf("openai: responses request cannot set Input and non-system Messages together")
+		}
+		if out.Input == nil {
+			if text, ok := responsesInputString(messages); ok {
+				out.Input = text
+			} else {
+				items, err := responsesInputItems(messages)
+				if err != nil {
+					return nil, err
+				}
+				if len(items) > 0 {
+					out.Input = items
+				}
+			}
+		}
+	} else {
+		out.Instructions = req.Instructions
 	}
 	text, err := p.responsesText(req)
 	if err != nil {
@@ -413,18 +436,18 @@ func (p *Provider) buildResponsesRequest(req *ResponsesRequest, stream bool) (*r
 	return out, nil
 }
 
-func validateResponsesRequest(req *ResponsesRequest) error {
+func validateResponsesRequest(req *ResponsesRequest, stream bool) error {
 	if req == nil {
 		return fmt.Errorf("openai: responses request cannot be nil")
 	}
 	if req.Model == "" {
 		return fmt.Errorf("openai: model is required for responses request")
 	}
-	if len(req.Messages) == 0 {
-		return fmt.Errorf("openai: messages are required for responses request")
-	}
 	if req.Conversation != nil && req.PreviousResponseID != "" {
 		return fmt.Errorf("openai: conversation and previous_response_id are mutually exclusive")
+	}
+	if req.StreamOptions != nil && !stream {
+		return fmt.Errorf("openai: responses stream_options requires stream request")
 	}
 	if err := validateOneOf("text_verbosity", req.TextVerbosity, "low", "medium", "high"); err != nil {
 		return fmt.Errorf("openai: %w", err)
@@ -1246,6 +1269,29 @@ func cloneMapAny(in map[string]any) map[string]any {
 		out[key] = cloneAny(value)
 	}
 	return out
+}
+
+func cloneMapAnySlice(in []map[string]any) []map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, len(in))
+	for i, item := range in {
+		out[i] = cloneMapAny(item)
+	}
+	return out
+}
+
+func cloneResponsesStreamOptions(in *ResponsesStreamOptions) *ResponsesStreamOptions {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if in.IncludeObfuscation != nil {
+		value := *in.IncludeObfuscation
+		out.IncludeObfuscation = &value
+	}
+	return &out
 }
 
 func cloneAny(value any) any {

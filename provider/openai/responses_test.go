@@ -30,6 +30,7 @@ func TestResponsesBuildRequestMapsCoreFields(t *testing.T) {
 		},
 		Instructions:         "Be concise.",
 		PreviousResponseID:   "resp_previous",
+		ContextManagement:    []map[string]any{{"type": "compaction", "compact_threshold": 0.75}},
 		MaxOutputTokens:      &maxOutputTokens,
 		MaxToolCalls:         &maxToolCalls,
 		Include:              []string{"reasoning.encrypted_content"},
@@ -62,6 +63,9 @@ func TestResponsesBuildRequestMapsCoreFields(t *testing.T) {
 	if wire.PreviousResponseID != "resp_previous" {
 		t.Fatalf("previous_response_id = %q", wire.PreviousResponseID)
 	}
+	if len(wire.ContextManagement) != 1 || wire.ContextManagement[0]["type"] != "compaction" {
+		t.Fatalf("context_management = %#v", wire.ContextManagement)
+	}
 	if wire.MaxOutputTokens == nil || *wire.MaxOutputTokens != maxOutputTokens {
 		t.Fatalf("max_output_tokens = %v", wire.MaxOutputTokens)
 	}
@@ -80,6 +84,98 @@ func TestResponsesBuildRequestMapsCoreFields(t *testing.T) {
 	}
 	if wire.Prompt["id"] != "pmpt_123" || wire.Metadata["tenant"] != "acme" || wire.ServiceTier != "flex" || wire.Store == nil || !*wire.Store {
 		t.Fatalf("wire = %#v", wire)
+	}
+}
+
+func TestResponsesAcceptsNativeInputWithoutMessages(t *testing.T) {
+	provider := mustProvider(t)
+	wire, err := provider.buildResponsesRequest(&ResponsesRequest{
+		Model: "gpt-5.1",
+		Input: []any{
+			map[string]any{
+				"type": "message",
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "input_text", "text": "hello"},
+				},
+			},
+		},
+		Instructions: "Be concise.",
+	}, false)
+	if err != nil {
+		t.Fatalf("buildResponsesRequest: %v", err)
+	}
+	if wire.Instructions != "Be concise." {
+		t.Fatalf("instructions = %q", wire.Instructions)
+	}
+	items, ok := wire.Input.([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("input = %#v", wire.Input)
+	}
+}
+
+func TestResponsesAcceptsPromptOnlyRequest(t *testing.T) {
+	provider := mustProvider(t)
+	wire, err := provider.buildResponsesRequest(&ResponsesRequest{
+		Model: "gpt-5.1",
+		Prompt: map[string]any{
+			"id": "pmpt_123",
+			"variables": map[string]any{
+				"topic": "cache",
+			},
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildResponsesRequest: %v", err)
+	}
+	if wire.Input != nil {
+		t.Fatalf("input = %#v, want nil", wire.Input)
+	}
+	if wire.Prompt["id"] != "pmpt_123" {
+		t.Fatalf("prompt = %#v", wire.Prompt)
+	}
+}
+
+func TestResponsesRejectsInputWithNonSystemMessages(t *testing.T) {
+	provider := mustProvider(t)
+	_, err := provider.buildResponsesRequest(&ResponsesRequest{
+		Model: "gpt-5.1",
+		Input: "hello",
+		Messages: []litellm.Message{
+			litellm.UserText("also hello"),
+		},
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), "cannot set Input and non-system Messages") {
+		t.Fatalf("expected input/messages conflict error, got %v", err)
+	}
+}
+
+func TestResponsesStreamOptions(t *testing.T) {
+	provider := mustProvider(t)
+	includeObfuscation := false
+	wire, err := provider.buildResponsesRequest(&ResponsesRequest{
+		Model:    "gpt-5.1",
+		Messages: []litellm.Message{litellm.UserText("hello")},
+		StreamOptions: &ResponsesStreamOptions{
+			IncludeObfuscation: &includeObfuscation,
+		},
+	}, true)
+	if err != nil {
+		t.Fatalf("buildResponsesRequest: %v", err)
+	}
+	if wire.StreamOptions == nil || wire.StreamOptions.IncludeObfuscation == nil || *wire.StreamOptions.IncludeObfuscation {
+		t.Fatalf("stream_options = %#v", wire.StreamOptions)
+	}
+
+	_, err = provider.buildResponsesRequest(&ResponsesRequest{
+		Model:    "gpt-5.1",
+		Messages: []litellm.Message{litellm.UserText("hello")},
+		StreamOptions: &ResponsesStreamOptions{
+			IncludeObfuscation: &includeObfuscation,
+		},
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), "stream_options requires stream request") {
+		t.Fatalf("expected non-stream stream_options error, got %v", err)
 	}
 }
 

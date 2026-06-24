@@ -89,6 +89,49 @@ func TestBuildRequestTextImageToolsAndOptions(t *testing.T) {
 	}
 }
 
+func TestBuildRequestOpenAIProviderOptions(t *testing.T) {
+	provider := mustProvider(t)
+	wire, err := provider.buildRequest(&litellm.Request{
+		Model:    "gpt-4o-audio-preview",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{
+			ProviderOptionAudio: map[string]any{
+				"format": "mp3",
+				"voice":  "alloy",
+			},
+			ProviderOptionModeration:        map[string]any{"model": "omni-moderation-latest"},
+			ProviderOptionModalities:        []any{"text", "audio"},
+			ProviderOptionParallelToolCalls: true,
+			ProviderOptionSafetyIdentifier:  "safe-user",
+			ProviderOptionVerbosity:         "low",
+			ProviderOptionWebSearchOptions: map[string]any{
+				"search_context_size": "low",
+			},
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	data, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatalf("marshal wire: %v", err)
+	}
+	jsonText := string(data)
+	for _, want := range []string{
+		`"audio":{"format":"mp3","voice":"alloy"}`,
+		`"moderation":{"model":"omni-moderation-latest"}`,
+		`"modalities":["text","audio"]`,
+		`"parallel_tool_calls":true`,
+		`"safety_identifier":"safe-user"`,
+		`"verbosity":"low"`,
+		`"web_search_options":{"search_context_size":"low"}`,
+	} {
+		if !strings.Contains(jsonText, want) {
+			t.Fatalf("wire JSON missing %s:\n%s", want, jsonText)
+		}
+	}
+}
+
 func TestBuildRequestRoundTripsTextReasoningBlockHistory(t *testing.T) {
 	provider := mustProvider(t)
 	wire, err := provider.buildRequest(&litellm.Request{
@@ -144,6 +187,38 @@ func TestBuildRequestRejectsInvalidPromptCacheRetention(t *testing.T) {
 	}, false)
 	if err == nil || !strings.Contains(err.Error(), "prompt_cache_retention") {
 		t.Fatalf("expected prompt cache retention error, got %v", err)
+	}
+}
+
+func TestBuildStreamRequestAcceptsStreamOptions(t *testing.T) {
+	provider := mustProvider(t)
+	includeObfuscation := false
+	wire, err := provider.buildRequest(&litellm.Request{
+		Model:    "gpt-4.1",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{
+			ProviderOptionStreamOptions: map[string]any{
+				"include_usage":       true,
+				"include_obfuscation": includeObfuscation,
+			},
+		},
+	}, true)
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	if wire.StreamOptions == nil || !wire.StreamOptions.IncludeUsage || wire.StreamOptions.IncludeObfuscation == nil || *wire.StreamOptions.IncludeObfuscation {
+		t.Fatalf("stream_options = %#v", wire.StreamOptions)
+	}
+
+	_, err = provider.buildRequest(&litellm.Request{
+		Model:    "gpt-4.1",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{
+			ProviderOptionStreamOptions: map[string]any{"include_obfuscation": false},
+		},
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), "requires stream request") {
+		t.Fatalf("expected non-stream stream_options error, got %v", err)
 	}
 }
 

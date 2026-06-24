@@ -19,6 +19,7 @@ type chatRequest struct {
 	Logprobs    *bool `json:"logprobs,omitempty"`
 	TopLogprobs *int  `json:"top_logprobs,omitempty"`
 	Store       *bool `json:"store,omitempty"`
+	Moderation  any   `json:"moderation,omitempty"`
 
 	Stream        bool           `json:"stream,omitempty"`
 	StreamOptions *streamOptions `json:"stream_options,omitempty"`
@@ -35,19 +36,25 @@ type chatRequest struct {
 
 	Prediction *prediction `json:"prediction,omitempty"`
 
-	Metadata    map[string]string `json:"metadata,omitempty"`
-	ServiceTier string            `json:"service_tier,omitempty"`
-	User        string            `json:"user,omitempty"`
+	Metadata         map[string]string `json:"metadata,omitempty"`
+	ServiceTier      string            `json:"service_tier,omitempty"`
+	SafetyIdentifier string            `json:"safety_identifier,omitempty"`
+	User             string            `json:"user,omitempty"`
 
-	Modalities []string `json:"modalities,omitempty"`
+	Modalities       []string `json:"modalities,omitempty"`
+	Audio            any      `json:"audio,omitempty"`
+	Verbosity        string   `json:"verbosity,omitempty"`
+	WebSearchOptions any      `json:"web_search_options,omitempty"`
 
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 
-	Seed *int `json:"seed,omitempty"`
+	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
+	Seed              *int  `json:"seed,omitempty"`
 }
 
 type streamOptions struct {
-	IncludeUsage bool `json:"include_usage"`
+	IncludeUsage       bool  `json:"include_usage,omitempty"`
+	IncludeObfuscation *bool `json:"include_obfuscation,omitempty"`
 }
 
 type prediction struct {
