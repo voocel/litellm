@@ -27,9 +27,10 @@ func (f roundTripFunc) Do(req *http.Request) (*http.Response, error) {
 }
 
 type wrapperCase struct {
-	name   string
-	apiKey bool
-	new    func(compat.Config) (*compat.Provider, error)
+	name               string
+	apiKey             bool
+	strictToolsForward bool
+	new                func(compat.Config) (*compat.Provider, error)
 }
 
 func compatWrappers() []wrapperCase {
@@ -41,7 +42,7 @@ func compatWrappers() []wrapperCase {
 		{name: "minimax", apiKey: true, new: minimax.New},
 		{name: "ollama", new: ollama.New},
 		{name: "grok", apiKey: true, new: grok.New},
-		{name: "mimo", apiKey: true, new: mimo.New},
+		{name: "mimo", apiKey: true, strictToolsForward: true, new: mimo.New},
 	}
 }
 
@@ -79,7 +80,7 @@ func TestCompatWrappersConvertStreamFixture(t *testing.T) {
 	for _, tt := range compatWrappers() {
 		t.Run(tt.name, func(t *testing.T) {
 			provider := newWrapper(t, tt, roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				return streamResponse(testgolden.ReadFixtureString(t, "../../testdata/compat/minimax_stream.sse")), nil
+				return streamResponse(testgolden.ReadFixtureString(t, "../../testdata/compat/stream.sse")), nil
 			}))
 			stream, err := provider.Stream(context.Background(), &litellm.Request{
 				Model:    "m",
@@ -127,6 +128,9 @@ func TestCompatWrappersRejectUnknownProviderOptions(t *testing.T) {
 
 func TestCompatWrappersWarnWhenStrictToolIsOmitted(t *testing.T) {
 	for _, tt := range compatWrappers() {
+		if tt.strictToolsForward {
+			continue
+		}
 		t.Run(tt.name, func(t *testing.T) {
 			provider := newWrapper(t, tt, roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				return jsonResponse(http.StatusOK, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`), nil

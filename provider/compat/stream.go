@@ -21,6 +21,7 @@ type stream struct {
 	model         string
 	usage         litellm.Usage
 	finish        litellm.FinishReason
+	lastContent   string
 	lastReasoning string
 	toolIDs       map[int]string
 }
@@ -112,13 +113,27 @@ func (s *stream) events(chunk streamChunk) ([]litellm.Event, error) {
 				return nil, litellm.NewProviderErrorWithCause(s.spec.providerName(), litellm.ErrorTypeProvider, fmt.Sprintf("%s: parse delta", s.spec.providerName()), err)
 			}
 			if text := s.findContent(delta); text != "" {
-				events = append(events, litellm.ContentDelta{Text: text, OutputIndex: litellm.IntPtr(choice.Index)})
+				if s.contentCumulativeAllowed() {
+					next, err := s.contentDelta(text)
+					if err != nil {
+						return nil, err
+					}
+					text = next
+				}
+				if text != "" {
+					events = append(events, litellm.ContentDelta{Text: text, OutputIndex: litellm.IntPtr(choice.Index)})
+				}
 			}
 			if refusal, _ := delta["refusal"].(string); refusal != "" {
 				events = append(events, litellm.RefusalDelta{Text: refusal, OutputIndex: litellm.IntPtr(choice.Index)})
 			}
 			if s.reasoningAllowed() {
 				if reasoning := findReasoning(delta, s.reasoningFields()); reasoning != "" {
+					extra, err := reasoningExtra(delta)
+					if err != nil {
+						return nil, litellm.NewProviderErrorWithCause(s.spec.providerName(), litellm.ErrorTypeProvider, fmt.Sprintf("%s: convert reasoning details", s.spec.providerName()), err)
+					}
+					extraFull := s.spec.Stream.ReasoningCumulative
 					if s.spec.Stream.ReasoningCumulative {
 						next, err := s.reasoningDelta(reasoning)
 						if err != nil {
@@ -127,7 +142,7 @@ func (s *stream) events(chunk streamChunk) ([]litellm.Event, error) {
 						reasoning = next
 					}
 					if reasoning != "" {
-						events = append(events, litellm.ReasoningDelta{Text: reasoning, Index: litellm.IntPtr(choice.Index)})
+						events = append(events, litellm.ReasoningDelta{Text: reasoning, Extra: extra, ExtraFull: extraFull, Index: litellm.IntPtr(choice.Index)})
 					}
 				}
 			}
@@ -161,6 +176,36 @@ func (s *stream) findContent(delta map[string]any) string {
 	return ""
 }
 
+func (s *stream) contentDelta(current string) (string, error) {
+	if s.lastContent == "" {
+		s.lastContent = current
+		return current, nil
+	}
+	if !strings.HasPrefix(current, s.lastContent) {
+		return "", litellm.NewProviderError(s.spec.providerName(), litellm.ErrorTypeProvider, fmt.Sprintf("%s: cumulative content stream changed unexpectedly", s.spec.providerName()))
+	}
+	next := strings.TrimPrefix(current, s.lastContent)
+	s.lastContent = current
+	return next, nil
+}
+
+func (s *stream) contentCumulativeAllowed() bool {
+	if !s.spec.Stream.ContentCumulative {
+		return false
+	}
+	cond := s.spec.Stream.ContentCumulativeCondition
+	if cond == "" || cond == "always" {
+		return true
+	}
+	if cond == "thinking_enabled" {
+		if s.req == nil || s.req.Thinking == nil || s.req.Thinking.Mode == litellm.ThinkingUnspecified {
+			return true
+		}
+		return s.req.Thinking.Mode == litellm.ThinkingEnabled
+	}
+	return true
+}
+
 func (s *stream) reasoningAllowed() bool {
 	if s.req != nil && s.req.Thinking != nil && s.req.Thinking.Mode == litellm.ThinkingDisabled {
 		return false
@@ -183,6 +228,14 @@ func (s *stream) reasoningFields() []string {
 		return s.spec.Response.ReasoningFields
 	}
 	return []string{"reasoning_summary", "reasoning_details", "reasoning_content", "reasoning", "reasoning_text"}
+}
+
+func reasoningExtra(delta map[string]any) (json.RawMessage, error) {
+	details, ok := delta["reasoning_details"]
+	if !ok || details == nil {
+		return nil, nil
+	}
+	return json.Marshal(details)
 }
 
 func (s *stream) reasoningDelta(current string) (string, error) {

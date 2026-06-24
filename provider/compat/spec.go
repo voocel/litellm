@@ -84,8 +84,12 @@ type StreamSpec struct {
 	ReasoningCondition  string
 	ReasoningCumulative bool
 
-	ContentFields []string
-	DoneSentinel  string
+	ContentFields              []string
+	ContentCumulative          bool
+	ContentCumulativeCondition string
+	DoneSentinel               string
+
+	OmitStreamOptions bool
 }
 
 type FeatureSpec struct {

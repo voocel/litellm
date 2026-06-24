@@ -2,6 +2,7 @@ package minimax
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/voocel/litellm"
 	"github.com/voocel/litellm/provider/compat"
@@ -11,6 +12,12 @@ const defaultBaseURL = "https://api.minimax.io/v1"
 
 type Config = compat.Config
 
+const ProviderOptionServiceTier = "service_tier"
+
+var allowedProviderOptions = map[string]struct{}{
+	ProviderOptionServiceTier: {},
+}
+
 func New(cfg Config) (*compat.Provider, error) {
 	return compat.New(cfg, compat.Spec{
 		Name: "minimax",
@@ -19,17 +26,21 @@ func New(cfg Config) (*compat.Provider, error) {
 		},
 		Auth: compat.AuthSpec{APIKeyRequired: true},
 		Request: compat.RequestSpec{
-			MaxTokensField: "max_completion_tokens",
-			Thinking:       mapThinking,
+			MaxTokensField:         "max_completion_tokens",
+			Thinking:               mapThinking,
+			ProviderOptions:        mapProviderOptions,
+			AllowedProviderOptions: allowedProviderOptions,
 		},
 		Response: compat.ResponseSpec{
 			ModelFromResponse:         true,
-			ReasoningFields:           []string{"reasoning_details"},
+			ReasoningFields:           []string{"reasoning_details", "reasoning_content"},
 			HasCompletionTokenDetails: true,
 		},
 		Stream: compat.StreamSpec{
-			ReasoningFields:     []string{"reasoning_details", "reasoning_content"},
-			ReasoningCumulative: true,
+			ReasoningFields:            []string{"reasoning_details", "reasoning_content"},
+			ReasoningCumulative:        true,
+			ContentCumulative:          true,
+			ContentCumulativeCondition: "thinking_enabled",
 		},
 	})
 }
@@ -38,13 +49,16 @@ func Factory(cfg Config) (litellm.Provider, error) {
 	return New(cfg)
 }
 
-func mapThinking(thinking *litellm.Thinking, _ string) (map[string]any, error) {
+func mapThinking(thinking *litellm.Thinking, model string) (map[string]any, error) {
 	if thinking == nil || thinking.Mode == litellm.ThinkingUnspecified {
 		return nil, nil
 	}
 	thinkingType := ""
 	switch thinking.Mode {
 	case litellm.ThinkingDisabled:
+		if isM2(model) {
+			return nil, fmt.Errorf("minimax: thinking cannot be disabled for M2.x models")
+		}
 		thinkingType = "disabled"
 	case litellm.ThinkingEnabled:
 		thinkingType = "adaptive"
@@ -56,4 +70,38 @@ func mapThinking(thinking *litellm.Thinking, _ string) (map[string]any, error) {
 		body["reasoning_split"] = true
 	}
 	return body, nil
+}
+
+func mapProviderOptions(options litellm.ProviderOptions, body map[string]any, req *litellm.Request) error {
+	if effectiveThinkingEnabled(req) {
+		body["reasoning_split"] = true
+	}
+	for key, value := range options {
+		switch key {
+		case ProviderOptionServiceTier:
+			tier, ok := value.(string)
+			if !ok {
+				return fmt.Errorf("minimax: provider option %q must be string", key)
+			}
+			tier = strings.ToLower(strings.TrimSpace(tier))
+			if tier != "standard" && tier != "priority" {
+				return fmt.Errorf("minimax: provider option %q must be standard or priority", key)
+			}
+			body[key] = tier
+		default:
+			return fmt.Errorf("minimax: unsupported provider option %q", key)
+		}
+	}
+	return nil
+}
+
+func effectiveThinkingEnabled(req *litellm.Request) bool {
+	if req.Thinking == nil || req.Thinking.Mode == litellm.ThinkingUnspecified {
+		return true
+	}
+	return req.Thinking.Mode == litellm.ThinkingEnabled
+}
+
+func isM2(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "minimax-m2")
 }

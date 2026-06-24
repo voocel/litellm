@@ -6,7 +6,7 @@
     }
   ],
   "model": "glm-5.2",
-  "reasoning_effort": "high",
+  "reasoning_effort": "max",
   "thinking": {
     "type": "enabled"
   }

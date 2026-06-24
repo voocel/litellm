@@ -56,6 +56,131 @@ func TestDisabledThinking(t *testing.T) {
 	}
 }
 
+func TestDefaultReasoningSplit(t *testing.T) {
+	body := captureBody(t, &litellm.Request{
+		Model:    "MiniMax-M3",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+	})
+	if body["reasoning_split"] != true {
+		t.Fatalf("reasoning_split = %#v", body["reasoning_split"])
+	}
+	if _, ok := body["thinking"]; ok {
+		t.Fatalf("thinking should be omitted when unspecified: %#v", body)
+	}
+}
+
+func TestM2CannotDisableThinking(t *testing.T) {
+	p, err := New(compat.Config{
+		APIKey:  "key",
+		BaseURL: "https://minimax.test",
+		HTTPClient: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("request should not be sent")
+			return nil, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = p.Chat(context.Background(), &litellm.Request{
+		Model:    "MiniMax-M2.7",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingDisabled},
+	})
+	if err == nil || !strings.Contains(err.Error(), "thinking cannot be disabled for M2.x") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestProviderOptions(t *testing.T) {
+	body := captureBody(t, &litellm.Request{
+		Model:    "MiniMax-M3",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{
+			ProviderOptionServiceTier: "PRIORITY",
+		},
+	})
+	if body["service_tier"] != "priority" {
+		t.Fatalf("service_tier = %#v", body["service_tier"])
+	}
+}
+
+func TestProviderOptionsValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		options litellm.ProviderOptions
+		want    string
+	}{
+		{
+			name:    "unknown",
+			options: litellm.ProviderOptions{"unknown": true},
+			want:    `unsupported provider option "unknown"`,
+		},
+		{
+			name:    "service_tier_type",
+			options: litellm.ProviderOptions{ProviderOptionServiceTier: 1},
+			want:    `provider option "service_tier" must be string`,
+		},
+		{
+			name:    "service_tier_value",
+			options: litellm.ProviderOptions{ProviderOptionServiceTier: "fast"},
+			want:    `provider option "service_tier" must be standard or priority`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := New(compat.Config{
+				APIKey:  "key",
+				BaseURL: "https://minimax.test",
+				HTTPClient: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					t.Fatal("request should not be sent")
+					return nil, nil
+				}),
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			_, err = p.Chat(context.Background(), &litellm.Request{
+				Model:           "MiniMax-M3",
+				Messages:        []litellm.Message{litellm.UserText("hi")},
+				ProviderOptions: tt.options,
+			})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected %q, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
+func TestResponseReasoningContentFallback(t *testing.T) {
+	p, err := New(compat.Config{
+		APIKey:  "key",
+		BaseURL: "https://minimax.test",
+		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body: io.NopCloser(strings.NewReader(`{
+					"model":"MiniMax-M3",
+					"choices":[{"message":{"content":"ok","reasoning_content":"think"},"finish_reason":"stop"}]
+				}`)),
+				Header: make(http.Header),
+			}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	resp, err := p.Chat(context.Background(), &litellm.Request{
+		Model:    "MiniMax-M3",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if resp.Text() != "ok" || resp.Reasoning() != "think" {
+		t.Fatalf("text/reasoning = %q/%q", resp.Text(), resp.Reasoning())
+	}
+}
+
 func captureBody(t *testing.T, req *litellm.Request) map[string]any {
 	t.Helper()
 	var body map[string]any

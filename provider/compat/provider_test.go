@@ -502,6 +502,7 @@ func TestStreamCumulativeReasoningAndToolDeltas(t *testing.T) {
 		Stream: StreamSpec{
 			ReasoningFields:     []string{"reasoning_content"},
 			ReasoningCumulative: true,
+			ContentCumulative:   true,
 		},
 	})
 	if err != nil {
@@ -521,12 +522,93 @@ func TestStreamCumulativeReasoningAndToolDeltas(t *testing.T) {
 	if resp.Reasoning() != "ab" || resp.Text() != "hi" {
 		t.Fatalf("reasoning/text = %q/%q", resp.Reasoning(), resp.Text())
 	}
+	if len(resp.Blocks) == 0 {
+		t.Fatalf("blocks is empty")
+	}
+	reasoning, ok := resp.Blocks[0].(litellm.ReasoningBlock)
+	if !ok {
+		t.Fatalf("first block = %T", resp.Blocks[0])
+	}
+	var details []map[string]any
+	if err := json.Unmarshal(reasoning.Extra, &details); err != nil {
+		t.Fatalf("reasoning extra: %v", err)
+	}
+	if len(details) != 1 || details[0]["text"] != "ab" {
+		t.Fatalf("reasoning details = %#v", details)
+	}
 	calls := resp.ToolCalls()
 	if len(calls) != 1 || calls[0].ID != "call_1" || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
 		t.Fatalf("tool calls = %+v", calls)
 	}
 	if resp.Usage.InputTokens != 1 || resp.Usage.OutputTokens != 2 || resp.FinishReason != litellm.FinishReasonToolCall {
 		t.Fatalf("usage/finish = %+v/%q", resp.Usage, resp.FinishReason)
+	}
+}
+
+func TestStreamCumulativeContentRejectsRewrite(t *testing.T) {
+	provider, err := New(Config{
+		BaseURL: "https://compat.example/v1",
+		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return streamResponse(strings.Join([]string{
+				`data: {"choices":[{"index":0,"delta":{"content":"abc"}}]}`,
+				`data: {"choices":[{"index":0,"delta":{"content":"ax"}}]}`,
+				``,
+			}, "\n")), nil
+		}),
+	}, Spec{Name: "minimax", Stream: StreamSpec{ContentCumulative: true}})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), &litellm.Request{Model: "m", Messages: []litellm.Message{litellm.UserText("hi")}})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	_, err = litellm.Collect(stream)
+	if err == nil || !strings.Contains(err.Error(), "cumulative content stream changed") {
+		t.Fatalf("expected cumulative content error, got %v", err)
+	}
+}
+
+func TestStreamCumulativeContentCanDependOnThinking(t *testing.T) {
+	provider, err := New(Config{
+		BaseURL: "https://compat.example/v1",
+		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return streamResponse(strings.Join([]string{
+				`data: {"choices":[{"index":0,"delta":{"content":"h"}}]}`,
+				`data: {"choices":[{"index":0,"delta":{"content":"i"},"finish_reason":"stop"}]}`,
+				`data: [DONE]`,
+				``,
+			}, "\n")), nil
+		}),
+	}, Spec{
+		Name: "minimax",
+		Stream: StreamSpec{
+			ContentCumulative:          true,
+			ContentCumulativeCondition: "thinking_enabled",
+		},
+		Request: RequestSpec{
+			Thinking: func(*litellm.Thinking, string) (map[string]any, error) {
+				return map[string]any{"thinking": map[string]any{"type": "disabled"}}, nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), &litellm.Request{
+		Model:    "m",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingDisabled},
+	})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	resp, err := litellm.Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+	if resp.Text() != "hi" {
+		t.Fatalf("text = %q", resp.Text())
 	}
 }
 

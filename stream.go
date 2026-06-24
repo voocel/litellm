@@ -28,6 +28,8 @@ type ReasoningDelta struct {
 	Summary   bool
 	Signature string
 	Redacted  []byte
+	Extra     json.RawMessage
+	ExtraFull bool
 	Index     *int
 }
 
@@ -99,6 +101,7 @@ func cloneEvent(event Event) Event {
 		return e
 	case ReasoningDelta:
 		e.Redacted = cloneBytes(e.Redacted)
+		e.Extra = cloneBytes(e.Extra)
 		return e
 	case ToolUseStart:
 		return e
@@ -371,7 +374,7 @@ func (c *EventCollector) appendContent(text string) {
 }
 
 func (c *EventCollector) appendReasoning(delta ReasoningDelta) {
-	if delta.Text == "" && delta.Signature == "" && len(delta.Redacted) == 0 {
+	if delta.Text == "" && delta.Signature == "" && len(delta.Redacted) == 0 && len(delta.Extra) == 0 {
 		return
 	}
 	if len(delta.Redacted) > 0 {
@@ -387,11 +390,34 @@ func (c *EventCollector) appendReasoning(delta ReasoningDelta) {
 			if delta.Signature != "" {
 				block.Signature = delta.Signature
 			}
+			block.Extra = mergeReasoningExtra(block.Extra, delta)
 			c.blocks[len(c.blocks)-1] = block
 			return
 		}
 	}
-	c.blocks = append(c.blocks, ReasoningBlock{Text: delta.Text, Summary: delta.Summary, Signature: delta.Signature})
+	c.blocks = append(c.blocks, ReasoningBlock{Text: delta.Text, Summary: delta.Summary, Signature: delta.Signature, Extra: cloneBytes(delta.Extra)})
+}
+
+func mergeReasoningExtra(current json.RawMessage, delta ReasoningDelta) json.RawMessage {
+	if len(delta.Extra) == 0 {
+		return current
+	}
+	if delta.ExtraFull {
+		return cloneBytes(delta.Extra)
+	}
+	if len(current) == 0 {
+		return cloneBytes(delta.Extra)
+	}
+	var currentItems, deltaItems []json.RawMessage
+	if json.Unmarshal(current, &currentItems) == nil && json.Unmarshal(delta.Extra, &deltaItems) == nil {
+		merged := make([]json.RawMessage, 0, len(currentItems)+len(deltaItems))
+		merged = append(merged, currentItems...)
+		merged = append(merged, deltaItems...)
+		if data, err := json.Marshal(merged); err == nil {
+			return data
+		}
+	}
+	return cloneBytes(delta.Extra)
 }
 
 func (c *EventCollector) appendTool(key string, tool *ToolUseBlock) {

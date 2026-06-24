@@ -33,7 +33,9 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) ([]byte, []li
 	}
 	if stream {
 		body["stream"] = true
-		body["stream_options"] = map[string]any{"include_usage": true}
+		if !p.spec.Stream.OmitStreamOptions {
+			body["stream_options"] = map[string]any{"include_usage": true}
+		}
 	}
 	if req.MaxTokens != nil {
 		body[p.spec.maxTokensField()] = *req.MaxTokens
