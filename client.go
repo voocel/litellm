@@ -170,6 +170,40 @@ func (c *Client) Stream(ctx context.Context, req Request) (Stream, error) {
 	return newHookedStream(streamCtx, meta, c.hooks, stream), nil
 }
 
+// StreamText opens a stream for req and invokes fn for each text content delta,
+// returning the aggregated Response. It is the simplest way to stream answer
+// text to a UI or writer. It creates and closes the stream for you; use
+// Client.Stream directly when you need the raw event stream.
+func (c *Client) StreamText(ctx context.Context, req Request, fn func(string) error) (resp *Response, err error) {
+	stream, err := c.Stream(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := stream.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	return HandleText(stream, fn)
+}
+
+// StreamWith opens a stream for req and dispatches its deltas to handler's
+// callbacks, returning the aggregated Response. Use it to stream reasoning and
+// answer text separately without a type switch. For full event fidelity, use
+// Client.Stream with Handle.
+func (c *Client) StreamWith(ctx context.Context, req Request, handler StreamHandler) (resp *Response, err error) {
+	stream, err := c.Stream(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := stream.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	return HandleWith(stream, handler)
+}
+
 func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	if c == nil || c.provider == nil {
 		return nil, NewError(ErrorTypeValidation, "client has no provider")

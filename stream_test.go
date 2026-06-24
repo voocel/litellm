@@ -151,6 +151,114 @@ func TestCollectRejectsToolDoneUnknownToolUse(t *testing.T) {
 	}
 }
 
+func TestHandleInvokesCallbackPerEventAndAggregates(t *testing.T) {
+	stream := &eventSliceStream{events: []Event{
+		ContentDelta{Text: "a"},
+		ReasoningDelta{Text: "r"},
+		ContentDelta{Text: "b"},
+		DoneEvent{FinishReason: FinishReasonStop, Provider: "test", Model: "m"},
+	}}
+	var seen int
+	resp, err := Handle(stream, func(event Event) error {
+		seen++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if seen != 4 {
+		t.Fatalf("callback invoked %d times, want 4", seen)
+	}
+	if resp.Text() != "ab" {
+		t.Fatalf("aggregated text = %q, want %q", resp.Text(), "ab")
+	}
+}
+
+func TestHandleStopsOnCallbackError(t *testing.T) {
+	boom := errors.New("boom")
+	var seen int
+	_, err := Handle(&eventSliceStream{events: []Event{
+		ContentDelta{Text: "a"},
+		ContentDelta{Text: "b"},
+		DoneEvent{FinishReason: FinishReasonStop, Provider: "test", Model: "m"},
+	}}, func(event Event) error {
+		seen++
+		return boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want boom", err)
+	}
+	if seen != 1 {
+		t.Fatalf("callback invoked %d times, want 1 (stop on first error)", seen)
+	}
+}
+
+func TestHandleTextReceivesOnlyContentDeltas(t *testing.T) {
+	var text strings.Builder
+	resp, err := HandleText(&eventSliceStream{events: []Event{
+		ReasoningDelta{Text: "ignored"},
+		ContentDelta{Text: "hello "},
+		ContentDelta{Text: "world"},
+		DoneEvent{FinishReason: FinishReasonStop, Provider: "test", Model: "m"},
+	}}, func(s string) error {
+		text.WriteString(s)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("HandleText: %v", err)
+	}
+	if text.String() != "hello world" {
+		t.Fatalf("streamed text = %q, want %q", text.String(), "hello world")
+	}
+	if resp.Reasoning() != "ignored" {
+		t.Fatalf("reasoning still aggregated, got %q", resp.Reasoning())
+	}
+}
+
+func TestHandleWithSplitsReasoningAndContent(t *testing.T) {
+	var reasoning, content strings.Builder
+	resp, err := HandleWith(&eventSliceStream{events: []Event{
+		ReasoningDelta{Text: "think "},
+		ContentDelta{Text: "ans"},
+		ReasoningDelta{Text: "more"},
+		ContentDelta{Text: "wer"},
+		DoneEvent{FinishReason: FinishReasonStop, Provider: "test", Model: "m"},
+	}}, StreamHandler{
+		Reasoning: func(s string) error { reasoning.WriteString(s); return nil },
+		Content:   func(s string) error { content.WriteString(s); return nil },
+	})
+	if err != nil {
+		t.Fatalf("HandleWith: %v", err)
+	}
+	if reasoning.String() != "think more" {
+		t.Fatalf("reasoning = %q, want %q", reasoning.String(), "think more")
+	}
+	if content.String() != "answer" {
+		t.Fatalf("content = %q, want %q", content.String(), "answer")
+	}
+	if resp.Text() != "answer" {
+		t.Fatalf("aggregated text = %q", resp.Text())
+	}
+}
+
+func TestHandleWithNilCallbacksAreSkipped(t *testing.T) {
+	// Only Content is set; reasoning deltas must not panic and are still aggregated.
+	var content strings.Builder
+	resp, err := HandleWith(&eventSliceStream{events: []Event{
+		ReasoningDelta{Text: "r"},
+		ContentDelta{Text: "c"},
+		DoneEvent{FinishReason: FinishReasonStop, Provider: "test", Model: "m"},
+	}}, StreamHandler{
+		Content: func(s string) error { content.WriteString(s); return nil },
+	})
+	if err != nil {
+		t.Fatalf("HandleWith: %v", err)
+	}
+	if content.String() != "c" || resp.Reasoning() != "r" {
+		t.Fatalf("content=%q reasoning=%q", content.String(), resp.Reasoning())
+	}
+}
+
 type eventSliceStream struct {
 	events []Event
 	index  int

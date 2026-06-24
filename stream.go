@@ -183,7 +183,17 @@ func (s *warningPrefixStream) Close() error {
 	return s.inner.Close()
 }
 
+// Collect consumes the stream and returns the aggregated Response. It errors if
+// the stream ends before a DoneEvent.
 func Collect(stream Stream) (*Response, error) {
+	return Handle(stream, nil)
+}
+
+// Handle consumes the stream, invoking fn for each event as it arrives, and
+// returns the aggregated Response. It is the real-time counterpart to Collect;
+// a nil fn behaves exactly like Collect. If fn returns an error, Handle stops
+// and returns it. The caller still owns Close.
+func Handle(stream Stream, fn func(Event) error) (*Response, error) {
 	if stream == nil {
 		return nil, fmt.Errorf("stream cannot be nil")
 	}
@@ -199,6 +209,11 @@ func Collect(stream Stream) (*Response, error) {
 		if event == nil {
 			return nil, fmt.Errorf("stream returned nil event without error")
 		}
+		if fn != nil {
+			if err := fn(event); err != nil {
+				return nil, err
+			}
+		}
 		done, err := collector.Apply(event)
 		if err != nil {
 			return nil, err
@@ -211,6 +226,46 @@ func Collect(stream Stream) (*Response, error) {
 			return resp, nil
 		}
 	}
+}
+
+// HandleText consumes the stream, invoking fn for each text content delta, and
+// returns the aggregated Response. It is the simplest path for streaming answer
+// text; reasoning and tool events are still aggregated into the Response but are
+// not passed to fn.
+func HandleText(stream Stream, fn func(string) error) (*Response, error) {
+	return Handle(stream, func(event Event) error {
+		if delta, ok := event.(ContentDelta); ok && delta.Text != "" && fn != nil {
+			return fn(delta.Text)
+		}
+		return nil
+	})
+}
+
+// StreamHandler routes streamed deltas to per-category callbacks. Unset
+// callbacks are skipped; every event is still aggregated into the returned
+// Response. For full event fidelity (tool-call streaming, provider events), use
+// Handle or the raw Stream.
+type StreamHandler struct {
+	Content   func(string) error
+	Reasoning func(string) error
+}
+
+// HandleWith consumes the stream, dispatching content and reasoning deltas to
+// the handler's callbacks, and returns the aggregated Response.
+func HandleWith(stream Stream, handler StreamHandler) (*Response, error) {
+	return Handle(stream, func(event Event) error {
+		switch e := event.(type) {
+		case ContentDelta:
+			if handler.Content != nil && e.Text != "" {
+				return handler.Content(e.Text)
+			}
+		case ReasoningDelta:
+			if handler.Reasoning != nil && e.Text != "" {
+				return handler.Reasoning(e.Text)
+			}
+		}
+		return nil
+	})
 }
 
 type EventCollector struct {

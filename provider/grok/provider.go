@@ -2,7 +2,6 @@ package grok
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/voocel/litellm"
 	"github.com/voocel/litellm/provider/compat"
@@ -34,12 +33,9 @@ func Factory(cfg Config) (litellm.Provider, error) {
 	return New(cfg)
 }
 
-func mapThinking(thinking *litellm.Thinking, model string) (map[string]any, error) {
+func mapThinking(thinking *litellm.Thinking, _ string) (map[string]any, error) {
 	if thinking == nil || thinking.Mode == litellm.ThinkingUnspecified {
 		return nil, nil
-	}
-	if !supportsReasoningEffort(model) {
-		return nil, fmt.Errorf("grok: reasoning_effort is only supported by grok-4.3 models, got %q", model)
 	}
 	if thinking.Mode == litellm.ThinkingDisabled {
 		return map[string]any{"reasoning_effort": "none"}, nil
@@ -54,9 +50,4 @@ func mapThinking(thinking *litellm.Thinking, model string) (map[string]any, erro
 		return map[string]any{"reasoning_effort": thinking.Level}, nil
 	}
 	return nil, fmt.Errorf("grok: thinking level or effort is required")
-}
-
-func supportsReasoningEffort(model string) bool {
-	model = strings.ToLower(strings.TrimSpace(model))
-	return model == "grok-4.3" || strings.HasPrefix(model, "grok-4.3-")
 }

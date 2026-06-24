@@ -880,6 +880,49 @@ func TestStreamHooksCannotMutateReturnedEvents(t *testing.T) {
 	}
 }
 
+func TestStreamTextReturnsCloseError(t *testing.T) {
+	closeErr := errors.New("close failed")
+	client, err := New(&testProvider{
+		name: "stream",
+		streamFunc: func(ctx context.Context, req *Request) (Stream, error) {
+			return &closeErrStream{
+				events: []Event{ContentDelta{Text: "ok"}, DoneEvent{FinishReason: FinishReasonStop, Provider: "stream", Model: req.Model}},
+				err:    closeErr,
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.StreamText(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}}, nil)
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("StreamText err = %v, want close error", err)
+	}
+}
+
+func TestStreamTextPreservesHandleErrorOverCloseError(t *testing.T) {
+	boom := errors.New("boom")
+	closeErr := errors.New("close failed")
+	client, err := New(&testProvider{
+		name: "stream",
+		streamFunc: func(ctx context.Context, req *Request) (Stream, error) {
+			return &closeErrStream{
+				events: []Event{ContentDelta{Text: "partial"}},
+				err:    closeErr,
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.StreamText(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}}, func(string) error {
+		return boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("StreamText err = %v, want callback error", err)
+	}
+}
+
 type testStreamWithError struct {
 	events []Event
 	index  int
@@ -896,3 +939,20 @@ func (s *testStreamWithError) Next() (Event, error) {
 }
 
 func (s *testStreamWithError) Close() error { return nil }
+
+type closeErrStream struct {
+	events []Event
+	index  int
+	err    error
+}
+
+func (s *closeErrStream) Next() (Event, error) {
+	if s.index >= len(s.events) {
+		return nil, io.EOF
+	}
+	event := s.events[s.index]
+	s.index++
+	return event, nil
+}
+
+func (s *closeErrStream) Close() error { return s.err }
