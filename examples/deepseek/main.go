@@ -3,13 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/examples/internal/exampleutil"
 	"github.com/voocel/litellm/provider/deepseek"
 )
 
@@ -77,69 +76,21 @@ func runChat(ctx context.Context, client *litellm.Client) {
 
 // runStream prints streamed text as it arrives, then prints final usage.
 func runStream(ctx context.Context, client *litellm.Client) {
-	stream, err := client.Stream(ctx, litellm.Request{
+	printer := exampleutil.StreamPrinter{}
+	resp, err := client.StreamWith(ctx, litellm.Request{
 		Model: model(),
 		Messages: []litellm.Message{
 			litellm.UserText("Who are you?"),
 		},
 		MaxTokens: litellm.IntPtr(1024),
 		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "high"},
-	})
+	}, printer.Handler())
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer stream.Close()
-
-	var usage litellm.Usage
-	var reasoningStarted, answerStarted bool
-	for {
-		event, err := stream.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			log.Fatal(err)
-		}
-		switch e := event.(type) {
-		case litellm.ReasoningDelta:
-			if !reasoningStarted {
-				fmt.Println("reasoning:")
-				reasoningStarted = true
-			}
-			fmt.Print(e.Text)
-		case litellm.ContentDelta:
-			if !answerStarted {
-				if reasoningStarted {
-					fmt.Println()
-					fmt.Println()
-				}
-				fmt.Println("answer:")
-				answerStarted = true
-			}
-			fmt.Print(e.Text)
-		case litellm.UsageEvent:
-			usage = e.Usage
-		case litellm.DoneEvent:
-			fmt.Println()
-			fmt.Println()
-			printUsage(usage)
-			return
-		}
-	}
-}
-
-func printUsage(usage litellm.Usage) {
-	if !usage.HasTokens() {
-		return
-	}
-	fmt.Printf("usage: input=%d output=%d total=%d reasoning=%d cache_read=%d cache_write=%d\n",
-		usage.InputTokens,
-		usage.OutputTokens,
-		usage.TotalTokens,
-		usage.ReasoningTokens,
-		usage.CacheReadTokens,
-		usage.CacheWriteTokens,
-	)
+	fmt.Println()
+	fmt.Println()
+	exampleutil.PrintUsage(resp.Usage)
 }
 
 // runTool performs a full function-calling round trip: the model requests a

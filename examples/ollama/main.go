@@ -2,23 +2,47 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"log"
+	"os"
 
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/examples/internal/exampleutil"
 	"github.com/voocel/litellm/provider/ollama"
 )
 
 func main() {
+	mode := "stream"
+	if len(os.Args) > 1 {
+		mode = os.Args[1]
+	}
+
 	client, err := ollama.NewClient(ollama.Config{})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	stream, err := client.Stream(context.Background(), litellm.Request{
-		Model: "llama3.2",
+	ctx := context.Background()
+	switch mode {
+	case "chat":
+		runChat(ctx, client)
+	case "stream":
+		runStream(ctx, client)
+	default:
+		log.Fatalf("unknown mode %q; use one of: chat | stream", mode)
+	}
+}
+
+func model() string {
+	if m := os.Getenv("OLLAMA_MODEL"); m != "" {
+		return m
+	}
+	return "llama3.2"
+}
+
+func runChat(ctx context.Context, client *litellm.Client) {
+	resp, err := client.Chat(ctx, litellm.Request{
+		Model: model(),
 		Messages: []litellm.Message{
 			litellm.UserText("Write a haiku about Go programming."),
 		},
@@ -26,22 +50,21 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer stream.Close()
+	fmt.Println(resp.Text())
+}
 
-	for {
-		event, err := stream.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			log.Fatal(err)
-		}
-		switch e := event.(type) {
-		case litellm.ContentDelta:
-			fmt.Print(e.Text)
-		case litellm.DoneEvent:
-			fmt.Println()
-			return
-		}
+func runStream(ctx context.Context, client *litellm.Client) {
+	printer := exampleutil.StreamPrinter{}
+	resp, err := client.StreamWith(ctx, litellm.Request{
+		Model: model(),
+		Messages: []litellm.Message{
+			litellm.UserText("Write a haiku about Go programming."),
+		},
+	}, printer.Handler())
+	if err != nil {
+		log.Fatal(err)
 	}
+	fmt.Println()
+	fmt.Println()
+	exampleutil.PrintUsage(resp.Usage)
 }
