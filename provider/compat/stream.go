@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/voocel/litellm"
@@ -23,7 +24,8 @@ type stream struct {
 	finish        litellm.FinishReason
 	lastContent   string
 	lastReasoning string
-	toolIDs       map[int]string
+	toolIDs       map[toolKey]string
+	toolStarted   map[toolKey]bool
 }
 
 func newStream(resp *http.Response, req *litellm.Request, spec Spec) *stream {
@@ -31,13 +33,19 @@ func newStream(resp *http.Response, req *litellm.Request, spec Spec) *stream {
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024)
 	return &stream{
-		resp:    resp,
-		scanner: scanner,
-		req:     req,
-		spec:    spec,
-		model:   req.Model,
-		toolIDs: make(map[int]string),
+		resp:        resp,
+		scanner:     scanner,
+		req:         req,
+		spec:        spec,
+		model:       req.Model,
+		toolIDs:     make(map[toolKey]string),
+		toolStarted: make(map[toolKey]bool),
 	}
+}
+
+type toolKey struct {
+	choice int
+	call   int
 }
 
 func (s *stream) Next() (litellm.Event, error) {
@@ -159,9 +167,46 @@ func (s *stream) events(chunk streamChunk) ([]litellm.Event, error) {
 		}
 		if choice.FinishReason != "" {
 			s.finish = litellm.NormalizeFinishReason(choice.FinishReason)
+			// Compat providers signal tool-call completion via finish_reason
+			// rather than a per-call terminator. Emit ToolUseDone for every open
+			// call so consumers can finalize arguments — matching the native
+			// anthropic/openai/gemini streams.
+			events = append(events, s.toolDoneEvents(choice.Index)...)
 		}
 	}
 	return events, nil
+}
+
+// toolDoneEvents closes tool calls opened for a choice, in tool index order.
+// Compat providers carry no per-call terminator, so completion is inferred from
+// finish_reason. Returns the events and clears the open set so a stream with
+// multiple finish_reason chunks does not double-close.
+func (s *stream) toolDoneEvents(choiceIndex int) []litellm.Event {
+	if len(s.toolStarted) == 0 {
+		return nil
+	}
+	keys := make([]toolKey, 0, len(s.toolStarted))
+	for key := range s.toolStarted {
+		if key.choice == choiceIndex {
+			keys = append(keys, key)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].choice != keys[j].choice {
+			return keys[i].choice < keys[j].choice
+		}
+		return keys[i].call < keys[j].call
+	})
+	events := make([]litellm.Event, 0, len(keys))
+	for _, key := range keys {
+		events = append(events, litellm.ToolUseDone{
+			ID:          s.toolIDs[key],
+			Index:       litellm.IntPtr(key.call),
+			OutputIndex: litellm.IntPtr(key.choice),
+		})
+		delete(s.toolStarted, key)
+	}
+	return events
 }
 
 func (s *stream) findContent(delta map[string]any) string {
@@ -269,10 +314,11 @@ func (s *stream) toolEvents(raw any, choiceIndex int) ([]litellm.Event, error) {
 	if err != nil {
 		return nil, err
 	}
+	key := toolKey{choice: choiceIndex, call: index}
 	if id != "" {
-		s.toolIDs[index] = id
+		s.toolIDs[key] = id
 	} else {
-		id = s.toolIDs[index]
+		id = s.toolIDs[key]
 	}
 	var name, args string
 	if rawFn, ok := m["function"]; ok {
@@ -292,11 +338,17 @@ func (s *stream) toolEvents(raw any, choiceIndex int) ([]litellm.Event, error) {
 		return nil, litellm.NewProviderError(s.spec.providerName(), litellm.ErrorTypeProvider, fmt.Sprintf("%s: stream tool_call missing function object", s.spec.providerName()))
 	}
 	events := make([]litellm.Event, 0, 2)
-	if id != "" || name != "" {
-		events = append(events, litellm.ToolUseStart{ID: id, Name: name, Index: litellm.IntPtr(index)})
+	// Emit ToolUseStart only the first time we see a tool-call index. OpenAI's
+	// streaming protocol carries id/name only on the opening chunk; subsequent
+	// chunks deliver argument deltas (often with the id omitted, which we backfill
+	// above). Without this guard a backfilled id would re-trigger a start for every
+	// delta, splitting one call into several empty-named duplicates.
+	if !s.toolStarted[key] && (id != "" || name != "") {
+		s.toolStarted[key] = true
+		events = append(events, litellm.ToolUseStart{ID: id, Name: name, Index: litellm.IntPtr(index), OutputIndex: litellm.IntPtr(choiceIndex)})
 	}
 	if args != "" {
-		events = append(events, litellm.ToolUseDelta{ID: id, Index: litellm.IntPtr(index), ArgumentsDelta: []byte(args)})
+		events = append(events, litellm.ToolUseDelta{ID: id, Index: litellm.IntPtr(index), OutputIndex: litellm.IntPtr(choiceIndex), ArgumentsDelta: []byte(args)})
 	}
 	return events, nil
 }

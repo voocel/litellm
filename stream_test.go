@@ -66,6 +66,32 @@ func TestCollectMergesToolUseWhenStableIDArrivesAfterIndex(t *testing.T) {
 	}
 }
 
+func TestCollectSeparatesToolUseByOutputAndIndex(t *testing.T) {
+	stream := &eventSliceStream{events: []Event{
+		ToolUseStart{ID: "call_a", Name: "first", Index: IntPtr(0), OutputIndex: IntPtr(0)},
+		ToolUseDelta{ID: "call_a", Index: IntPtr(0), OutputIndex: IntPtr(0), ArgumentsDelta: []byte(`{"a":1}`)},
+		ToolUseStart{ID: "call_b", Name: "second", Index: IntPtr(0), OutputIndex: IntPtr(1)},
+		ToolUseDelta{ID: "call_b", Index: IntPtr(0), OutputIndex: IntPtr(1), ArgumentsDelta: []byte(`{"b":2}`)},
+		ToolUseDone{ID: "call_a", Index: IntPtr(0), OutputIndex: IntPtr(0)},
+		ToolUseDone{ID: "call_b", Index: IntPtr(0), OutputIndex: IntPtr(1)},
+		DoneEvent{FinishReason: FinishReasonToolCall, Provider: "test", Model: "m"},
+	}}
+	resp, err := Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	calls := resp.ToolCalls()
+	if len(calls) != 2 {
+		t.Fatalf("tool calls len = %d, want 2: %#v", len(calls), calls)
+	}
+	if calls[0].ID != "call_a" || calls[0].Name != "first" || string(calls[0].Arguments) != `{"a":1}` {
+		t.Fatalf("first call = %#v", calls[0])
+	}
+	if calls[1].ID != "call_b" || calls[1].Name != "second" || string(calls[1].Arguments) != `{"b":2}` {
+		t.Fatalf("second call = %#v", calls[1])
+	}
+}
+
 func TestCollectRejectsNilEventWithoutError(t *testing.T) {
 	_, err := Collect(&eventSliceStream{events: []Event{nil}})
 	if err == nil || err.Error() != "stream returned nil event without error" {

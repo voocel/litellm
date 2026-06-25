@@ -515,6 +515,12 @@ func (a *ToolUseAccumulator) Done(done ToolUseDone) (string, *ToolUseBlock, erro
 	if done.ID != "" {
 		tool.ID = done.ID
 	}
+	// A tool call with no streamed argument deltas (an argument-less call)
+	// normalizes to an empty JSON object, keeping the block valid JSON for
+	// response validation and replay rather than dangling as empty bytes.
+	if len(tool.Arguments) == 0 {
+		tool.Arguments = json.RawMessage("{}")
+	}
 	return key, tool, nil
 }
 
@@ -574,6 +580,10 @@ func toolUseKeys(id string, index, outputIndex *int, itemID string) []string {
 	}
 	if itemID != "" {
 		keys = append(keys, "item:"+itemID)
+	}
+	if index != nil && outputIndex != nil {
+		keys = append(keys, fmt.Sprintf("output:%d/index:%d", *outputIndex, *index))
+		return keys
 	}
 	if index != nil {
 		keys = append(keys, fmt.Sprintf("index:%d", *index))

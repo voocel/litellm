@@ -115,25 +115,54 @@ func TestRejectsSamplingOverridesWithThinking(t *testing.T) {
 }
 
 func TestRejectsSamplingOverridesWithDefaultThinking(t *testing.T) {
+	temp := 0.7
 	topP := 0.8
-	p, err := New(compat.Config{
-		APIKey:  "key",
-		BaseURL: "https://mimo.test",
-		HTTPClient: roundTripFunc(func(*http.Request) (*http.Response, error) {
-			t.Fatal("request should not be sent")
-			return nil, nil
-		}),
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
+	tests := []struct {
+		name string
+		req  *litellm.Request
+		want string
+	}{
+		{
+			name: "temperature",
+			req: &litellm.Request{
+				Model:       "mimo-v2.5-pro",
+				Messages:    []litellm.Message{litellm.UserText("hi")},
+				Temperature: &temp,
+			},
+			want: "temperature cannot be customized",
+		},
+		{
+			name: "top_p",
+			req: &litellm.Request{
+				Model:    "mimo-v2.5-pro",
+				Messages: []litellm.Message{litellm.UserText("hi")},
+				TopP:     &topP,
+			},
+			want: "top_p cannot be customized",
+		},
 	}
-	_, err = p.Chat(context.Background(), &litellm.Request{
-		Model:    "mimo-v2.5-pro",
-		Messages: []litellm.Message{litellm.UserText("hi")},
-		TopP:     &topP,
-	})
-	if err == nil || !strings.Contains(err.Error(), "top_p cannot be customized") {
-		t.Fatalf("err = %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := New(compat.Config{
+				APIKey:  "key",
+				BaseURL: "https://mimo.test",
+				HTTPClient: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					t.Fatal("request should not be sent")
+					return nil, nil
+				}),
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			// mimo-v2.5-pro enables thinking by default. If sampling fields are
+			// present in the normalized request, the provider cannot know whether
+			// they came from the application or a caller default, so it must fail
+			// loudly instead of silently dropping explicit input.
+			_, err = p.Chat(context.Background(), tt.req)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v", err)
+			}
+		})
 	}
 }
 
