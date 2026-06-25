@@ -685,6 +685,9 @@ func (p *Provider) responsesText(req *ResponsesRequest) (*responsesText, error) 
 }
 
 func responsesReasoningConfig(req *ResponsesRequest) (*responsesReasoning, error) {
+	if err := req.Thinking.Validate(); err != nil {
+		return nil, fmt.Errorf("openai: %w", err)
+	}
 	if req.ReasoningEffort == "" && req.ReasoningSummary == "" && (req.Thinking == nil || req.Thinking.Mode == litellm.ThinkingUnspecified) {
 		return nil, nil
 	}
@@ -698,17 +701,13 @@ func responsesReasoningConfig(req *ResponsesRequest) (*responsesReasoning, error
 			out.Effort = "none"
 		case litellm.ThinkingEnabled:
 			if out.Effort == "" {
-				if req.Thinking.Effort != "" {
-					out.Effort = req.Thinking.Effort
-				} else {
-					out.Effort = req.Thinking.Level
-				}
+				out.Effort = req.Thinking.Effort
 			}
 			if out.Summary == "" && req.Thinking.IncludeOutput {
 				out.Summary = "auto"
 			}
 			if out.Effort == "" && out.Summary == "" {
-				return nil, fmt.Errorf("openai: thinking effort, level, summary, or include_output is required")
+				return nil, fmt.Errorf("openai: thinking effort, summary, or include_output is required")
 			}
 		}
 	}

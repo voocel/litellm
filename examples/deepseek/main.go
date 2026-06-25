@@ -63,7 +63,7 @@ func runChat(ctx context.Context, client *litellm.Client) {
 			litellm.UserText("Explain reasoning models in one sentence."),
 		},
 		MaxTokens: litellm.IntPtr(1024),
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "high"},
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -83,7 +83,7 @@ func runStream(ctx context.Context, client *litellm.Client) {
 			litellm.UserText("Who are you?"),
 		},
 		MaxTokens: litellm.IntPtr(1024),
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "high"},
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
 	}, printer.Handler())
 	if err != nil {
 		log.Fatal(err)

@@ -88,6 +88,9 @@ func mapThinking(thinking *litellm.Thinking, _ string) (map[string]any, error) {
 	if thinking.Mode != litellm.ThinkingEnabled {
 		return nil, fmt.Errorf("qwen: unsupported thinking mode %d", thinking.Mode)
 	}
+	if thinking.Effort != "" {
+		return nil, fmt.Errorf("qwen: thinking effort is not supported; use budget_tokens")
+	}
 	body := map[string]any{"enable_thinking": true}
 	if thinking.BudgetTokens != nil {
 		body["thinking_budget"] = *thinking.BudgetTokens

@@ -87,10 +87,7 @@ func thinkingValue(thinking *litellm.Thinking) string {
 	if thinking == nil {
 		return ""
 	}
-	if strings.TrimSpace(thinking.Effort) != "" {
-		return thinking.Effort
-	}
-	return thinking.Level
+	return thinking.Effort
 }
 
 func thinkingEffort(value string) (string, error) {

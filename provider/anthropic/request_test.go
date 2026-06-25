@@ -55,8 +55,8 @@ func TestBuildRequestThinkingToolsCacheRoundTrip(t *testing.T) {
 			}),
 		},
 		Thinking: &litellm.Thinking{
-			Mode:  litellm.ThinkingEnabled,
-			Level: "low",
+			Mode:   litellm.ThinkingEnabled,
+			Effort: "low",
 		},
 	}
 	wire, err := provider.buildRequest(req, false)
@@ -217,8 +217,45 @@ func TestBuildRequestRejectsSilentThinkingBudgetDefault(t *testing.T) {
 		Messages:  []litellm.Message{litellm.UserText("hi")},
 		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled},
 	}, false)
-	if err == nil || !strings.Contains(err.Error(), "budget_tokens or level is required") {
+	if err == nil || !strings.Contains(err.Error(), "budget_tokens or effort is required") {
 		t.Fatalf("expected budget error, got %v", err)
+	}
+}
+
+func TestBuildRequestRejectsUnknownThinkingEffort(t *testing.T) {
+	provider, err := New(Config{APIKey: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	maxTokens := 4096
+	_, err = provider.buildRequest(&litellm.Request{
+		Model:     "claude",
+		MaxTokens: &maxTokens,
+		Messages:  []litellm.Message{litellm.UserText("hi")},
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "extreme"},
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), `unknown thinking effort "extreme"`) {
+		t.Fatalf("expected unknown effort error, got %v", err)
+	}
+}
+
+func TestBuildRequestMapsMaxThinkingEffort(t *testing.T) {
+	provider, err := New(Config{APIKey: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	maxTokens := 65536
+	wire, err := provider.buildRequest(&litellm.Request{
+		Model:     "claude",
+		MaxTokens: &maxTokens,
+		Messages:  []litellm.Message{litellm.UserText("hi")},
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "max"},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	if wire.Thinking == nil || wire.Thinking.BudgetTokens == nil || *wire.Thinking.BudgetTokens != 32768 {
+		t.Fatalf("thinking = %+v, want budget 32768", wire.Thinking)
 	}
 }
 

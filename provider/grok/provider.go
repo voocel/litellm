@@ -46,8 +46,5 @@ func mapThinking(thinking *litellm.Thinking, _ string) (map[string]any, error) {
 	if thinking.Effort != "" {
 		return map[string]any{"reasoning_effort": thinking.Effort}, nil
 	}
-	if thinking.Level != "" {
-		return map[string]any{"reasoning_effort": thinking.Level}, nil
-	}
-	return nil, fmt.Errorf("grok: thinking level or effort is required")
+	return nil, fmt.Errorf("grok: thinking effort is required")
 }

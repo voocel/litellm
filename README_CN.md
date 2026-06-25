@@ -231,12 +231,13 @@ resp, err := client.Chat(ctx, litellm.Request{
 	MaxTokens: litellm.IntPtr(2048),
 	Thinking: &litellm.Thinking{
 		Mode:  litellm.ThinkingEnabled,
-		Level: "low",
+		Effort: "low",
 	},
 })
 ```
 
-Provider 约束会在本地校验。例如 Anthropic thinking 要求 `max_tokens >= 1024`，必须有 budget 或 level，且不能和用户显式 temperature 冲突。
+Provider 约束会在本地校验。例如 Anthropic thinking 要求 `max_tokens >= 1024`，必须有 budget 或 effort，且不能和用户显式 temperature 冲突。
+可跨 Provider 使用的 effort 值为 `minimal`、`low`、`medium`、`high`、`xhigh`、`max`；需要 token budget 的 Provider 会把这些值映射为 `budget_tokens`。
 
 ## OpenAI Responses
 
@@ -314,6 +315,7 @@ bedrock.New(bedrock.Config{
 ```
 
 当前 provider 子包包括 OpenAI、Anthropic、Gemini、Bedrock、DeepSeek、Qwen、GLM、OpenRouter、MiniMax、Grok、MiMo、Ollama。
+各 Provider 的 thinking、reasoning、usage、cache 支持见 [Provider Capabilities](provider-capabilities.md)。
 
 ## 模型列表
 

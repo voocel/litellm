@@ -36,7 +36,7 @@ func TestThinkingVersionGates(t *testing.T) {
 	body = captureBody(t, &litellm.Request{
 		Model:    "glm-5.2",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "HIGH"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "HIGH"},
 	})
 	if body["reasoning_effort"] != "high" {
 		t.Fatalf("reasoning_effort = %#v", body["reasoning_effort"])
@@ -45,7 +45,7 @@ func TestThinkingVersionGates(t *testing.T) {
 	err := chatErr(t, &litellm.Request{
 		Model:    "glm-5.1",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "high"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "glm-5.2 or later") {
 		t.Fatalf("expected reasoning_effort version error, got %v", err)
@@ -60,7 +60,7 @@ func TestThinkingUnsupportedModelErrors(t *testing.T) {
 	_, err = p.Chat(context.Background(), &litellm.Request{
 		Model:    "glm-4",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "high"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "glm-4.5 or later") {
 		t.Fatalf("expected unsupported thinking error, got %v", err)
@@ -75,15 +75,6 @@ func TestThinkingEffortValidation(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "unsupported reasoning_effort") {
 		t.Fatalf("expected unsupported effort error, got %v", err)
-	}
-
-	err = chatErr(t, &litellm.Request{
-		Model:    "glm-5.2",
-		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "max", Level: "high"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "conflicts with level") {
-		t.Fatalf("expected effort/level conflict error, got %v", err)
 	}
 }
 

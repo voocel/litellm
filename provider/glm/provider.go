@@ -178,13 +178,6 @@ func applyThinkingOption(value any, body map[string]any) error {
 
 func reasoningEffort(thinking *litellm.Thinking) (string, error) {
 	effort := strings.ToLower(strings.TrimSpace(thinking.Effort))
-	level := strings.ToLower(strings.TrimSpace(thinking.Level))
-	if effort != "" && level != "" && effort != level {
-		return "", fmt.Errorf("glm: thinking effort %q conflicts with level %q", thinking.Effort, thinking.Level)
-	}
-	if effort == "" {
-		effort = level
-	}
 	switch effort {
 	case "":
 		return "", nil

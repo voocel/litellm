@@ -23,7 +23,7 @@ func TestReasoningEffort(t *testing.T) {
 	body := captureBody(t, &litellm.Request{
 		Model:    "grok-4.3",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "high"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
 	})
 	if body["reasoning_effort"] != "high" {
 		t.Fatalf("body = %#v", body)
@@ -46,14 +46,14 @@ func TestReasoningEffortDefersModelSupportToAPI(t *testing.T) {
 	body := captureBody(t, &litellm.Request{
 		Model:    "grok-4",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "high"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
 	})
 	if body["reasoning_effort"] != "high" {
 		t.Fatalf("body = %#v", body)
 	}
 }
 
-func TestThinkingRequiresLevelOrEffort(t *testing.T) {
+func TestThinkingRequiresEffort(t *testing.T) {
 	p, err := New(compat.Config{APIKey: "key", BaseURL: "https://grok.test", HTTPClient: roundTripFunc(nil)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -63,7 +63,7 @@ func TestThinkingRequiresLevelOrEffort(t *testing.T) {
 		Messages: []litellm.Message{litellm.UserText("hi")},
 		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled},
 	})
-	if err == nil || !strings.Contains(err.Error(), "level or effort is required") {
+	if err == nil || !strings.Contains(err.Error(), "effort is required") {
 		t.Fatalf("expected thinking requirement error, got %v", err)
 	}
 }

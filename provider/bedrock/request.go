@@ -236,6 +236,9 @@ func convertInference(req *litellm.Request) *inferenceConfig {
 }
 
 func applyThinking(out *request, req *litellm.Request) error {
+	if err := req.Thinking.Validate(); err != nil {
+		return fmt.Errorf("bedrock: %w", err)
+	}
 	if req.Thinking == nil || req.Thinking.Mode == litellm.ThinkingUnspecified {
 		return nil
 	}
@@ -276,15 +279,15 @@ func anthropicThinking(thinking *litellm.Thinking, maxTokens *int, temperature *
 		return nil, fmt.Errorf("bedrock: temperature must be 1 when thinking is enabled, got %g", *temperature)
 	}
 	budget := thinking.BudgetTokens
-	if budget == nil && thinking.Level != "" {
-		derived := levelToBudget(thinking.Level)
+	if budget == nil && thinking.Effort != "" {
+		derived := effortToBudget(thinking.Effort)
 		if derived == 0 {
-			return nil, fmt.Errorf("bedrock: unknown thinking level %q", thinking.Level)
+			return nil, fmt.Errorf("bedrock: unknown thinking effort %q", thinking.Effort)
 		}
 		budget = &derived
 	}
 	if budget == nil {
-		return nil, fmt.Errorf("bedrock: thinking budget_tokens or level is required")
+		return nil, fmt.Errorf("bedrock: thinking budget_tokens or effort is required")
 	}
 	if *budget < 1024 {
 		return nil, fmt.Errorf("bedrock: thinking budget_tokens must be >= 1024, got %d", *budget)
@@ -295,8 +298,8 @@ func anthropicThinking(thinking *litellm.Thinking, maxTokens *int, temperature *
 	return map[string]any{"type": "enabled", "budget_tokens": *budget}, nil
 }
 
-func levelToBudget(level string) int {
-	switch strings.ToLower(level) {
+func effortToBudget(effort string) int {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
 	case "minimal":
 		return 1024
 	case "low":
@@ -305,6 +308,8 @@ func levelToBudget(level string) int {
 		return 8192
 	case "high":
 		return 16384
+	case "xhigh", "max":
+		return 32768
 	default:
 		return 0
 	}

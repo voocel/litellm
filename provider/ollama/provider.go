@@ -52,14 +52,7 @@ func mapThinking(thinking *litellm.Thinking, _ string) (map[string]any, error) {
 		}
 		return map[string]any{"reasoning_effort": effort}, nil
 	}
-	if thinking.Level != "" {
-		effort, err := reasoningLevel(thinking.Level)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"reasoning_effort": effort}, nil
-	}
-	return nil, fmt.Errorf("ollama: thinking level or effort is required")
+	return nil, fmt.Errorf("ollama: thinking effort is required")
 }
 
 func reasoningEffort(effort string) (string, error) {
@@ -67,22 +60,11 @@ func reasoningEffort(effort string) (string, error) {
 	switch normalized {
 	case "high", "medium", "low", "max", "none":
 		return normalized, nil
-	default:
-		return "", fmt.Errorf("ollama: unsupported reasoning effort %q", effort)
-	}
-}
-
-func reasoningLevel(level string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "minimal", "low":
+	case "minimal":
 		return "low", nil
-	case "medium":
-		return "medium", nil
-	case "high":
-		return "high", nil
-	case "xhigh", "max":
+	case "xhigh":
 		return "max", nil
 	default:
-		return "", fmt.Errorf("ollama: unsupported thinking level %q", level)
+		return "", fmt.Errorf("ollama: unsupported reasoning effort %q", effort)
 	}
 }

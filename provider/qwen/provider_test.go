@@ -111,6 +111,28 @@ func TestRejectsUnknownProviderOptions(t *testing.T) {
 	}
 }
 
+func TestRejectsThinkingEffort(t *testing.T) {
+	p, err := New(compat.Config{
+		APIKey:  "key",
+		BaseURL: "https://qwen.test",
+		HTTPClient: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("request should not be sent")
+			return nil, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = p.Chat(context.Background(), &litellm.Request{
+		Model:    "qwen3.7-plus",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "thinking effort is not supported") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestResponseReasoningContent(t *testing.T) {
 	p, err := New(compat.Config{
 		APIKey:  "key",

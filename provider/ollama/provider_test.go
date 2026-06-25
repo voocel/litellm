@@ -38,7 +38,7 @@ func TestNoAPIKeyRequiredAndThinkingMapping(t *testing.T) {
 	_, err = p.Chat(context.Background(), &litellm.Request{
 		Model:    "qwen3",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "high"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
 	})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
@@ -52,7 +52,7 @@ func TestNoAPIKeyRequiredAndThinkingMapping(t *testing.T) {
 	testgolden.AssertJSON(t, "../../testdata/compat/ollama_request.golden.json", body)
 }
 
-func TestThinkingRequiresLevelOrEffort(t *testing.T) {
+func TestThinkingRequiresEffort(t *testing.T) {
 	p, err := New(compat.Config{BaseURL: "https://ollama.test", HTTPClient: roundTripFunc(nil)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -62,16 +62,16 @@ func TestThinkingRequiresLevelOrEffort(t *testing.T) {
 		Messages: []litellm.Message{litellm.UserText("hi")},
 		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled},
 	})
-	if err == nil || !strings.Contains(err.Error(), "level or effort is required") {
+	if err == nil || !strings.Contains(err.Error(), "effort is required") {
 		t.Fatalf("expected thinking requirement error, got %v", err)
 	}
 }
 
-func TestThinkingLevelMaxAndEffortValidation(t *testing.T) {
+func TestThinkingEffortMaxAndValidation(t *testing.T) {
 	body := captureBody(t, &litellm.Request{
 		Model:    "gpt-oss:20b",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "xhigh"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "xhigh"},
 	})
 	if body["reasoning_effort"] != "max" {
 		t.Fatalf("body = %#v", body)
@@ -84,7 +84,7 @@ func TestThinkingLevelMaxAndEffortValidation(t *testing.T) {
 	_, err = p.Chat(context.Background(), &litellm.Request{
 		Model:    "qwen3",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "xhigh"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "extreme"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "unsupported reasoning effort") {
 		t.Fatalf("expected effort error, got %v", err)

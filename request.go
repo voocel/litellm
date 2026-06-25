@@ -3,6 +3,7 @@ package litellm
 import (
 	"encoding/json"
 	"fmt"
+	"unicode/utf8"
 )
 
 type Role string
@@ -179,9 +180,28 @@ type JSONSchema struct {
 type Thinking struct {
 	Mode          ThinkingMode
 	Effort        string
-	Level         string
 	BudgetTokens  *int
 	IncludeOutput bool
+}
+
+func (t *Thinking) HasOptions() bool {
+	return t != nil && (t.Effort != "" || t.BudgetTokens != nil || t.IncludeOutput)
+}
+
+func (t *Thinking) Validate() error {
+	if t == nil {
+		return nil
+	}
+	if !utf8.ValidString(t.Effort) {
+		return NewError(ErrorTypeValidation, "thinking effort must be valid UTF-8")
+	}
+	if t.Mode == ThinkingUnspecified && t.HasOptions() {
+		return NewError(ErrorTypeValidation, "thinking mode must be enabled or disabled when thinking options are set")
+	}
+	if t.Mode == ThinkingDisabled && t.HasOptions() {
+		return NewError(ErrorTypeValidation, "thinking options cannot be set when thinking is disabled")
+	}
+	return nil
 }
 
 type ThinkingMode int

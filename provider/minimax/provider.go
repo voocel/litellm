@@ -61,6 +61,12 @@ func mapThinking(thinking *litellm.Thinking, model string) (map[string]any, erro
 		}
 		thinkingType = "disabled"
 	case litellm.ThinkingEnabled:
+		if thinking.Effort != "" {
+			return nil, fmt.Errorf("minimax: thinking effort is not supported")
+		}
+		if thinking.BudgetTokens != nil {
+			return nil, fmt.Errorf("minimax: thinking budget_tokens is not supported")
+		}
 		thinkingType = "adaptive"
 	default:
 		return nil, fmt.Errorf("minimax: unsupported thinking mode %d", thinking.Mode)

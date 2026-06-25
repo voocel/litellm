@@ -105,6 +105,36 @@ func TestJSONRawReturnsMarshalError(t *testing.T) {
 	}
 }
 
+func TestThinkingOptionsRequireExplicitMode(t *testing.T) {
+	client, err := New(&testProvider{name: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.Chat(context.Background(), Request{
+		Model:    "model",
+		Messages: []Message{UserText("hi")},
+		Thinking: &Thinking{Effort: "high"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "thinking mode must be enabled or disabled") {
+		t.Fatalf("expected thinking mode error, got %v", err)
+	}
+}
+
+func TestThinkingDisabledRejectsOptions(t *testing.T) {
+	client, err := New(&testProvider{name: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = client.Chat(context.Background(), Request{
+		Model:    "model",
+		Messages: []Message{UserText("hi")},
+		Thinking: &Thinking{Mode: ThinkingDisabled, Effort: "high"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "thinking options cannot be set when thinking is disabled") {
+		t.Fatalf("expected disabled thinking options error, got %v", err)
+	}
+}
+
 func TestClientAppliesExplicitDefaults(t *testing.T) {
 	maxTokens := 123
 	temp := 0.4

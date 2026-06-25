@@ -70,7 +70,7 @@ func TestBuildRequestToolRoundTripPreservesSignatureAndName(t *testing.T) {
 				"required": []string{"city"},
 			}),
 		},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "low"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "low"},
 	}
 	wire, err := provider.buildRequest(req)
 	if err != nil {
@@ -168,7 +168,7 @@ func TestBuildRequestGemini25UsesThinkingBudget(t *testing.T) {
 	wire, err := provider.buildRequest(&litellm.Request{
 		Model:    "gemini-2.5-flash",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "medium"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "medium"},
 	})
 	if err != nil {
 		t.Fatalf("buildRequest returned error: %v", err)
@@ -178,23 +178,23 @@ func TestBuildRequestGemini25UsesThinkingBudget(t *testing.T) {
 		t.Fatalf("thinking config = %+v, want budget 8192", tc)
 	}
 	if tc.ThinkingLevel != "" {
-		t.Fatalf("thinking level = %q, want empty", tc.ThinkingLevel)
+		t.Fatalf("thinking effort = %q, want empty", tc.ThinkingLevel)
 	}
 }
 
-func TestBuildRequestGeminiUsesEffortBeforeLevel(t *testing.T) {
+func TestBuildRequestGemini3UsesEffortThinkingLevel(t *testing.T) {
 	provider := mustProvider(t)
 	wire, err := provider.buildRequest(&litellm.Request{
 		Model:    "gemini-3-pro",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high", Level: "low"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
 	})
 	if err != nil {
 		t.Fatalf("buildRequest returned error: %v", err)
 	}
 	tc := wire.GenerationConfig.ThinkingConfig
 	if tc == nil || tc.ThinkingLevel != "high" {
-		t.Fatalf("thinking config = %+v, want level high", tc)
+		t.Fatalf("thinking config = %+v, want effort high", tc)
 	}
 }
 
@@ -203,14 +203,14 @@ func TestBuildRequestGemini25UsesEffortBudget(t *testing.T) {
 	wire, err := provider.buildRequest(&litellm.Request{
 		Model:    "gemini-2.5-flash",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "xhigh"},
 	})
 	if err != nil {
 		t.Fatalf("buildRequest returned error: %v", err)
 	}
 	tc := wire.GenerationConfig.ThinkingConfig
-	if tc == nil || tc.ThinkingBudget == nil || *tc.ThinkingBudget != 16384 {
-		t.Fatalf("thinking config = %+v, want budget 16384", tc)
+	if tc == nil || tc.ThinkingBudget == nil || *tc.ThinkingBudget != 32768 {
+		t.Fatalf("thinking config = %+v, want budget 32768", tc)
 	}
 }
 

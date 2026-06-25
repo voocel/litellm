@@ -71,7 +71,7 @@ func validateRequest(req *Request) error {
 			return NewError(ErrorTypeValidation, "json schema response format schema must be valid JSON")
 		}
 	}
-	if err := validateThinkingUTF8(req.Thinking); err != nil {
+	if err := validateThinking(req.Thinking); err != nil {
 		return err
 	}
 	if err := validateAnyUTF8(req.ToolChoice, "tool choice"); err != nil {
@@ -289,17 +289,8 @@ func validateProviderOptionsUTF8(options ProviderOptions) error {
 	return nil
 }
 
-func validateThinkingUTF8(thinking *Thinking) error {
-	if thinking == nil {
-		return nil
-	}
-	if !utf8.ValidString(thinking.Effort) {
-		return NewError(ErrorTypeValidation, "thinking effort must be valid UTF-8")
-	}
-	if !utf8.ValidString(thinking.Level) {
-		return NewError(ErrorTypeValidation, "thinking level must be valid UTF-8")
-	}
-	return nil
+func validateThinking(thinking *Thinking) error {
+	return thinking.Validate()
 }
 
 func validateAnyUTF8(value any, path string) error {

@@ -3,6 +3,7 @@ package anthropic
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/voocel/litellm"
 )
@@ -171,6 +172,9 @@ func anthropicMetadata(options litellm.ProviderOptions) (map[string]any, error) 
 }
 
 func convertThinking(thinking *litellm.Thinking, maxTokens int, temperature, topP *float64, toolChoice any) (*anthropicThinking, error) {
+	if err := thinking.Validate(); err != nil {
+		return nil, fmt.Errorf("anthropic: %w", err)
+	}
 	if thinking == nil || thinking.Mode == litellm.ThinkingUnspecified {
 		return nil, nil
 	}
@@ -191,12 +195,16 @@ func convertThinking(thinking *litellm.Thinking, maxTokens int, temperature, top
 	}
 	budget := thinking.BudgetTokens
 	if budget == nil {
-		if derived := levelToBudget(thinking.Level); derived > 0 {
+		if strings.TrimSpace(thinking.Effort) != "" {
+			derived := effortToBudget(thinking.Effort)
+			if derived == 0 {
+				return nil, fmt.Errorf("anthropic: unknown thinking effort %q", thinking.Effort)
+			}
 			budget = &derived
 		}
 	}
 	if budget == nil {
-		return nil, fmt.Errorf("anthropic: thinking budget_tokens or level is required")
+		return nil, fmt.Errorf("anthropic: thinking budget_tokens or effort is required")
 	}
 	if *budget < 1024 {
 		return nil, fmt.Errorf("anthropic: thinking budget_tokens must be >= 1024, got %d", *budget)
@@ -249,8 +257,8 @@ func toolChoiceType(choice any) string {
 	return decoded.Type
 }
 
-func levelToBudget(level string) int {
-	switch level {
+func effortToBudget(effort string) int {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
 	case "minimal":
 		return 1024
 	case "low":
@@ -259,6 +267,8 @@ func levelToBudget(level string) int {
 		return 8192
 	case "high":
 		return 16384
+	case "xhigh", "max":
+		return 32768
 	default:
 		return 0
 	}

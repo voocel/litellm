@@ -55,7 +55,7 @@ func TestBuildRequestToolCacheAndThinking(t *testing.T) {
 			litellm.ToolResultText("toolu_1", "result"),
 		},
 		Tools:    []litellm.Tool{tool},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "low"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "low"},
 		Cache:    &litellm.CachePolicy{Retention: "1h"},
 	})
 	if err != nil {
@@ -85,7 +85,7 @@ func TestBuildRequestToolCacheAndThinking(t *testing.T) {
 	}
 }
 
-func TestBuildRequestRejectsThinkingWithoutBudgetOrLevel(t *testing.T) {
+func TestBuildRequestRejectsThinkingWithoutBudgetOrEffort(t *testing.T) {
 	provider := mustProvider(t)
 	maxTokens := 4096
 	_, err := provider.buildRequest(&litellm.Request{
@@ -94,8 +94,26 @@ func TestBuildRequestRejectsThinkingWithoutBudgetOrLevel(t *testing.T) {
 		Messages:  []litellm.Message{litellm.UserText("hi")},
 		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled},
 	})
-	if err == nil || !strings.Contains(err.Error(), "budget_tokens or level is required") {
+	if err == nil || !strings.Contains(err.Error(), "budget_tokens or effort is required") {
 		t.Fatalf("expected budget error, got %v", err)
+	}
+}
+
+func TestBuildRequestMapsMaxThinkingEffort(t *testing.T) {
+	provider := mustProvider(t)
+	maxTokens := 65536
+	wire, err := provider.buildRequest(&litellm.Request{
+		Model:     "anthropic.claude-sonnet-4-20250514-v1:0",
+		MaxTokens: &maxTokens,
+		Messages:  []litellm.Message{litellm.UserText("hi")},
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "max"},
+	})
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	thinking, ok := wire.AdditionalModelRequestFields["thinking"].(map[string]any)
+	if !ok || thinking["budget_tokens"] != 32768 {
+		t.Fatalf("thinking = %#v, want budget 32768", wire.AdditionalModelRequestFields["thinking"])
 	}
 }
 
@@ -160,7 +178,7 @@ func TestBuildRequestRejectsThinkingWithoutMaxTokens(t *testing.T) {
 	_, err := provider.buildRequest(&litellm.Request{
 		Model:    "anthropic.claude-sonnet-4-20250514-v1:0",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "low"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "low"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "max_tokens is required") {
 		t.Fatalf("expected max_tokens error, got %v", err)
@@ -172,7 +190,7 @@ func TestBuildRequestRejectsNonClaudeThinking(t *testing.T) {
 	_, err := provider.buildRequest(&litellm.Request{
 		Model:    "amazon.nova-pro-v1:0",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "low"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "low"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "only supported for Claude") {
 		t.Fatalf("expected non-Claude thinking error, got %v", err)

@@ -23,7 +23,7 @@ func TestThinkingAndStrictTools(t *testing.T) {
 	body, _ := captureBody(t, compat.Config{APIKey: "key", BaseURL: "https://api.deepseek.com/beta"}, &litellm.Request{
 		Model:    "deepseek-reasoner",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "xhigh"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "xhigh"},
 		Tools: []litellm.Tool{
 			mustTool(t, "lookup", litellm.StrictEnabled),
 		},
@@ -41,11 +41,11 @@ func TestThinkingAndStrictTools(t *testing.T) {
 	}
 }
 
-func TestThinkingUsesEffortBeforeLevel(t *testing.T) {
+func TestThinkingUsesEffort(t *testing.T) {
 	body, _ := captureBody(t, compat.Config{APIKey: "key", BaseURL: "https://api.deepseek.com/beta"}, &litellm.Request{
 		Model:    "deepseek-reasoner",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "max", Level: "low"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "max"},
 	})
 	if body["reasoning_effort"] != "max" {
 		t.Fatalf("reasoning_effort = %#v, want max", body["reasoning_effort"])
@@ -126,7 +126,7 @@ func TestRejectsUnknownProviderOptions(t *testing.T) {
 	}
 }
 
-func TestRejectsUnknownThinkingLevel(t *testing.T) {
+func TestRejectsUnknownThinkingEffort(t *testing.T) {
 	p, err := New(compat.Config{
 		APIKey: "key",
 		HTTPClient: roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -140,7 +140,7 @@ func TestRejectsUnknownThinkingLevel(t *testing.T) {
 	_, err = p.Chat(context.Background(), &litellm.Request{
 		Model:    "deepseek-v4-flash",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "extreme"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "extreme"},
 	})
 	if err == nil || !strings.Contains(err.Error(), `unsupported thinking effort "extreme"`) {
 		t.Fatalf("err = %v", err)

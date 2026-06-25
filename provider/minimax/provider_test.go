@@ -91,6 +91,49 @@ func TestM2CannotDisableThinking(t *testing.T) {
 	}
 }
 
+func TestRejectsUnsupportedThinkingControls(t *testing.T) {
+	budget := 1024
+	tests := []struct {
+		name     string
+		thinking *litellm.Thinking
+		want     string
+	}{
+		{
+			name:     "effort",
+			thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
+			want:     "thinking effort is not supported",
+		},
+		{
+			name:     "budget",
+			thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, BudgetTokens: &budget},
+			want:     "thinking budget_tokens is not supported",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := New(compat.Config{
+				APIKey:  "key",
+				BaseURL: "https://minimax.test",
+				HTTPClient: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					t.Fatal("request should not be sent")
+					return nil, nil
+				}),
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			_, err = p.Chat(context.Background(), &litellm.Request{
+				Model:    "MiniMax-M3",
+				Messages: []litellm.Message{litellm.UserText("hi")},
+				Thinking: tt.thinking,
+			})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+}
+
 func TestProviderOptions(t *testing.T) {
 	body := captureBody(t, &litellm.Request{
 		Model:    "MiniMax-M3",

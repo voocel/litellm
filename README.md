@@ -231,12 +231,13 @@ resp, err := client.Chat(ctx, litellm.Request{
 	MaxTokens: litellm.IntPtr(2048),
 	Thinking: &litellm.Thinking{
 		Mode:  litellm.ThinkingEnabled,
-		Level: "low",
+		Effort: "low",
 	},
 })
 ```
 
-Provider constraints are validated locally. For example, Anthropic thinking requires `max_tokens >= 1024`, a budget or level, and no conflicting explicit temperature.
+Provider constraints are validated locally. For example, Anthropic thinking requires `max_tokens >= 1024`, a budget or effort, and no conflicting explicit temperature.
+Portable effort values are `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; providers that require token budgets map these values to `budget_tokens`.
 
 ## OpenAI Responses
 
@@ -314,6 +315,7 @@ bedrock.New(bedrock.Config{
 ```
 
 Supported provider packages currently include OpenAI, Anthropic, Gemini, Bedrock, DeepSeek, Qwen, GLM, OpenRouter, MiniMax, Grok, MiMo, and Ollama.
+See [Provider Capabilities](provider-capabilities.md) for thinking, reasoning, usage, and cache support across providers.
 
 ## Model Listing
 

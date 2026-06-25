@@ -80,12 +80,6 @@ func mapThinking(thinking *litellm.Thinking, _ string) (map[string]any, error) {
 			return nil, err
 		}
 		reasoning["effort"] = effort
-	} else if thinking.Level != "" {
-		effort, err := reasoningEffort(thinking.Level)
-		if err != nil {
-			return nil, err
-		}
-		reasoning["effort"] = effort
 	} else {
 		reasoning["enabled"] = true
 	}

@@ -90,6 +90,9 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) ([]byte, []li
 			body["response_format"] = converted
 		}
 	}
+	if err := req.Thinking.Validate(); err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", p.Name(), err)
+	}
 	if req.Thinking != nil && req.Thinking.Mode != litellm.ThinkingUnspecified {
 		if p.spec.Request.Thinking == nil {
 			return nil, nil, fmt.Errorf("%s: thinking is not supported", p.Name())

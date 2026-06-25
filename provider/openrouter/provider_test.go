@@ -27,7 +27,7 @@ func TestHeadersReasoningAndCache(t *testing.T) {
 			Text:  "hi",
 			Cache: &litellm.CacheControl{Type: litellm.CacheTypeEphemeral, TTL: litellm.CacheTTL1h},
 		})},
-		Thinking:        &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "high"},
+		Thinking:        &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
 		ProviderOptions: litellm.ProviderOptions{"cache_retention": "1h"},
 	})
 	if referer == "" || title != "litellm" {
@@ -49,7 +49,7 @@ func TestHeadersReasoningAndCache(t *testing.T) {
 	testgolden.AssertJSON(t, "../../testdata/compat/openrouter_request.golden.json", body)
 }
 
-func TestThinkingRequiresBudgetEffortOrLevel(t *testing.T) {
+func TestThinkingRequiresBudgetOrEffort(t *testing.T) {
 	body := captureBody(t, nil, nil, &litellm.Request{
 		Model:    "anthropic/claude-sonnet-4",
 		Messages: []litellm.Message{litellm.UserText("hi")},

@@ -20,6 +20,9 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) (*chatRequest
 	if stream {
 		out.StreamOptions = &streamOptions{IncludeUsage: true}
 	}
+	if err := req.Thinking.Validate(); err != nil {
+		return nil, fmt.Errorf("openai: %w", err)
+	}
 	if req.Thinking != nil && req.Thinking.Mode != litellm.ThinkingUnspecified && !p.isReasoningModel(req.Model) {
 		return nil, fmt.Errorf("openai: thinking is only supported for reasoning chat models")
 	}
@@ -40,7 +43,7 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) (*chatRequest
 		out.Temperature = req.Temperature
 	}
 	if req.Thinking != nil && req.Thinking.Mode == litellm.ThinkingEnabled && out.ReasoningEffort == "" && p.isReasoningModel(req.Model) {
-		return nil, fmt.Errorf("openai: thinking level or effort is required for reasoning chat models")
+		return nil, fmt.Errorf("openai: thinking effort is required for reasoning chat models")
 	}
 	if req.ResponseFormat != nil {
 		converted, err := convertResponseFormat(req.ResponseFormat)
@@ -81,10 +84,7 @@ func reasoningEffort(thinking *litellm.Thinking) string {
 	if thinking == nil {
 		return ""
 	}
-	if thinking.Effort != "" {
-		return thinking.Effort
-	}
-	return thinking.Level
+	return thinking.Effort
 }
 
 func convertMessages(messages []litellm.Message) ([]chatMessage, error) {

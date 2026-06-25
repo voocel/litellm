@@ -476,7 +476,7 @@ func TestResponsesThinkingRequiresExplicitMapping(t *testing.T) {
 		Messages: []litellm.Message{litellm.UserText("hello")},
 		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled},
 	}, false)
-	if err == nil || !strings.Contains(err.Error(), "thinking effort, level, summary, or include_output is required") {
+	if err == nil || !strings.Contains(err.Error(), "thinking effort, summary, or include_output is required") {
 		t.Fatalf("expected thinking mapping error, got %v", err)
 	}
 

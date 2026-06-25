@@ -239,7 +239,7 @@ func TestBuildRequestReasoningModelConstraints(t *testing.T) {
 	_, err := provider.buildRequest(&litellm.Request{
 		Model:    "gpt-4.1",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "medium"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "medium"},
 	}, false)
 	if err == nil || !strings.Contains(err.Error(), "only supported for reasoning chat models") {
 		t.Fatalf("expected non-reasoning thinking error, got %v", err)
@@ -268,8 +268,8 @@ func TestBuildRequestReasoningModelConstraints(t *testing.T) {
 		Model:    "openai/gpt-5.1",
 		Messages: []litellm.Message{litellm.UserText("hi")},
 		Thinking: &litellm.Thinking{
-			Mode:  litellm.ThinkingEnabled,
-			Level: "medium",
+			Mode:   litellm.ThinkingEnabled,
+			Effort: "medium",
 		},
 	}, false)
 	if err != nil {

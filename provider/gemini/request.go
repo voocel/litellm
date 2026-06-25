@@ -308,6 +308,9 @@ func convertGenerationConfig(req *litellm.Request) (*generationConfig, error) {
 		TopP:            req.TopP,
 		StopSequences:   append([]string(nil), req.Stop...),
 	}
+	if err := req.Thinking.Validate(); err != nil {
+		return nil, fmt.Errorf("gemini: %w", err)
+	}
 	if req.Thinking != nil && req.Thinking.Mode != litellm.ThinkingUnspecified {
 		includeThoughts := req.Thinking.Mode == litellm.ThinkingEnabled
 		tc := &thinkingConfig{IncludeThoughts: &includeThoughts}
@@ -322,7 +325,7 @@ func convertGenerationConfig(req *litellm.Request) (*generationConfig, error) {
 			} else {
 				tc.ThinkingBudget = req.Thinking.BudgetTokens
 				if tc.ThinkingBudget == nil && effort != "" {
-					budget := levelToBudget(effort)
+					budget := effortToBudget(effort)
 					if budget == 0 {
 						return nil, fmt.Errorf("gemini: unknown thinking effort %q", effort)
 					}
@@ -420,14 +423,11 @@ func thinkingEffort(thinking *litellm.Thinking) string {
 	if thinking == nil {
 		return ""
 	}
-	if strings.TrimSpace(thinking.Effort) != "" {
-		return thinking.Effort
-	}
-	return thinking.Level
+	return thinking.Effort
 }
 
-func levelToBudget(level string) int {
-	switch strings.ToLower(level) {
+func effortToBudget(effort string) int {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
 	case "minimal":
 		return 1024
 	case "low":
@@ -436,6 +436,8 @@ func levelToBudget(level string) int {
 		return 8192
 	case "high":
 		return 16384
+	case "xhigh", "max":
+		return 32768
 	default:
 		return 0
 	}
