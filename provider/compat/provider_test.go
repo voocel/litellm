@@ -157,6 +157,124 @@ func TestRejectsUnknownProviderOptionByDefault(t *testing.T) {
 	}
 }
 
+func TestConfigCanAllowUnknownProviderOptions(t *testing.T) {
+	provider, err := New(Config{
+		BaseURL:                     "https://compat.example",
+		HTTPClient:                  roundTripFunc(nil),
+		AllowUnknownProviderOptions: true,
+	}, Spec{Name: "passthrough"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	data, _, err := provider.buildRequest(&litellm.Request{
+		Model:           "m",
+		Messages:        []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{"min_p": 0.05},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	if !strings.Contains(string(data), `"min_p":0.05`) {
+		t.Fatalf("body missing passthrough option: %s", data)
+	}
+}
+
+func TestConfigAllowsUnknownProviderOptionsWithoutBypassingKnownMapper(t *testing.T) {
+	provider, err := New(Config{
+		BaseURL:                     "https://compat.example",
+		HTTPClient:                  roundTripFunc(nil),
+		AllowUnknownProviderOptions: true,
+	}, Spec{
+		Name: "mapped",
+		Request: RequestSpec{
+			AllowedProviderOptions: map[string]struct{}{"known": {}},
+			ProviderOptions: func(options litellm.ProviderOptions, body map[string]any, _ *litellm.Request) error {
+				for key, value := range options {
+					if key != "known" {
+						t.Fatalf("mapper saw unknown option %q", key)
+					}
+					body["mapped_known"] = value
+				}
+				return nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	data, _, err := provider.buildRequest(&litellm.Request{
+		Model:    "m",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{
+			"known": "typed",
+			"min_p": 0.05,
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	body := string(data)
+	for _, want := range []string{`"mapped_known":"typed"`, `"min_p":0.05`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %s: %s", want, body)
+		}
+	}
+}
+
+func TestConfigAllowedUnknownProviderOptionsRejectGeneratedFieldConflict(t *testing.T) {
+	provider, err := New(Config{
+		BaseURL:                     "https://compat.example",
+		HTTPClient:                  roundTripFunc(nil),
+		AllowUnknownProviderOptions: true,
+	}, Spec{
+		Name: "mapped",
+		Request: RequestSpec{
+			AllowedProviderOptions: map[string]struct{}{"known": {}},
+			ProviderOptions: func(options litellm.ProviderOptions, body map[string]any, _ *litellm.Request) error {
+				body["known"] = options["known"]
+				return nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, _, err = provider.buildRequest(&litellm.Request{
+		Model:    "m",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{
+			"known":    "typed",
+			"messages": []any{"override"},
+		},
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), `provider option "messages" conflicts with generated request field`) {
+		t.Fatalf("expected generated field conflict, got %v", err)
+	}
+}
+
+func TestProviderOptionsRejectGeneratedFieldConflict(t *testing.T) {
+	provider, err := New(Config{
+		BaseURL:    "https://compat.example",
+		HTTPClient: roundTripFunc(nil),
+	}, Spec{
+		Name: "passthrough",
+		Request: RequestSpec{
+			AllowUnknownProviderOptions: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, _, err = provider.buildRequest(&litellm.Request{
+		Model:           "m",
+		Messages:        []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{"model": "override"},
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), `provider option "model" conflicts with generated request field`) {
+		t.Fatalf("expected generated field conflict, got %v", err)
+	}
+}
+
 func TestChatReturnsStructuredValidationError(t *testing.T) {
 	provider, err := New(Config{BaseURL: "https://compat.example", HTTPClient: roundTripFunc(nil)}, Spec{Name: "strict"})
 	if err != nil {

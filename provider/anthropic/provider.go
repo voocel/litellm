@@ -14,7 +14,10 @@ import (
 	"github.com/voocel/litellm/retry"
 )
 
-const defaultBaseURL = "https://api.anthropic.com"
+const (
+	defaultBaseURL   = "https://api.anthropic.com"
+	defaultUserAgent = "litellm-go/0.1"
+)
 
 type Config struct {
 	APIKey     string
@@ -25,6 +28,8 @@ type Config struct {
 	Retry      *retry.Policy
 	Version    string
 	Beta       string
+	UserAgent  string
+	Headers    map[string]string
 }
 
 type HTTPClient interface {
@@ -57,6 +62,9 @@ func New(cfg Config) (*Provider, error) {
 	}
 	if cfg.Version == "" {
 		cfg.Version = "2023-06-01"
+	}
+	if cfg.UserAgent == "" {
+		cfg.UserAgent = defaultUserAgent
 	}
 	return &Provider{cfg: cfg}, nil
 }
@@ -152,10 +160,22 @@ func (p *Provider) setHeaders(ctx context.Context, req *http.Request) error {
 		return fmt.Errorf("anthropic: api key is required")
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", p.cfg.UserAgent)
 	req.Header.Set("x-api-key", key)
 	req.Header.Set("anthropic-version", p.cfg.Version)
 	if p.cfg.Beta != "" {
 		req.Header.Set("anthropic-beta", p.cfg.Beta)
+	}
+	for name, value := range p.cfg.Headers {
+		name = strings.TrimSpace(name)
+		value = strings.TrimSpace(value)
+		if name == "" {
+			return fmt.Errorf("anthropic: header name cannot be empty")
+		}
+		if value == "" {
+			continue
+		}
+		req.Header.Set(name, value)
 	}
 	return nil
 }

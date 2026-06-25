@@ -152,6 +152,12 @@ func WrapError(err error, provider string) error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(err, context.Canceled) {
+		return NewNetworkError(provider, err.Error(), err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return NewNetworkError(provider, err.Error(), err)
+	}
 	var e *LiteLLMError
 	if errors.As(err, &e) {
 		if e.Provider == "" {

@@ -38,6 +38,7 @@ func New(cfg Config) (*compat.Provider, error) {
 		Auth: compat.AuthSpec{APIKeyRequired: true},
 		Request: compat.RequestSpec{
 			Thinking:                               mapThinking,
+			Warnings:                               thinkingWarnings,
 			AllowedProviderOptions:                 allowedProviderOptions,
 			EmitEmptyAssistantContentWithToolCalls: true,
 		},
@@ -69,7 +70,7 @@ func mapThinking(thinking *litellm.Thinking, _ string) (map[string]any, error) {
 		return map[string]any{"thinking": map[string]any{"type": "disabled"}}, nil
 	case litellm.ThinkingEnabled:
 		body := map[string]any{"thinking": map[string]any{"type": "enabled"}}
-		effort, err := thinkingEffort(thinking.Level)
+		effort, err := thinkingEffort(thinkingValue(thinking))
 		if err != nil {
 			return nil, err
 		}
@@ -82,8 +83,18 @@ func mapThinking(thinking *litellm.Thinking, _ string) (map[string]any, error) {
 	}
 }
 
-func thinkingEffort(level string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(level)) {
+func thinkingValue(thinking *litellm.Thinking) string {
+	if thinking == nil {
+		return ""
+	}
+	if strings.TrimSpace(thinking.Effort) != "" {
+		return thinking.Effort
+	}
+	return thinking.Level
+}
+
+func thinkingEffort(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "":
 		return "", nil
 	case "low", "medium", "high":
@@ -91,6 +102,21 @@ func thinkingEffort(level string) (string, error) {
 	case "xhigh", "max":
 		return "max", nil
 	default:
-		return "", fmt.Errorf("deepseek: unsupported thinking level %q; use high or max", level)
+		return "", fmt.Errorf("deepseek: unsupported thinking effort %q; use high or max", value)
 	}
+}
+
+func thinkingWarnings(req *litellm.Request) []litellm.Warning {
+	if req == nil || req.Thinking == nil || req.Thinking.Mode != litellm.ThinkingEnabled {
+		return nil
+	}
+	value := strings.ToLower(strings.TrimSpace(thinkingValue(req.Thinking)))
+	if value != "low" && value != "medium" {
+		return nil
+	}
+	return []litellm.Warning{{
+		Code:     "deepseek.thinking_effort_folded",
+		Provider: "deepseek",
+		Message:  fmt.Sprintf("DeepSeek only supports reasoning_effort high or max; mapped %q to high", value),
+	}}
 }

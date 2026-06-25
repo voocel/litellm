@@ -174,6 +174,20 @@ func TestHandleInvokesCallbackPerEventAndAggregates(t *testing.T) {
 	}
 }
 
+func TestCollectStampsUsageProviderAndModelFromDoneEvent(t *testing.T) {
+	resp, err := Collect(&eventSliceStream{events: []Event{
+		ContentDelta{Text: "ok"},
+		UsageEvent{Usage: Usage{InputTokens: 1, OutputTokens: 2, TotalTokens: 3}},
+		DoneEvent{FinishReason: FinishReasonStop, Provider: "test-provider", Model: "test-model"},
+	}})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if resp.Usage.Provider != "test-provider" || resp.Usage.Model != "test-model" {
+		t.Fatalf("usage provider/model = %q/%q", resp.Usage.Provider, resp.Usage.Model)
+	}
+}
+
 func TestHandleStopsOnCallbackError(t *testing.T) {
 	boom := errors.New("boom")
 	var seen int

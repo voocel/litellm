@@ -17,6 +17,11 @@ type Config struct {
 	Retry      *retry.Policy
 	UserAgent  string
 	Headers    map[string]string
+
+	// AllowUnknownProviderOptions copies unknown request ProviderOptions into
+	// the JSON body. The default remains strict; applications that expose an
+	// explicit extra_body escape hatch can opt in.
+	AllowUnknownProviderOptions bool
 }
 
 type HTTPClient interface {
@@ -62,6 +67,7 @@ type RequestSpec struct {
 	ResponseFormat  ResponseFormatMapper
 	CleanSchema     SchemaMapper
 	ProviderOptions ProviderOptionsMapper
+	Warnings        WarningMapper
 	Messages        MessageMapper
 	Tools           ToolMapper
 
@@ -109,6 +115,7 @@ type ThinkingMapper func(*litellm.Thinking, string) (map[string]any, error)
 type ResponseFormatMapper func(*litellm.ResponseFormat) (any, error)
 type SchemaMapper func(litellm.Schema) (any, error)
 type ProviderOptionsMapper func(litellm.ProviderOptions, map[string]any, *litellm.Request) error
+type WarningMapper func(*litellm.Request) []litellm.Warning
 type MessageMapper func([]litellm.Message) (any, error)
 type ToolMapper func([]litellm.Tool) (any, error)
 

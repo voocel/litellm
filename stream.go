@@ -349,7 +349,7 @@ func (c *EventCollector) Apply(event Event) (bool, error) {
 }
 
 func (c *EventCollector) Response() *Response {
-	return &Response{
+	resp := &Response{
 		Blocks:       c.cloneBlocks(),
 		Usage:        c.usage,
 		Model:        c.model,
@@ -357,6 +357,8 @@ func (c *EventCollector) Response() *Response {
 		FinishReason: c.finish,
 		Warnings:     append([]Warning(nil), c.warnings...),
 	}
+	resp.Usage.StampModel(resp.Provider, resp.Model)
+	return resp
 }
 
 func (c *EventCollector) appendContent(text string) {
@@ -514,19 +516,6 @@ func (a *ToolUseAccumulator) Done(done ToolUseDone) (string, *ToolUseBlock, erro
 		tool.ID = done.ID
 	}
 	return key, tool, nil
-}
-
-func (a *ToolUseAccumulator) Build() []Block {
-	if len(a.order) == 0 {
-		return nil
-	}
-	blocks := make([]Block, 0, len(a.order))
-	for _, key := range a.order {
-		if tool := a.byKey[key]; tool != nil {
-			blocks = append(blocks, cloneToolUseBlock(*tool))
-		}
-	}
-	return blocks
 }
 
 func (a *ToolUseAccumulator) ensureFor(id string, index, outputIndex *int, itemID string) (string, *ToolUseBlock, error) {

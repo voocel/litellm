@@ -566,6 +566,17 @@ func TestClientWrapsProviderStreamStartErrors(t *testing.T) {
 	}
 }
 
+func TestWrapErrorClassifiesContextErrors(t *testing.T) {
+	canceled := WrapError(context.Canceled, "test")
+	if !IsNetworkError(canceled) || IsRetryableError(canceled) || !errors.Is(canceled, context.Canceled) {
+		t.Fatalf("canceled error = %v", canceled)
+	}
+	deadline := WrapError(context.DeadlineExceeded, "test")
+	if !IsTimeoutError(deadline) || IsRetryableError(deadline) || !errors.Is(deadline, context.DeadlineExceeded) {
+		t.Fatalf("deadline error = %v", deadline)
+	}
+}
+
 func TestClientListModelsWrapsProviderErrors(t *testing.T) {
 	boom := errors.New("boom")
 	client, err := New(&testModelProvider{
@@ -752,6 +763,30 @@ func TestMessageRepairSynthesizesMissingToolUseID(t *testing.T) {
 	result := provider.lastReq.Messages[1].Blocks[0].(ToolResultBlock)
 	if result.ToolUseID != generated || !result.IsError {
 		t.Fatalf("synthetic result = %#v, generated=%q", result, generated)
+	}
+}
+
+func TestMessageRepairInsertsMissingToolResultsInToolUseOrder(t *testing.T) {
+	messages, warnings := repairMessages([]Message{
+		Assistant(
+			ToolUseBlock{ID: "call_1", Name: "first", Arguments: MustJSONRaw(map[string]any{})},
+			ToolUseBlock{ID: "call_2", Name: "second", Arguments: MustJSONRaw(map[string]any{})},
+		),
+		UserText("next"),
+	}, RepairInsertMissingToolResults)
+	if len(warnings) != 2 {
+		t.Fatalf("warnings len = %d, want 2: %#v", len(warnings), warnings)
+	}
+	if len(messages) < 3 {
+		t.Fatalf("messages = %#v", messages)
+	}
+	first, ok := messages[1].Blocks[0].(ToolResultBlock)
+	if !ok || first.ToolUseID != "call_1" {
+		t.Fatalf("first synthetic result = %#v", messages[1].Blocks[0])
+	}
+	second, ok := messages[2].Blocks[0].(ToolResultBlock)
+	if !ok || second.ToolUseID != "call_2" {
+		t.Fatalf("second synthetic result = %#v", messages[2].Blocks[0])
 	}
 }
 

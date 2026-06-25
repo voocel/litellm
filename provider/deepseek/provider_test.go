@@ -41,6 +41,32 @@ func TestThinkingAndStrictTools(t *testing.T) {
 	}
 }
 
+func TestThinkingUsesEffortBeforeLevel(t *testing.T) {
+	body, _ := captureBody(t, compat.Config{APIKey: "key", BaseURL: "https://api.deepseek.com/beta"}, &litellm.Request{
+		Model:    "deepseek-reasoner",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "max", Level: "low"},
+	})
+	if body["reasoning_effort"] != "max" {
+		t.Fatalf("reasoning_effort = %#v, want max", body["reasoning_effort"])
+	}
+}
+
+func TestThinkingLowMediumFoldWarning(t *testing.T) {
+	_, resp := captureBody(t, compat.Config{APIKey: "key", BaseURL: "https://api.deepseek.com/beta"}, &litellm.Request{
+		Model:    "deepseek-reasoner",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "medium"},
+	})
+	if len(resp.Warnings) != 1 {
+		t.Fatalf("warnings len = %d, want 1: %#v", len(resp.Warnings), resp.Warnings)
+	}
+	warning := resp.Warnings[0]
+	if warning.Code != "deepseek.thinking_effort_folded" || warning.Provider != "deepseek" {
+		t.Fatalf("warning = %#v", warning)
+	}
+}
+
 func TestStrictToolsOmittedOutsideBeta(t *testing.T) {
 	body, resp := captureBody(t, compat.Config{APIKey: "key"}, &litellm.Request{
 		Model:    "deepseek-chat",
@@ -116,7 +142,7 @@ func TestRejectsUnknownThinkingLevel(t *testing.T) {
 		Messages: []litellm.Message{litellm.UserText("hi")},
 		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Level: "extreme"},
 	})
-	if err == nil || !strings.Contains(err.Error(), `unsupported thinking level "extreme"`) {
+	if err == nil || !strings.Contains(err.Error(), `unsupported thinking effort "extreme"`) {
 		t.Fatalf("err = %v", err)
 	}
 }

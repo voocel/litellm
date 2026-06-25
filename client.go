@@ -3,8 +3,6 @@ package litellm
 import (
 	"context"
 	"fmt"
-	"io"
-	"os"
 	"sync/atomic"
 	"time"
 )
@@ -14,8 +12,6 @@ type Client struct {
 	hooks              []Hook
 	defaults           *RequestDefaults
 	repair             MessageRepairPolicy
-	debug              bool
-	debugOut           io.Writer
 	captureRawResponse bool
 	streamIdleTimeout  time.Duration
 }
@@ -72,29 +68,6 @@ func WithStreamIdleTimeout(timeout time.Duration) ClientOption {
 			return fmt.Errorf("stream idle timeout cannot be negative")
 		}
 		c.streamIdleTimeout = timeout
-		return nil
-	}
-}
-
-func WithDebug(enabled bool) ClientOption {
-	return func(c *Client) error {
-		c.debug = enabled
-		if enabled && c.debugOut == nil {
-			c.debugOut = os.Stderr
-		}
-		return nil
-	}
-}
-
-func WithDebugOutput(w io.Writer) ClientOption {
-	return func(c *Client) error {
-		if w == nil {
-			c.debug = false
-			c.debugOut = nil
-			return nil
-		}
-		c.debug = true
-		c.debugOut = w
 		return nil
 	}
 }

@@ -14,6 +14,9 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) ([]byte, []li
 	}
 	body := map[string]any{"model": req.Model}
 	var warnings []litellm.Warning
+	if p.spec.Request.Warnings != nil {
+		warnings = append(warnings, p.spec.Request.Warnings(req)...)
+	}
 	messages := req.Messages
 	if p.spec.Request.JSONSchemaToPrompt && req.ResponseFormat != nil && req.ResponseFormat.Type == litellm.ResponseFormatJSONSchema && req.ResponseFormat.JSONSchema != nil {
 		messages = injectJSONSchema(messages, req.ResponseFormat.JSONSchema)
@@ -103,20 +106,36 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) ([]byte, []li
 		}
 	}
 	if p.spec.Request.ProviderOptions != nil {
-		if err := p.spec.Request.ProviderOptions(req.ProviderOptions, body, req); err != nil {
+		mappedOptions, passthroughOptions := p.splitProviderOptions(req.ProviderOptions)
+		if err := p.spec.Request.ProviderOptions(mappedOptions, body, req); err != nil {
 			return nil, nil, err
+		}
+		for key, value := range passthroughOptions {
+			if err := p.putProviderOption(body, key, value); err != nil {
+				return nil, nil, err
+			}
 		}
 	} else {
 		for key, value := range req.ProviderOptions {
-			body[key] = value
+			if err := p.putProviderOption(body, key, value); err != nil {
+				return nil, nil, err
+			}
 		}
 	}
 	data, err := json.Marshal(body)
 	return data, warnings, err
 }
 
+func (p *Provider) putProviderOption(body map[string]any, key string, value any) error {
+	if _, exists := body[key]; exists {
+		return fmt.Errorf("%s: provider option %q conflicts with generated request field", p.Name(), key)
+	}
+	body[key] = value
+	return nil
+}
+
 func (p *Provider) validateProviderOptions(options litellm.ProviderOptions) error {
-	if len(options) == 0 || p.spec.Request.AllowUnknownProviderOptions {
+	if len(options) == 0 || p.cfg.AllowUnknownProviderOptions || p.spec.Request.AllowUnknownProviderOptions {
 		return nil
 	}
 	for key := range options {
@@ -125,6 +144,22 @@ func (p *Provider) validateProviderOptions(options litellm.ProviderOptions) erro
 		}
 	}
 	return nil
+}
+
+func (p *Provider) splitProviderOptions(options litellm.ProviderOptions) (litellm.ProviderOptions, litellm.ProviderOptions) {
+	if len(options) == 0 || !p.cfg.AllowUnknownProviderOptions || len(p.spec.Request.AllowedProviderOptions) == 0 {
+		return options, nil
+	}
+	mapped := make(litellm.ProviderOptions)
+	passthrough := make(litellm.ProviderOptions)
+	for key, value := range options {
+		if _, ok := p.spec.Request.AllowedProviderOptions[key]; ok {
+			mapped[key] = value
+		} else {
+			passthrough[key] = value
+		}
+	}
+	return mapped, passthrough
 }
 
 func convertMessages(messages []litellm.Message) ([]map[string]any, error) {

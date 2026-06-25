@@ -39,6 +39,7 @@ func repairRequest(req *Request, policy MessageRepairPolicy) ([]Warning, error) 
 func repairMessages(messages []Message, policy MessageRepairPolicy) ([]Message, []Warning) {
 	idMap := make(map[string]string)
 	open := make(map[string]ToolUseBlock)
+	var openOrder []string
 	out := make([]Message, 0, len(messages)+2)
 	var warnings []Warning
 
@@ -49,7 +50,10 @@ func repairMessages(messages []Message, policy MessageRepairPolicy) ([]Message, 
 		if policy&RepairInsertMissingToolResults == 0 {
 			return
 		}
-		for id := range open {
+		for _, id := range openOrder {
+			if _, ok := open[id]; !ok {
+				continue
+			}
 			out = append(out, ToolResult(id,
 				Text("Tool execution was interrupted; no result available."),
 			))
@@ -62,20 +66,21 @@ func repairMessages(messages []Message, policy MessageRepairPolicy) ([]Message, 
 			})
 			delete(open, id)
 		}
+		openOrder = openOrder[:0]
 	}
 
 	for _, msg := range messages {
 		if msg.Role == RoleUser {
 			flushMissing()
 		}
-		msg.Blocks = repairBlocks(msg.Role, msg.Blocks, policy, idMap, open, &warnings)
+		msg.Blocks = repairBlocks(msg.Role, msg.Blocks, policy, idMap, open, &openOrder, &warnings)
 		out = append(out, msg)
 	}
 	flushMissing()
 	return out, warnings
 }
 
-func repairBlocks(role Role, blocks []Block, policy MessageRepairPolicy, idMap map[string]string, open map[string]ToolUseBlock, warnings *[]Warning) []Block {
+func repairBlocks(role Role, blocks []Block, policy MessageRepairPolicy, idMap map[string]string, open map[string]ToolUseBlock, openOrder *[]string, warnings *[]Warning) []Block {
 	out := make([]Block, len(blocks))
 	for i, block := range blocks {
 		switch b := block.(type) {
@@ -83,6 +88,11 @@ func repairBlocks(role Role, blocks []Block, policy MessageRepairPolicy, idMap m
 			if role == RoleAssistant {
 				b = repairToolUseBlock(b, policy, idMap, warnings)
 				if b.ID != "" {
+					if policy&RepairInsertMissingToolResults != 0 {
+						if _, exists := open[b.ID]; !exists {
+							*openOrder = append(*openOrder, b.ID)
+						}
+					}
 					open[b.ID] = b
 				}
 			}

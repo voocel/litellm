@@ -453,6 +453,46 @@ func TestStreamConvertsSSEToTypedEvents(t *testing.T) {
 	}
 }
 
+func TestChatSetsProviderHeaders(t *testing.T) {
+	maxTokens := 2048
+	provider, err := New(Config{
+		APIKey:    "test-key",
+		BaseURL:   "https://example.test",
+		Beta:      "beta-name",
+		UserAgent: "my-client/1.0",
+		Headers:   map[string]string{"X-Custom-Client": "my-client"},
+		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if got := req.Header.Get("User-Agent"); got != "my-client/1.0" {
+				t.Fatalf("User-Agent = %q", got)
+			}
+			if got := req.Header.Get("anthropic-beta"); got != "beta-name" {
+				t.Fatalf("anthropic-beta = %q", got)
+			}
+			if got := req.Header.Get("X-Custom-Client"); got != "my-client" {
+				t.Fatalf("X-Custom-Client = %q", got)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"id":"msg_1","type":"message","role":"assistant","model":"claude","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)),
+			}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	resp, err := provider.Chat(context.Background(), &litellm.Request{
+		Model:     "claude",
+		MaxTokens: &maxTokens,
+		Messages:  []litellm.Message{litellm.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	if resp.Text() != "ok" {
+		t.Fatalf("text = %q", resp.Text())
+	}
+}
+
 func TestConvertResponsePreservesRedactedThinkingData(t *testing.T) {
 	resp, err := convertResponse(&anthropicResponse{
 		Model: "claude",

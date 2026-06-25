@@ -312,18 +312,19 @@ func convertGenerationConfig(req *litellm.Request) (*generationConfig, error) {
 		includeThoughts := req.Thinking.Mode == litellm.ThinkingEnabled
 		tc := &thinkingConfig{IncludeThoughts: &includeThoughts}
 		if includeThoughts {
+			effort := thinkingEffort(req.Thinking)
 			if usesThinkingLevel(req.Model) {
-				if req.Thinking.Level != "" {
-					tc.ThinkingLevel = req.Thinking.Level
+				if effort != "" {
+					tc.ThinkingLevel = effort
 				} else {
 					tc.ThinkingBudget = req.Thinking.BudgetTokens
 				}
 			} else {
 				tc.ThinkingBudget = req.Thinking.BudgetTokens
-				if tc.ThinkingBudget == nil && req.Thinking.Level != "" {
-					budget := levelToBudget(req.Thinking.Level)
+				if tc.ThinkingBudget == nil && effort != "" {
+					budget := levelToBudget(effort)
 					if budget == 0 {
-						return nil, fmt.Errorf("gemini: unknown thinking level %q", req.Thinking.Level)
+						return nil, fmt.Errorf("gemini: unknown thinking effort %q", effort)
 					}
 					tc.ThinkingBudget = &budget
 				}
@@ -413,6 +414,16 @@ func usesThinkingLevel(model string) bool {
 	var major int
 	fmt.Sscanf(after, "%d", &major)
 	return major >= 3
+}
+
+func thinkingEffort(thinking *litellm.Thinking) string {
+	if thinking == nil {
+		return ""
+	}
+	if strings.TrimSpace(thinking.Effort) != "" {
+		return thinking.Effort
+	}
+	return thinking.Level
 }
 
 func levelToBudget(level string) int {

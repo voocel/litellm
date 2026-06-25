@@ -182,6 +182,38 @@ func TestBuildRequestGemini25UsesThinkingBudget(t *testing.T) {
 	}
 }
 
+func TestBuildRequestGeminiUsesEffortBeforeLevel(t *testing.T) {
+	provider := mustProvider(t)
+	wire, err := provider.buildRequest(&litellm.Request{
+		Model:    "gemini-3-pro",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high", Level: "low"},
+	})
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	tc := wire.GenerationConfig.ThinkingConfig
+	if tc == nil || tc.ThinkingLevel != "high" {
+		t.Fatalf("thinking config = %+v, want level high", tc)
+	}
+}
+
+func TestBuildRequestGemini25UsesEffortBudget(t *testing.T) {
+	provider := mustProvider(t)
+	wire, err := provider.buildRequest(&litellm.Request{
+		Model:    "gemini-2.5-flash",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
+	})
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	tc := wire.GenerationConfig.ThinkingConfig
+	if tc == nil || tc.ThinkingBudget == nil || *tc.ThinkingBudget != 16384 {
+		t.Fatalf("thinking config = %+v, want budget 16384", tc)
+	}
+}
+
 func TestBuildRequestRejectsToolResultWithoutPrecedingToolUse(t *testing.T) {
 	provider := mustProvider(t)
 	_, err := provider.buildRequest(&litellm.Request{
