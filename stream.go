@@ -314,6 +314,9 @@ func (c *EventCollector) Apply(event Event) (bool, error) {
 		if err != nil {
 			return false, err
 		}
+		if warning := normalizeInvalidToolArguments(tool); warning != nil {
+			c.appendWarning(*warning)
+		}
 		c.appendTool(key, tool)
 	case UsageEvent:
 		c.usage = e.Usage
@@ -324,7 +327,7 @@ func (c *EventCollector) Apply(event Event) (bool, error) {
 			c.model = e.Usage.Model
 		}
 	case WarningEvent:
-		c.warnings = append(c.warnings, e.Warning)
+		c.appendWarning(e.Warning)
 	case ErrorEvent:
 		if e.Err == nil {
 			return false, fmt.Errorf("stream error event missing error")
@@ -341,11 +344,49 @@ func (c *EventCollector) Apply(event Event) (bool, error) {
 		if e.Model != "" {
 			c.model = e.Model
 		}
+		c.normalizeToolArguments()
 		return true, nil
 	default:
 		return false, fmt.Errorf("unknown stream event %T", event)
 	}
 	return false, nil
+}
+
+func (c *EventCollector) appendWarning(w Warning) {
+	if w.Provider == "" {
+		w.Provider = c.provider
+	}
+	c.warnings = append(c.warnings, w)
+}
+
+func (c *EventCollector) normalizeToolArguments() {
+	for i, block := range c.blocks {
+		tool, ok := block.(ToolUseBlock)
+		if !ok {
+			continue
+		}
+		if warning := normalizeInvalidToolArguments(&tool); warning != nil {
+			c.blocks[i] = tool
+			c.appendWarning(*warning)
+		}
+	}
+}
+
+func normalizeInvalidToolArguments(tool *ToolUseBlock) *Warning {
+	if tool == nil || len(tool.Arguments) == 0 || json.Valid(tool.Arguments) {
+		return nil
+	}
+	var probe any
+	parseErr := json.Unmarshal(tool.Arguments, &probe)
+	tool.Arguments = json.RawMessage("{}")
+	return &Warning{
+		Code:     "stream.tool_arguments_invalid",
+		Message:  fmt.Sprintf("tool use %q returned malformed JSON arguments: %v; replaced with {}", tool.ID, parseErr),
+		Provider: "",
+		// Keep raw arguments out of Warning to avoid leaking large or sensitive
+		// payloads through observability hooks. Consumers that need raw deltas
+		// can observe ToolUseDelta events directly.
+	}
 }
 
 func (c *EventCollector) Response() *Response {

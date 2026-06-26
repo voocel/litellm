@@ -106,14 +106,24 @@ func TestCollectRequiresDoneOrError(t *testing.T) {
 	}
 }
 
-func TestCollectRejectsInvalidToolArguments(t *testing.T) {
-	_, err := Collect(&eventSliceStream{events: []Event{
+func TestCollectNormalizesInvalidToolArguments(t *testing.T) {
+	resp, err := Collect(&eventSliceStream{events: []Event{
 		ToolUseStart{ID: "call_1", Name: "lookup"},
 		ToolUseDelta{ID: "call_1", ArgumentsDelta: []byte(`{"q":`)},
 		DoneEvent{FinishReason: FinishReasonToolCall, Provider: "test", Model: "m"},
 	}})
-	if err == nil || err.Error() == "" {
-		t.Fatalf("expected invalid tool arguments error, got %v", err)
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+	calls := resp.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("tool calls len = %d, want 1", len(calls))
+	}
+	if got := string(calls[0].Arguments); got != "{}" {
+		t.Fatalf("arguments = %q, want {}", got)
+	}
+	if len(resp.Warnings) != 1 || resp.Warnings[0].Code != "stream.tool_arguments_invalid" {
+		t.Fatalf("warnings = %+v", resp.Warnings)
 	}
 }
 
