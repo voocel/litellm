@@ -37,6 +37,8 @@ type Spec struct {
 	Response ResponseSpec
 	Stream   StreamSpec
 	Features FeatureSpec
+
+	Capabilities CapabilityMapper
 }
 
 type EndpointSpec struct {
@@ -112,6 +114,7 @@ const (
 )
 
 type ThinkingMapper func(*litellm.Thinking, string) (map[string]any, error)
+type CapabilityMapper func(model string, base litellm.Capabilities) litellm.Capabilities
 type ResponseFormatMapper func(*litellm.ResponseFormat) (any, error)
 type SchemaMapper func(litellm.Schema) (any, error)
 type ProviderOptionsMapper func(litellm.ProviderOptions, map[string]any, *litellm.Request) error

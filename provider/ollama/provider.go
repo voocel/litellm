@@ -28,6 +28,17 @@ func New(cfg Config) (*compat.Provider, error) {
 		Stream: compat.StreamSpec{
 			ReasoningFields: []string{"reasoning", "reasoning_content", "thinking"},
 		},
+		Capabilities: func(_ string, caps litellm.Capabilities) litellm.Capabilities {
+			caps.Thinking.Efforts = litellm.PortableThinkingEfforts()
+			caps.Thinking.BudgetTokens = litellm.SupportNo
+			caps.Thinking.IncludeOutput = litellm.SupportNo
+			caps.Thinking.Notes = []string{"minimal maps to low; xhigh maps to max"}
+			caps.Reasoning.ReasoningTokens = litellm.SupportNo
+			caps.Usage.ReasoningTokens = litellm.SupportNo
+			caps.Usage.CacheReadTokens = litellm.SupportNo
+			caps.Usage.CacheWriteTokens = litellm.SupportNo
+			return caps
+		},
 	})
 }
 

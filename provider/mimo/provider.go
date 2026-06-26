@@ -50,6 +50,18 @@ func New(cfg Config) (*compat.Provider, error) {
 		Features: compat.FeatureSpec{
 			StrictTools: compat.StrictToolsForward,
 		},
+		Capabilities: func(model string, caps litellm.Capabilities) litellm.Capabilities {
+			if thinkingUnsupported(model) {
+				caps.Thinking.Supported = litellm.SupportNo
+				caps.Thinking.Disable = litellm.SupportNo
+			}
+			caps.Thinking.Efforts = nil
+			caps.Thinking.BudgetTokens = litellm.SupportNo
+			caps.Thinking.IncludeOutput = litellm.SupportNo
+			caps.Thinking.Notes = []string{"thinking is a provider switch; effort and budget controls are rejected"}
+			caps.Streaming.Usage = litellm.SupportNo
+			return caps
+		},
 	})
 }
 

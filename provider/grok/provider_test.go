@@ -42,14 +42,18 @@ func TestThinkingDisabled(t *testing.T) {
 	}
 }
 
-func TestReasoningEffortDefersModelSupportToAPI(t *testing.T) {
-	body := captureBody(t, &litellm.Request{
+func TestReasoningEffortRejectsUnsupportedModel(t *testing.T) {
+	p, err := New(compat.Config{APIKey: "key", BaseURL: "https://grok.test", HTTPClient: roundTripFunc(nil)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = p.Chat(context.Background(), &litellm.Request{
 		Model:    "grok-4",
 		Messages: []litellm.Message{litellm.UserText("hi")},
 		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
 	})
-	if body["reasoning_effort"] != "high" {
-		t.Fatalf("body = %#v", body)
+	if err == nil || !strings.Contains(err.Error(), "grok-4.3") {
+		t.Fatalf("expected model support error, got %v", err)
 	}
 }
 
@@ -65,6 +69,69 @@ func TestThinkingRequiresEffort(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "effort is required") {
 		t.Fatalf("expected thinking requirement error, got %v", err)
+	}
+}
+
+func TestRejectsUnsupportedReasoningEffort(t *testing.T) {
+	p, err := New(compat.Config{APIKey: "key", BaseURL: "https://grok.test", HTTPClient: roundTripFunc(nil)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = p.Chat(context.Background(), &litellm.Request{
+		Model:    "grok-4.3",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "max"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported reasoning_effort") {
+		t.Fatalf("expected effort error, got %v", err)
+	}
+}
+
+func TestRejectsStopForReasoningModel(t *testing.T) {
+	p, err := New(compat.Config{APIKey: "key", BaseURL: "https://grok.test", HTTPClient: roundTripFunc(nil)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = p.Chat(context.Background(), &litellm.Request{
+		Model:    "grok-4.3",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		Stop:     []string{"END"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "stop is not supported") {
+		t.Fatalf("expected stop error, got %v", err)
+	}
+}
+
+func TestRejectsUnsupportedReasoningProviderOptions(t *testing.T) {
+	p, err := New(compat.Config{APIKey: "key", BaseURL: "https://grok.test", HTTPClient: roundTripFunc(nil), AllowUnknownProviderOptions: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = p.Chat(context.Background(), &litellm.Request{
+		Model:           "grok-4.3",
+		Messages:        []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{"presence_penalty": 0.2},
+	})
+	if err == nil || !strings.Contains(err.Error(), "presence_penalty") {
+		t.Fatalf("expected provider option error, got %v", err)
+	}
+}
+
+func TestCapabilities(t *testing.T) {
+	p, err := New(compat.Config{APIKey: "key", BaseURL: "https://grok.test", HTTPClient: roundTripFunc(nil)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	caps := p.Capabilities("grok-4.3")
+	if caps.Thinking.Supported != litellm.SupportYes || !caps.Thinking.SupportsEffort("high") || caps.Thinking.SupportsEffort("max") {
+		t.Fatalf("thinking caps = %+v", caps.Thinking)
+	}
+	if alias := p.Capabilities("grok-latest"); alias.Thinking.Supported != litellm.SupportYes {
+		t.Fatalf("alias thinking caps = %+v", alias.Thinking)
+	}
+	caps = p.Capabilities("grok-4")
+	if caps.Thinking.Supported != litellm.SupportNo || caps.Thinking.SupportsEffort("high") {
+		t.Fatalf("unsupported model caps = %+v", caps.Thinking)
 	}
 }
 

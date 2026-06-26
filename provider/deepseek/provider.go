@@ -54,6 +54,13 @@ func New(cfg Config) (*compat.Provider, error) {
 		Features: compat.FeatureSpec{
 			StrictTools: strictTools,
 		},
+		Capabilities: func(_ string, caps litellm.Capabilities) litellm.Capabilities {
+			caps.Thinking.Efforts = litellm.PortableThinkingEfforts()
+			caps.Thinking.BudgetTokens = litellm.SupportNo
+			caps.Thinking.IncludeOutput = litellm.SupportNo
+			caps.Thinking.Notes = []string{"minimal, low, medium, and high map to high; xhigh and max map to max"}
+			return caps
+		},
 	})
 }
 
@@ -94,7 +101,7 @@ func thinkingEffort(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "":
 		return "", nil
-	case "low", "medium", "high":
+	case "minimal", "low", "medium", "high":
 		return "high", nil
 	case "xhigh", "max":
 		return "max", nil
@@ -108,7 +115,7 @@ func thinkingWarnings(req *litellm.Request) []litellm.Warning {
 		return nil
 	}
 	value := strings.ToLower(strings.TrimSpace(thinkingValue(req.Thinking)))
-	if value != "low" && value != "medium" {
+	if value != "minimal" && value != "low" && value != "medium" {
 		return nil
 	}
 	return []litellm.Warning{{

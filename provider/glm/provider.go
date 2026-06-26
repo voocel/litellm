@@ -51,6 +51,22 @@ func New(cfg Config) (*compat.Provider, error) {
 		Stream: compat.StreamSpec{
 			ReasoningFields: []string{"reasoning_content"},
 		},
+		Capabilities: func(model string, caps litellm.Capabilities) litellm.Capabilities {
+			caps.Thinking.Efforts = litellm.PortableThinkingEfforts()
+			caps.Thinking.BudgetTokens = litellm.SupportNo
+			caps.Thinking.IncludeOutput = litellm.SupportNo
+			caps.Thinking.Notes = []string{"thinking requires glm-4.5+; reasoning_effort requires glm-5.2+"}
+			if !versionAtLeast(model, 4, 5) {
+				caps.Thinking.Supported = litellm.SupportNo
+				caps.Thinking.Disable = litellm.SupportNo
+				caps.Thinking.Efforts = nil
+			} else if !versionAtLeast(model, 5, 2) {
+				caps.Thinking.Efforts = nil
+			}
+			caps.Structured.JSONSchema = litellm.SupportNo
+			caps.Structured.PromptOnly = true
+			return caps
+		},
 	})
 }
 

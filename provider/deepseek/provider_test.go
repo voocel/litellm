@@ -56,7 +56,7 @@ func TestThinkingLowMediumFoldWarning(t *testing.T) {
 	_, resp := captureBody(t, compat.Config{APIKey: "key", BaseURL: "https://api.deepseek.com/beta"}, &litellm.Request{
 		Model:    "deepseek-reasoner",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "medium"},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "minimal"},
 	})
 	if len(resp.Warnings) != 1 {
 		t.Fatalf("warnings len = %d, want 1: %#v", len(resp.Warnings), resp.Warnings)

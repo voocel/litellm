@@ -29,20 +29,21 @@ func (f roundTripFunc) Do(req *http.Request) (*http.Response, error) {
 type wrapperCase struct {
 	name               string
 	apiKey             bool
+	capabilityModel    string
 	strictToolsForward bool
 	new                func(compat.Config) (*compat.Provider, error)
 }
 
 func compatWrappers() []wrapperCase {
 	return []wrapperCase{
-		{name: "deepseek", apiKey: true, new: deepseek.New},
-		{name: "qwen", apiKey: true, new: qwen.New},
-		{name: "glm", apiKey: true, new: glm.New},
-		{name: "openrouter", apiKey: true, new: openrouter.New},
-		{name: "minimax", apiKey: true, new: minimax.New},
-		{name: "ollama", new: ollama.New},
-		{name: "grok", apiKey: true, new: grok.New},
-		{name: "mimo", apiKey: true, strictToolsForward: true, new: mimo.New},
+		{name: "deepseek", apiKey: true, capabilityModel: "deepseek-reasoner", new: deepseek.New},
+		{name: "qwen", apiKey: true, capabilityModel: "qwen3-max", new: qwen.New},
+		{name: "glm", apiKey: true, capabilityModel: "glm-5.2", new: glm.New},
+		{name: "openrouter", apiKey: true, capabilityModel: "anthropic/claude-sonnet-4", new: openrouter.New},
+		{name: "minimax", apiKey: true, capabilityModel: "MiniMax-M3", new: minimax.New},
+		{name: "ollama", capabilityModel: "qwen3", new: ollama.New},
+		{name: "grok", apiKey: true, capabilityModel: "grok-4.3", new: grok.New},
+		{name: "mimo", apiKey: true, capabilityModel: "mimo-v2.5-pro", strictToolsForward: true, new: mimo.New},
 	}
 }
 
@@ -154,6 +155,29 @@ func TestCompatWrappersWarnWhenStrictToolIsOmitted(t *testing.T) {
 			warning := resp.Warnings[0]
 			if warning.Code != "request.strict_tool_omitted" || warning.Provider != tt.name {
 				t.Fatalf("warning = %#v", warning)
+			}
+		})
+	}
+}
+
+func TestCompatWrapperCapabilitiesThinkingEffortsAreAccepted(t *testing.T) {
+	for _, tt := range compatWrappers() {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := newWrapper(t, tt, roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return jsonResponse(http.StatusOK, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`), nil
+			}))
+			caps := provider.Capabilities(tt.capabilityModel)
+			for _, effort := range caps.Thinking.Efforts {
+				t.Run(effort, func(t *testing.T) {
+					_, err := provider.Chat(context.Background(), &litellm.Request{
+						Model:    tt.capabilityModel,
+						Messages: []litellm.Message{litellm.UserText("hi")},
+						Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: effort},
+					})
+					if err != nil {
+						t.Fatalf("capability effort %q was rejected: %v", effort, err)
+					}
+				})
 			}
 		})
 	}

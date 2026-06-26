@@ -117,6 +117,20 @@ func TestBuildRequestMapsMaxThinkingEffort(t *testing.T) {
 	}
 }
 
+func TestCapabilities(t *testing.T) {
+	provider := mustProvider(t)
+	caps := provider.Capabilities("anthropic.claude-sonnet-4-20250514-v1:0")
+	if caps.Thinking.Supported != litellm.SupportYes || !caps.Thinking.SupportsEffort("max") {
+		t.Fatalf("thinking caps = %+v", caps.Thinking)
+	}
+	if caps.Structured.JSONObject != litellm.SupportYes || caps.Structured.JSONSchema != litellm.SupportYes {
+		t.Fatalf("structured caps = %+v", caps.Structured)
+	}
+	if caps.Structured.Strict != litellm.SupportNo {
+		t.Fatalf("structured strict = %v, want no", caps.Structured.Strict)
+	}
+}
+
 func TestChatRetriesAndSignsEachAttempt(t *testing.T) {
 	var attempts int
 	provider, err := New(Config{

@@ -56,6 +56,20 @@ func (p *Provider) Name() string {
 	return p.spec.providerName()
 }
 
+func (p *Provider) Capabilities(model string) litellm.Capabilities {
+	caps := p.spec.defaultCapabilities(p.Name(), model)
+	if p.spec.Capabilities != nil {
+		caps = p.spec.Capabilities(model, caps)
+		if caps.Provider == "" {
+			caps.Provider = p.Name()
+		}
+		if caps.Model == "" {
+			caps.Model = model
+		}
+	}
+	return caps
+}
+
 func (p *Provider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
 	body, warnings, err := p.buildRequest(req, false)
 	if err != nil {

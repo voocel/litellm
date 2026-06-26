@@ -42,6 +42,19 @@ func New(cfg Config) (*compat.Provider, error) {
 			ContentCumulative:          true,
 			ContentCumulativeCondition: "thinking_enabled",
 		},
+		Capabilities: func(model string, caps litellm.Capabilities) litellm.Capabilities {
+			caps.Thinking.Efforts = nil
+			caps.Thinking.BudgetTokens = litellm.SupportNo
+			caps.Thinking.IncludeOutput = litellm.SupportNo
+			caps.Thinking.Notes = []string{"thinking is adaptive; unspecified thinking is treated as enabled for reasoning_split"}
+			if isM2(model) {
+				caps.Thinking.Disable = litellm.SupportNo
+				caps.Thinking.Notes = append(caps.Thinking.Notes, "disabling thinking is rejected for M2.x models")
+			} else {
+				caps.Thinking.Disable = litellm.SupportPartial
+			}
+			return caps
+		},
 	})
 }
 

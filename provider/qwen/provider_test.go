@@ -133,6 +133,20 @@ func TestRejectsThinkingEffort(t *testing.T) {
 	}
 }
 
+func TestCapabilities(t *testing.T) {
+	p, err := New(compat.Config{APIKey: "key", BaseURL: "https://qwen.test", HTTPClient: roundTripFunc(nil)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	caps := p.Capabilities("qwen3-max")
+	if caps.Thinking.Supported != litellm.SupportYes || caps.Thinking.BudgetTokens != litellm.SupportYes {
+		t.Fatalf("thinking caps = %+v", caps.Thinking)
+	}
+	if caps.Thinking.SupportsEffort("high") {
+		t.Fatalf("qwen should not advertise effort support: %+v", caps.Thinking)
+	}
+}
+
 func TestResponseReasoningContent(t *testing.T) {
 	p, err := New(compat.Config{
 		APIKey:  "key",

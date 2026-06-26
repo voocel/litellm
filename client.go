@@ -79,6 +79,13 @@ func (c *Client) ProviderName() string {
 	return c.provider.Name()
 }
 
+func (c *Client) Capabilities(model string) Capabilities {
+	if c == nil {
+		return Capabilities{Model: model}
+	}
+	return GetCapabilities(c.provider, model)
+}
+
 func (c *Client) Chat(ctx context.Context, req Request) (*Response, error) {
 	prepared, warnings, err := c.prepareRequest(req)
 	if err != nil {

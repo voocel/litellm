@@ -71,6 +71,13 @@ func New(cfg Config) (*compat.Provider, error) {
 		Stream: compat.StreamSpec{
 			ReasoningFields: []string{"reasoning_content"},
 		},
+		Capabilities: func(_ string, caps litellm.Capabilities) litellm.Capabilities {
+			caps.Thinking.Efforts = nil
+			caps.Thinking.BudgetTokens = litellm.SupportYes
+			caps.Thinking.IncludeOutput = litellm.SupportNo
+			caps.Thinking.Notes = []string{"use BudgetTokens; Effort is rejected"}
+			return caps
+		},
 	})
 }
 

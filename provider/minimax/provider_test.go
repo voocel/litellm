@@ -224,6 +224,25 @@ func TestResponseReasoningContentFallback(t *testing.T) {
 	}
 }
 
+func TestCapabilities(t *testing.T) {
+	p, err := New(compat.Config{APIKey: "key", BaseURL: "https://minimax.test", HTTPClient: roundTripFunc(nil)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	caps := p.Capabilities("MiniMax-M3")
+	if caps.Thinking.Supported != litellm.SupportYes || caps.Thinking.Disable != litellm.SupportPartial {
+		t.Fatalf("thinking caps = %+v", caps.Thinking)
+	}
+	if caps.Thinking.SupportsEffort("high") || caps.Thinking.BudgetTokens != litellm.SupportNo {
+		t.Fatalf("minimax should not advertise effort or budget controls: %+v", caps.Thinking)
+	}
+
+	caps = p.Capabilities("MiniMax-M2")
+	if caps.Thinking.Disable != litellm.SupportNo {
+		t.Fatalf("M2 disable support = %v, want no", caps.Thinking.Disable)
+	}
+}
+
 func captureBody(t *testing.T, req *litellm.Request) map[string]any {
 	t.Helper()
 	var body map[string]any
