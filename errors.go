@@ -2,9 +2,10 @@ package litellm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
+	"strings"
 )
 
 type ErrorType string
@@ -36,10 +37,20 @@ type LiteLLMError struct {
 }
 
 func (e *LiteLLMError) Error() string {
-	if e.Provider != "" {
-		return fmt.Sprintf("[litellm:%s:%s] %s", e.Provider, e.Type, e.Message)
+	msg := strings.TrimSpace(e.Message)
+	if e.Code != "" && msg != "" {
+		return e.Code + ": " + msg
 	}
-	return fmt.Sprintf("[litellm:%s] %s", e.Type, e.Message)
+	if msg != "" {
+		return msg
+	}
+	if e.Code != "" {
+		return e.Code
+	}
+	if e.Type != "" {
+		return string(e.Type)
+	}
+	return "litellm error"
 }
 
 func (e *LiteLLMError) Unwrap() error {
@@ -64,13 +75,51 @@ func NewProviderErrorWithCause(provider string, errorType ErrorType, message str
 
 func NewHTTPError(provider string, statusCode int, message string) *LiteLLMError {
 	errorType := classifyHTTPError(statusCode)
+	code, message := parseHTTPErrorMessage(message)
 	return &LiteLLMError{
 		Type:       errorType,
+		Code:       code,
 		Provider:   provider,
 		Message:    message,
 		StatusCode: statusCode,
 		Retryable:  isRetryableByType(errorType),
 	}
+}
+
+func parseHTTPErrorMessage(body string) (string, string) {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return "", ""
+	}
+
+	var payload struct {
+		Error any `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil || payload.Error == nil {
+		return "", body
+	}
+
+	switch e := payload.Error.(type) {
+	case string:
+		return "", strings.TrimSpace(e)
+	case map[string]any:
+		code := stringField(e, "code")
+		msg := stringField(e, "message")
+		if msg == "" {
+			msg = body
+		}
+		return code, msg
+	default:
+		return "", body
+	}
+}
+
+func stringField(m map[string]any, key string) string {
+	v, ok := m[key].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(v)
 }
 
 func NewAuthError(provider, message string) *LiteLLMError {

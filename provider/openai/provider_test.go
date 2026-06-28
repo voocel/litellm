@@ -328,6 +328,47 @@ func TestChatRetriesWhenRetryPolicyIsConfigured(t *testing.T) {
 	}
 }
 
+func TestChatSetsProviderHeaders(t *testing.T) {
+	provider, err := New(Config{
+		APIKey:    "test-key",
+		BaseURL:   "https://example.test",
+		UserAgent: "codex-cli/0.142.3",
+		Headers: map[string]string{
+			"Originator": "Codex CLI",
+			"Session_id": "ainovel",
+		},
+		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if got := req.Header.Get("User-Agent"); got != "codex-cli/0.142.3" {
+				t.Fatalf("User-Agent = %q", got)
+			}
+			if got := req.Header.Get("Originator"); got != "Codex CLI" {
+				t.Fatalf("Originator = %q", got)
+			}
+			if got := req.Header.Get("Session_id"); got != "ainovel" {
+				t.Fatalf("Session_id = %q", got)
+			}
+			return jsonResponse(http.StatusOK, `{
+				"model":"gpt-5.4",
+				"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]
+			}`), nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	resp, err := provider.Chat(context.Background(), &litellm.Request{
+		Model:    "gpt-5.4",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	if resp.Text() != "ok" {
+		t.Fatalf("Text = %q", resp.Text())
+	}
+}
+
 func TestNewRejectsAmbiguousTransportConfig(t *testing.T) {
 	_, err := New(Config{
 		APIKey:     "test-key",
@@ -440,7 +481,7 @@ func TestChatRejectsUnsupportedResponseContent(t *testing.T) {
 	}
 }
 
-func TestChatRejectsInvalidToolCallArguments(t *testing.T) {
+func TestChatPreservesInvalidToolCallArguments(t *testing.T) {
 	provider, err := New(Config{
 		APIKey:  "test-key",
 		BaseURL: "https://example.test",
@@ -461,12 +502,19 @@ func TestChatRejectsInvalidToolCallArguments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
-	_, err = provider.Chat(context.Background(), &litellm.Request{
+	resp, err := provider.Chat(context.Background(), &litellm.Request{
 		Model:    "gpt-4.1",
 		Messages: []litellm.Message{litellm.UserText("hi")},
 	})
-	if err == nil || !strings.Contains(err.Error(), "arguments are not valid JSON") {
-		t.Fatalf("expected invalid arguments error, got %v", err)
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	calls := resp.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("tool calls len = %d, want 1", len(calls))
+	}
+	if got := string(calls[0].Arguments); got != `{"q":` {
+		t.Fatalf("arguments = %q, want raw malformed args", got)
 	}
 }
 

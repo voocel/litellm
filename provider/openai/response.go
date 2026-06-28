@@ -35,9 +35,6 @@ func convertResponse(resp *chatResponse, req *litellm.Request) (*litellm.Respons
 	}
 	out.Blocks = append(out.Blocks, blocks...)
 	for _, call := range choice.Message.ToolCalls {
-		if !json.Valid([]byte(call.Function.Arguments)) {
-			return nil, fmt.Errorf("openai: tool call %q arguments are not valid JSON", call.ID)
-		}
 		out.Blocks = append(out.Blocks, litellm.ToolUseBlock{
 			ID:        call.ID,
 			Name:      call.Function.Name,

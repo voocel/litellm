@@ -353,13 +353,10 @@ func validateResponse(resp *Response, provider, model string) error {
 	for _, block := range resp.Blocks {
 		if tool, ok := block.(ToolUseBlock); ok {
 			if tool.ID == "" {
-				return NewProviderError(resolvedProvider, ErrorTypeProvider, "tool use missing id")
+				return NewProviderError(resolvedProvider, ErrorTypeValidation, "tool use missing id")
 			}
 			if tool.Name == "" {
-				return NewProviderError(resolvedProvider, ErrorTypeProvider, fmt.Sprintf("tool use %q missing name", tool.ID))
-			}
-			if len(tool.Arguments) == 0 || !json.Valid(tool.Arguments) {
-				return NewProviderError(resolvedProvider, ErrorTypeProvider, fmt.Sprintf("tool use %q arguments must be valid JSON", tool.ID))
+				return NewProviderError(resolvedProvider, ErrorTypeValidation, fmt.Sprintf("tool use %q missing name", tool.ID))
 			}
 		}
 	}
@@ -373,7 +370,27 @@ func finalizeResponse(resp *Response, provider, model string) {
 	if resp.Model == "" {
 		resp.Model = model
 	}
+	appendMalformedToolArgumentWarnings(resp)
 	resp.Usage.StampModel(resp.Provider, resp.Model)
+}
+
+func appendMalformedToolArgumentWarnings(resp *Response) {
+	if resp == nil {
+		return
+	}
+	for _, block := range resp.Blocks {
+		tool, ok := block.(ToolUseBlock)
+		if !ok || len(tool.Arguments) == 0 || json.Valid(tool.Arguments) {
+			continue
+		}
+		var probe any
+		parseErr := json.Unmarshal(tool.Arguments, &probe)
+		resp.Warnings = append(resp.Warnings, Warning{
+			Code:     "tool_arguments_invalid",
+			Provider: resp.Provider,
+			Message:  fmt.Sprintf("tool use %q returned malformed JSON arguments: %v", tool.ID, parseErr),
+		})
+	}
 }
 
 func cloneRequest(req Request) *Request {

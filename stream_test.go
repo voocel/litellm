@@ -119,8 +119,8 @@ func TestCollectNormalizesInvalidToolArguments(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("tool calls len = %d, want 1", len(calls))
 	}
-	if got := string(calls[0].Arguments); got != "{}" {
-		t.Fatalf("arguments = %q, want {}", got)
+	if got := string(calls[0].Arguments); got != `{"q":` {
+		t.Fatalf("arguments = %q, want raw malformed args", got)
 	}
 	if len(resp.Warnings) != 1 || resp.Warnings[0].Code != "stream.tool_arguments_invalid" {
 		t.Fatalf("warnings = %+v", resp.Warnings)

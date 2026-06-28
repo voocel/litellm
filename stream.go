@@ -378,10 +378,9 @@ func normalizeInvalidToolArguments(tool *ToolUseBlock) *Warning {
 	}
 	var probe any
 	parseErr := json.Unmarshal(tool.Arguments, &probe)
-	tool.Arguments = json.RawMessage("{}")
 	return &Warning{
 		Code:     "stream.tool_arguments_invalid",
-		Message:  fmt.Sprintf("tool use %q returned malformed JSON arguments: %v; replaced with {}", tool.ID, parseErr),
+		Message:  fmt.Sprintf("tool use %q returned malformed JSON arguments: %v", tool.ID, parseErr),
 		Provider: "",
 		// Keep raw arguments out of Warning to avoid leaking large or sensitive
 		// payloads through observability hooks. Consumers that need raw deltas

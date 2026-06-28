@@ -546,6 +546,40 @@ func TestClientRejectsNilResponseWithoutError(t *testing.T) {
 	}
 }
 
+func TestClientAllowsMalformedToolArgumentsFromModel(t *testing.T) {
+	client, err := New(&testProvider{
+		name: "test",
+		chatFunc: func(context.Context, *Request) (*Response, error) {
+			return &Response{
+				Provider:     "test",
+				Model:        "m",
+				FinishReason: FinishReasonToolCall,
+				Blocks: []Block{
+					ToolUseBlock{ID: "call_bad", Name: "lookup", Arguments: []byte(`{"q":`)},
+				},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	resp, err := client.Chat(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}})
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	calls := resp.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("tool calls len = %d, want 1", len(calls))
+	}
+	if got := string(calls[0].Arguments); got != `{"q":` {
+		t.Fatalf("arguments = %q, want raw malformed args", got)
+	}
+	if len(resp.Warnings) != 1 || resp.Warnings[0].Code != "tool_arguments_invalid" {
+		t.Fatalf("warnings = %+v", resp.Warnings)
+	}
+}
+
 func TestClientRejectsNilStreamWithoutError(t *testing.T) {
 	client, err := New(&testProvider{
 		name: "test",

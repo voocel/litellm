@@ -562,7 +562,7 @@ func TestChatRejectsUnsupportedResponseContent(t *testing.T) {
 	}
 }
 
-func TestChatRejectsInvalidToolCallArguments(t *testing.T) {
+func TestChatPreservesInvalidToolCallArguments(t *testing.T) {
 	provider, err := New(Config{
 		BaseURL: "https://compat.example",
 		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -581,12 +581,19 @@ func TestChatRejectsInvalidToolCallArguments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
-	_, err = provider.Chat(context.Background(), &litellm.Request{
+	resp, err := provider.Chat(context.Background(), &litellm.Request{
 		Model:    "m",
 		Messages: []litellm.Message{litellm.UserText("hi")},
 	})
-	if err == nil || !strings.Contains(err.Error(), "arguments are not valid JSON") {
-		t.Fatalf("expected invalid arguments error, got %v", err)
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	calls := resp.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("tool calls len = %d, want 1", len(calls))
+	}
+	if got := string(calls[0].Arguments); got != `{"q":` {
+		t.Fatalf("arguments = %q, want raw malformed args", got)
 	}
 }
 

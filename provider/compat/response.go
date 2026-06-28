@@ -39,9 +39,6 @@ func (p *Provider) convertResponse(resp *chatResponse, req *litellm.Request) (*l
 		out.Blocks = append(out.Blocks, litellm.TextBlock{Text: choice.Message.Refusal})
 	}
 	for _, call := range choice.Message.ToolCalls {
-		if !json.Valid([]byte(call.Function.Arguments)) {
-			return nil, fmt.Errorf("%s: tool call %q arguments are not valid JSON", p.Name(), call.ID)
-		}
 		out.Blocks = append(out.Blocks, litellm.ToolUseBlock{
 			ID:        call.ID,
 			Name:      call.Function.Name,
