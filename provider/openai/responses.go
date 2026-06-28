@@ -455,7 +455,7 @@ func validateResponsesRequest(req *ResponsesRequest, stream bool) error {
 	if err := validateOneOf("truncation", req.Truncation, "auto", "disabled"); err != nil {
 		return fmt.Errorf("openai: %w", err)
 	}
-	if err := validateOneOf("reasoning_effort", req.ReasoningEffort, "none", "minimal", "low", "medium", "high", "xhigh"); err != nil {
+	if err := validateOneOf("reasoning_effort", req.ReasoningEffort, "none", "low", "medium", "high", "xhigh"); err != nil {
 		return fmt.Errorf("openai: %w", err)
 	}
 	if err := validateOneOf("reasoning_summary", req.ReasoningSummary, "auto", "concise", "detailed"); err != nil {

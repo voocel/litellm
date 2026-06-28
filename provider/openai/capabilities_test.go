@@ -12,7 +12,10 @@ func TestCapabilitiesReasoningModel(t *testing.T) {
 	if caps.Provider != "openai" || caps.Model != "gpt-5.1" {
 		t.Fatalf("caps = %+v", caps)
 	}
-	if caps.Thinking.Supported != litellm.SupportPartial || !caps.Thinking.SupportsEffort("high") {
+	if caps.Thinking.Supported != litellm.SupportPartial || caps.Thinking.Disable != litellm.SupportYes {
+		t.Fatalf("thinking caps = %+v", caps.Thinking)
+	}
+	if !caps.Thinking.SupportsEffort("xhigh") || caps.Thinking.SupportsEffort("minimal") {
 		t.Fatalf("thinking caps = %+v", caps.Thinking)
 	}
 	if caps.Streaming.NativeResponses != litellm.SupportYes {

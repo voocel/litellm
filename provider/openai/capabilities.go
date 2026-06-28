@@ -6,8 +6,8 @@ func (p *Provider) Capabilities(model string) litellm.Capabilities {
 	reasoningModel := p.isReasoningModel(model)
 	thinking := litellm.ThinkingCapabilities{
 		Supported: litellm.SupportPartial,
-		Disable:   litellm.SupportNo,
-		Efforts:   []string{"minimal", "low", "medium", "high"},
+		Disable:   litellm.SupportYes,
+		Efforts:   []string{"low", "medium", "high", "xhigh"},
 		Notes:     []string{"chat reasoning controls are only available on reasoning chat models"},
 	}
 	if !reasoningModel {

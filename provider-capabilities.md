@@ -21,7 +21,7 @@ Portable `Thinking.Effort` values are `minimal`, `low`, `medium`, `high`, `xhigh
 
 | Provider | Enable thinking | Disable thinking | Effort | BudgetTokens | IncludeOutput | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| OpenAI Chat | partial | no | yes | no | no | Only reasoning chat models are supported; disabling thinking on reasoning models is rejected. |
+| OpenAI Chat | partial | yes | partial | no | no | Only reasoning chat models are supported; accepted efforts are `low`, `medium`, `high`, and `xhigh`; disable sends `none`. |
 | OpenAI Responses | yes | yes | yes | no | yes | `IncludeOutput` maps to `reasoning.summary=auto`. Responses also exposes native `ReasoningEffort` and `ReasoningSummary`. |
 | Anthropic | yes | yes | yes | yes | no | Requires `MaxTokens`; effort maps to `budget_tokens`. |
 | Bedrock | yes | yes | yes | yes | no | Claude models only; effort maps to Anthropic `thinking.budget_tokens`. |

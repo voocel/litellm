@@ -30,10 +30,14 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) (*chatRequest
 		out.MaxCompletionTokens = req.MaxTokens
 		out.TopP = nil
 		if req.Thinking != nil && req.Thinking.Mode == litellm.ThinkingDisabled {
-			return nil, fmt.Errorf("openai: disabling thinking is not supported for reasoning chat models")
+			out.ReasoningEffort = "none"
 		}
 		if req.Thinking != nil && req.Thinking.Mode == litellm.ThinkingEnabled {
-			out.ReasoningEffort = reasoningEffort(req.Thinking)
+			effort := reasoningEffort(req.Thinking)
+			if !isOpenAIReasoningEffort(effort) {
+				return nil, fmt.Errorf("openai: unsupported reasoning_effort %q; use low, medium, high, or xhigh", effort)
+			}
+			out.ReasoningEffort = effort
 		}
 		if req.Temperature != nil {
 			return nil, fmt.Errorf("openai: temperature is not supported for reasoning chat models")
@@ -85,6 +89,15 @@ func reasoningEffort(thinking *litellm.Thinking) string {
 		return ""
 	}
 	return thinking.Effort
+}
+
+func isOpenAIReasoningEffort(effort string) bool {
+	switch effort {
+	case "low", "medium", "high", "xhigh":
+		return true
+	default:
+		return false
+	}
 }
 
 func convertMessages(messages []litellm.Message) ([]chatMessage, error) {

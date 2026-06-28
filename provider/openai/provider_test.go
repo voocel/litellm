@@ -258,10 +258,10 @@ func TestBuildRequestReasoningModelConstraints(t *testing.T) {
 	_, err = provider.buildRequest(&litellm.Request{
 		Model:    "gpt-5.1",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingDisabled},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "minimal"},
 	}, false)
-	if err == nil || !strings.Contains(err.Error(), "disabling thinking is not supported") {
-		t.Fatalf("expected disabled thinking error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), `unsupported reasoning_effort "minimal"`) {
+		t.Fatalf("expected minimal effort error, got %v", err)
 	}
 
 	wire, err := provider.buildRequest(&litellm.Request{
@@ -279,6 +279,18 @@ func TestBuildRequestReasoningModelConstraints(t *testing.T) {
 		t.Fatalf("reasoning_effort = %q, want medium", wire.ReasoningEffort)
 	}
 
+	wire, err = provider.buildRequest(&litellm.Request{
+		Model:    "gpt-5.1",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingDisabled},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest disabled reasoning model: %v", err)
+	}
+	if wire.ReasoningEffort != "none" {
+		t.Fatalf("disabled reasoning_effort = %q, want none", wire.ReasoningEffort)
+	}
+
 	topP := 0.9
 	wire, err = provider.buildRequest(&litellm.Request{
 		Model:    "gpt-5.1",
@@ -286,13 +298,13 @@ func TestBuildRequestReasoningModelConstraints(t *testing.T) {
 		Messages: []litellm.Message{litellm.UserText("hi")},
 		Thinking: &litellm.Thinking{
 			Mode:   litellm.ThinkingEnabled,
-			Effort: "minimal",
+			Effort: "xhigh",
 		},
 	}, false)
 	if err != nil {
-		t.Fatalf("buildRequest minimal reasoning model: %v", err)
+		t.Fatalf("buildRequest xhigh reasoning model: %v", err)
 	}
-	if wire.ReasoningEffort != "minimal" || wire.TopP != nil {
+	if wire.ReasoningEffort != "xhigh" || wire.TopP != nil {
 		t.Fatalf("reasoning_effort/top_p = %q/%v", wire.ReasoningEffort, wire.TopP)
 	}
 }

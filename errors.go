@@ -41,6 +41,11 @@ func (e *LiteLLMError) Error() string {
 	if e.Code != "" && msg != "" {
 		return e.Code + ": " + msg
 	}
+	if msg != "" && shouldShowCause(e) {
+		if cause := strings.TrimSpace(e.Cause.Error()); cause != "" && cause != msg {
+			return msg + ": " + cause
+		}
+	}
 	if msg != "" {
 		return msg
 	}
@@ -51,6 +56,13 @@ func (e *LiteLLMError) Error() string {
 		return string(e.Type)
 	}
 	return "litellm error"
+}
+
+func shouldShowCause(e *LiteLLMError) bool {
+	if e == nil || e.Cause == nil {
+		return false
+	}
+	return e.Type == ErrorTypeNetwork || e.Type == ErrorTypeTimeout
 }
 
 func (e *LiteLLMError) Unwrap() error {

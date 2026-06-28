@@ -51,7 +51,7 @@ func runChat(ctx context.Context, client *litellm.Client) {
 			litellm.UserText("Explain Go interfaces in one sentence."),
 		},
 		MaxTokens: litellm.IntPtr(120),
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "minimal"},
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "low"},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -68,7 +68,7 @@ func runStream(ctx context.Context, client *litellm.Client) {
 			litellm.UserText("Explain Go interfaces in one sentence."),
 		},
 		MaxTokens: litellm.IntPtr(120),
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "minimal"},
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "low"},
 	}, printer.Handler())
 	if err != nil {
 		log.Fatal(err)
