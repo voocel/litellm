@@ -466,6 +466,173 @@ func TestResponsesReturnsStructuredValidationError(t *testing.T) {
 	}
 }
 
+func TestResponsesAPIChatRoutesToResponsesEndpoint(t *testing.T) {
+	var capturedPath string
+	var capturedBody map[string]any
+	provider, err := New(Config{
+		API:     APIResponses,
+		APIKey:  "test-key",
+		BaseURL: "https://example.test",
+		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			capturedPath = req.URL.Path
+			if err := json.NewDecoder(req.Body).Decode(&capturedBody); err != nil {
+				t.Fatalf("decode request body: %v", err)
+			}
+			return jsonResponse(http.StatusOK, `{
+				"id":"resp_123",
+				"model":"gpt-5.1",
+				"status":"completed",
+				"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],
+				"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}
+			}`), nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	maxTokens := 128
+	parallelToolCalls := false
+	resp, err := provider.Chat(context.Background(), &litellm.Request{
+		Model:     "gpt-5.1",
+		MaxTokens: &maxTokens,
+		Messages: []litellm.Message{
+			litellm.System("Follow instructions."),
+			litellm.UserText("hi"),
+		},
+		Tools:    []litellm.Tool{mustTool(t, "lookup", "Lookup.", map[string]any{"type": "object"})},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "medium"},
+		ProviderOptions: litellm.ProviderOptions{
+			ProviderOptionStore:             true,
+			ProviderOptionMetadata:          map[string]any{"tenant": "acme"},
+			ProviderOptionParallelToolCalls: parallelToolCalls,
+			ProviderOptionVerbosity:         "low",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	if resp.Text() != "ok" {
+		t.Fatalf("Text = %q", resp.Text())
+	}
+	if capturedPath != "/v1/responses" {
+		t.Fatalf("path = %q, want /v1/responses", capturedPath)
+	}
+	if capturedBody["input"] != "hi" || capturedBody["instructions"] != "Follow instructions." {
+		t.Fatalf("input/instructions = %#v/%#v", capturedBody["input"], capturedBody["instructions"])
+	}
+	if capturedBody["max_output_tokens"] != float64(maxTokens) {
+		t.Fatalf("max_output_tokens = %#v", capturedBody["max_output_tokens"])
+	}
+	reasoning := capturedBody["reasoning"].(map[string]any)
+	if reasoning["effort"] != "medium" {
+		t.Fatalf("reasoning = %#v", reasoning)
+	}
+	text := capturedBody["text"].(map[string]any)
+	if text["verbosity"] != "low" {
+		t.Fatalf("text = %#v", text)
+	}
+	if capturedBody["store"] != true || capturedBody["parallel_tool_calls"] != false {
+		t.Fatalf("store/parallel_tool_calls = %#v/%#v", capturedBody["store"], capturedBody["parallel_tool_calls"])
+	}
+}
+
+func TestResponsesAPIStreamRoutesToResponsesEndpoint(t *testing.T) {
+	var capturedPath string
+	var capturedBody map[string]any
+	provider, err := New(Config{
+		API:     APIResponses,
+		APIKey:  "test-key",
+		BaseURL: "https://example.test",
+		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			capturedPath = req.URL.Path
+			if err := json.NewDecoder(req.Body).Decode(&capturedBody); err != nil {
+				t.Fatalf("decode request body: %v", err)
+			}
+			return streamResponse(strings.Join([]string{
+				`data: {"type":"response.output_text.delta","delta":"o"}`,
+				`data: {"type":"response.output_text.delta","delta":"k"}`,
+				`data: {"type":"response.completed","response":{"model":"gpt-5.1","status":"completed","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`,
+				"",
+			}, "\n\n")), nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	includeObfuscation := false
+	stream, err := provider.Stream(context.Background(), &litellm.Request{
+		Model:    "gpt-5.1",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{
+			ProviderOptionStreamOptions: map[string]any{"include_obfuscation": includeObfuscation},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	resp, err := litellm.Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+	if resp.Text() != "ok" {
+		t.Fatalf("Text = %q", resp.Text())
+	}
+	if capturedPath != "/v1/responses" || capturedBody["stream"] != true {
+		t.Fatalf("path/stream = %q/%#v", capturedPath, capturedBody["stream"])
+	}
+	streamOptions := capturedBody["stream_options"].(map[string]any)
+	if streamOptions["include_obfuscation"] != false {
+		t.Fatalf("stream_options = %#v", streamOptions)
+	}
+}
+
+func TestResponsesAPIRejectsChatOnlyProviderOption(t *testing.T) {
+	provider, err := New(Config{API: APIResponses, APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = provider.Chat(context.Background(), &litellm.Request{
+		Model:    "gpt-5.1",
+		Messages: []litellm.Message{litellm.UserText("hello")},
+		ProviderOptions: litellm.ProviderOptions{
+			ProviderOptionFrequencyPenalty: 0.2,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "only supported with chat completions API") || !litellm.IsValidationError(err) {
+		t.Fatalf("expected chat-only provider option validation error, got %v", err)
+	}
+}
+
+func TestResponsesAPIRejectsUnsupportedRequestField(t *testing.T) {
+	provider, err := New(Config{API: APIResponses, APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = provider.Chat(context.Background(), &litellm.Request{
+		Model:    "gpt-5.1",
+		Messages: []litellm.Message{litellm.UserText("hello")},
+		Stop:     []string{"END"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not support request field") || !litellm.IsValidationError(err) {
+		t.Fatalf("expected unsupported request field validation error, got %v", err)
+	}
+}
+
+func TestResponsesAPIRejectsMinimalThinkingEffort(t *testing.T) {
+	provider, err := New(Config{API: APIResponses, APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = provider.Chat(context.Background(), &litellm.Request{
+		Model:    "gpt-5.1",
+		Messages: []litellm.Message{litellm.UserText("hello")},
+		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "minimal"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "reasoning_effort must be one of none, low, medium, high, xhigh") || !litellm.IsValidationError(err) {
+		t.Fatalf("expected minimal reasoning_effort validation error, got %v", err)
+	}
+}
+
 func TestResponsesThinkingRequiresExplicitMapping(t *testing.T) {
 	provider := mustProvider(t)
 	_, err := provider.buildResponsesRequest(&ResponsesRequest{

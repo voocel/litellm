@@ -17,9 +17,13 @@ import (
 const (
 	defaultBaseURL   = "https://api.openai.com"
 	defaultUserAgent = "litellm-go/0.1"
+
+	APIChat      = "chat"
+	APIResponses = "responses"
 )
 
 type Config struct {
+	API               string
 	APIKey            string
 	APIKeyFunc        func(context.Context) (string, error)
 	BaseURL           string
@@ -62,6 +66,11 @@ func New(cfg Config) (*Provider, error) {
 	if cfg.UserAgent == "" {
 		cfg.UserAgent = defaultUserAgent
 	}
+	api, err := normalizeAPI(cfg.API)
+	if err != nil {
+		return nil, err
+	}
+	cfg.API = api
 	return &Provider{cfg: cfg}, nil
 }
 
@@ -74,6 +83,9 @@ func (p *Provider) Name() string {
 }
 
 func (p *Provider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
+	if p.cfg.API == APIResponses {
+		return p.Responses(ctx, responsesRequestFromChat(req))
+	}
 	wire, err := p.buildRequest(req, false)
 	if err != nil {
 		return nil, litellm.WrapValidationError(p.Name(), err)
@@ -115,6 +127,9 @@ func (p *Provider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Res
 }
 
 func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.Stream, error) {
+	if p.cfg.API == APIResponses {
+		return p.ResponsesStream(ctx, responsesRequestFromChat(req))
+	}
 	wire, err := p.buildRequest(req, true)
 	if err != nil {
 		return nil, litellm.WrapValidationError(p.Name(), err)
@@ -140,6 +155,18 @@ func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.St
 		return nil, litellm.NewHTTPError(p.Name(), resp.StatusCode, string(data))
 	}
 	return newStream(resp, req), nil
+}
+
+func normalizeAPI(api string) (string, error) {
+	api = strings.ToLower(strings.TrimSpace(api))
+	switch api {
+	case "", APIChat:
+		return APIChat, nil
+	case APIResponses:
+		return APIResponses, nil
+	default:
+		return "", fmt.Errorf("openai: api must be chat or responses, got %q", api)
+	}
 }
 
 func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) {

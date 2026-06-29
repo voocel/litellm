@@ -351,3 +351,24 @@ func optionStreamOptions(key string, value any) (*streamOptions, error) {
 	}
 	return out, nil
 }
+
+func optionResponsesStreamOptions(key string, value any) (*ResponsesStreamOptions, error) {
+	options, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("openai: provider option %q must be stream_options object", key)
+	}
+	out := &ResponsesStreamOptions{}
+	for optionKey, optionValue := range options {
+		switch optionKey {
+		case "include_obfuscation":
+			v, err := optionBool(key+"."+optionKey, optionValue)
+			if err != nil {
+				return nil, err
+			}
+			out.IncludeObfuscation = &v
+		default:
+			return nil, fmt.Errorf("openai: unsupported responses stream_options field %q", optionKey)
+		}
+	}
+	return out, nil
+}

@@ -246,6 +246,10 @@ type Request struct {
 	captureRawResponse bool
 }
 
+func (r *Request) CaptureRawResponse() bool {
+	return r != nil && r.captureRawResponse
+}
+
 func cloneBytes(b []byte) []byte {
 	if len(b) == 0 {
 		return nil

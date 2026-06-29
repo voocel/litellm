@@ -57,12 +57,43 @@ type ResponsesRequest struct {
 	Prompt map[string]any
 
 	CaptureRawResponse bool
+
+	providerOptions   map[string]any
+	unsupportedFields []string
 }
 
 type ResponsesTool map[string]any
 
 type ResponsesStreamOptions struct {
 	IncludeObfuscation *bool `json:"include_obfuscation,omitempty"`
+}
+
+func responsesRequestFromChat(req *litellm.Request) *ResponsesRequest {
+	if req == nil {
+		return nil
+	}
+	out := &ResponsesRequest{
+		Model:              req.Model,
+		Messages:           append([]litellm.Message(nil), req.Messages...),
+		MaxOutputTokens:    req.MaxTokens,
+		Temperature:        req.Temperature,
+		TopP:               req.TopP,
+		Tools:              append([]litellm.Tool(nil), req.Tools...),
+		ToolChoice:         req.ToolChoice,
+		ResponseFormat:     req.ResponseFormat,
+		Thinking:           req.Thinking,
+		CaptureRawResponse: req.CaptureRawResponse(),
+	}
+	if len(req.ProviderOptions) > 0 {
+		out.providerOptions = cloneMapAny(map[string]any(req.ProviderOptions))
+	}
+	if len(req.Stop) > 0 {
+		out.unsupportedFields = append(out.unsupportedFields, "stop")
+	}
+	if req.Cache != nil {
+		out.unsupportedFields = append(out.unsupportedFields, "cache")
+	}
+	return out
 }
 
 type responsesRequest struct {
@@ -359,44 +390,51 @@ func (p *Provider) ResponsesStream(ctx context.Context, req *ResponsesRequest) (
 }
 
 func (p *Provider) buildResponsesRequest(req *ResponsesRequest, stream bool) (*responsesRequest, error) {
-	if err := validateResponsesRequest(req, stream); err != nil {
+	if req == nil {
+		return nil, fmt.Errorf("openai: responses request cannot be nil")
+	}
+	effective := *req
+	if err := applyResponsesProviderOptions(&effective, stream); err != nil {
+		return nil, err
+	}
+	if err := validateResponsesRequest(&effective, stream); err != nil {
 		return nil, err
 	}
 	out := &responsesRequest{
-		Model:                req.Model,
-		Conversation:         req.Conversation,
-		PreviousResponseID:   req.PreviousResponseID,
-		ContextManagement:    cloneMapAnySlice(req.ContextManagement),
-		MaxOutputTokens:      req.MaxOutputTokens,
-		MaxToolCalls:         req.MaxToolCalls,
-		Include:              append([]string(nil), req.Include...),
-		TopLogprobs:          req.TopLogprobs,
-		Temperature:          req.Temperature,
-		TopP:                 req.TopP,
-		Truncation:           req.Truncation,
-		ToolChoice:           req.ToolChoice,
-		ParallelToolCalls:    req.ParallelToolCalls,
-		PromptCacheKey:       req.PromptCacheKey,
-		PromptCacheRetention: req.PromptCacheRetention,
-		Metadata:             cloneStringMap(req.Metadata),
-		SafetyIdentifier:     req.SafetyIdentifier,
-		ServiceTier:          req.ServiceTier,
-		Background:           req.Background,
-		Store:                req.Store,
-		StreamOptions:        cloneResponsesStreamOptions(req.StreamOptions),
-		Prompt:               cloneMapAny(req.Prompt),
+		Model:                effective.Model,
+		Conversation:         effective.Conversation,
+		PreviousResponseID:   effective.PreviousResponseID,
+		ContextManagement:    cloneMapAnySlice(effective.ContextManagement),
+		MaxOutputTokens:      effective.MaxOutputTokens,
+		MaxToolCalls:         effective.MaxToolCalls,
+		Include:              append([]string(nil), effective.Include...),
+		TopLogprobs:          effective.TopLogprobs,
+		Temperature:          effective.Temperature,
+		TopP:                 effective.TopP,
+		Truncation:           effective.Truncation,
+		ToolChoice:           effective.ToolChoice,
+		ParallelToolCalls:    effective.ParallelToolCalls,
+		PromptCacheKey:       effective.PromptCacheKey,
+		PromptCacheRetention: effective.PromptCacheRetention,
+		Metadata:             cloneStringMap(effective.Metadata),
+		SafetyIdentifier:     effective.SafetyIdentifier,
+		ServiceTier:          effective.ServiceTier,
+		Background:           effective.Background,
+		Store:                effective.Store,
+		StreamOptions:        cloneResponsesStreamOptions(effective.StreamOptions),
+		Prompt:               cloneMapAny(effective.Prompt),
 	}
 	if stream {
 		out.Stream = litellm.Bool(true)
 	}
-	out.Input = cloneAny(req.Input)
-	if len(req.Messages) > 0 {
-		instructions, messages, err := responsesInstructions(req.Messages)
+	out.Input = cloneAny(effective.Input)
+	if len(effective.Messages) > 0 {
+		instructions, messages, err := responsesInstructions(effective.Messages)
 		if err != nil {
 			return nil, err
 		}
-		if req.Instructions != "" {
-			instructions = strings.TrimSpace(strings.Join([]string{req.Instructions, instructions}, "\n"))
+		if effective.Instructions != "" {
+			instructions = strings.TrimSpace(strings.Join([]string{effective.Instructions, instructions}, "\n"))
 		}
 		out.Instructions = instructions
 		if out.Input != nil && len(messages) > 0 {
@@ -416,19 +454,19 @@ func (p *Provider) buildResponsesRequest(req *ResponsesRequest, stream bool) (*r
 			}
 		}
 	} else {
-		out.Instructions = req.Instructions
+		out.Instructions = effective.Instructions
 	}
-	text, err := p.responsesText(req)
+	text, err := p.responsesText(&effective)
 	if err != nil {
 		return nil, err
 	}
 	out.Text = text
-	reasoning, err := responsesReasoningConfig(req)
+	reasoning, err := responsesReasoningConfig(&effective)
 	if err != nil {
 		return nil, err
 	}
 	out.Reasoning = reasoning
-	tools, err := responsesTools(req.Tools, req.OpenAITools)
+	tools, err := responsesTools(effective.Tools, effective.OpenAITools)
 	if err != nil {
 		return nil, err
 	}
@@ -437,11 +475,11 @@ func (p *Provider) buildResponsesRequest(req *ResponsesRequest, stream bool) (*r
 }
 
 func validateResponsesRequest(req *ResponsesRequest, stream bool) error {
-	if req == nil {
-		return fmt.Errorf("openai: responses request cannot be nil")
-	}
 	if req.Model == "" {
 		return fmt.Errorf("openai: model is required for responses request")
+	}
+	if len(req.unsupportedFields) > 0 {
+		return fmt.Errorf("openai: responses API does not support request field(s): %s", strings.Join(req.unsupportedFields, ", "))
 	}
 	if req.Conversation != nil && req.PreviousResponseID != "" {
 		return fmt.Errorf("openai: conversation and previous_response_id are mutually exclusive")
@@ -471,6 +509,90 @@ func validateResponsesRequest(req *ResponsesRequest, stream bool) error {
 		toolType, ok := tool["type"].(string)
 		if !ok || strings.TrimSpace(toolType) == "" {
 			return fmt.Errorf("openai: openai_tools[%d].type is required", i)
+		}
+	}
+	return nil
+}
+
+func applyResponsesProviderOptions(req *ResponsesRequest, stream bool) error {
+	if req == nil {
+		return nil
+	}
+	for key := range req.providerOptions {
+		if _, ok := providerOptionKeys[key]; !ok {
+			return fmt.Errorf("openai: unsupported provider option %q", key)
+		}
+	}
+	for key, value := range req.providerOptions {
+		switch key {
+		case ProviderOptionStore:
+			v, err := optionBool(key, value)
+			if err != nil {
+				return err
+			}
+			req.Store = &v
+		case ProviderOptionStreamOptions:
+			v, err := optionResponsesStreamOptions(key, value)
+			if err != nil {
+				return err
+			}
+			if !stream {
+				return fmt.Errorf("openai: provider option %q requires stream request", key)
+			}
+			req.StreamOptions = v
+		case ProviderOptionPromptCacheKey:
+			v, err := optionString(key, value)
+			if err != nil {
+				return err
+			}
+			req.PromptCacheKey = v
+		case ProviderOptionPromptCacheRetention:
+			v, err := optionString(key, value)
+			if err != nil {
+				return err
+			}
+			if err := validatePromptCacheRetention(v); err != nil {
+				return err
+			}
+			req.PromptCacheRetention = v
+		case ProviderOptionMetadata:
+			v, err := optionStringMap(key, value)
+			if err != nil {
+				return err
+			}
+			req.Metadata = v
+		case ProviderOptionServiceTier:
+			v, err := optionString(key, value)
+			if err != nil {
+				return err
+			}
+			req.ServiceTier = v
+		case ProviderOptionSafetyIdentifier:
+			v, err := optionString(key, value)
+			if err != nil {
+				return err
+			}
+			req.SafetyIdentifier = v
+		case ProviderOptionVerbosity:
+			v, err := optionString(key, value)
+			if err != nil {
+				return err
+			}
+			req.TextVerbosity = v
+		case ProviderOptionParallelToolCalls:
+			v, err := optionBool(key, value)
+			if err != nil {
+				return err
+			}
+			req.ParallelToolCalls = &v
+		case ProviderOptionTopLogprobs:
+			v, err := optionInt(key, value)
+			if err != nil {
+				return err
+			}
+			req.TopLogprobs = &v
+		default:
+			return fmt.Errorf("openai: provider option %q is only supported with chat completions API", key)
 		}
 	}
 	return nil
@@ -713,6 +835,9 @@ func responsesReasoningConfig(req *ResponsesRequest) (*responsesReasoning, error
 	}
 	if out.Effort == "" && out.Summary == "" {
 		return nil, nil
+	}
+	if err := validateOneOf("reasoning_effort", out.Effort, "none", "low", "medium", "high", "xhigh"); err != nil {
+		return nil, fmt.Errorf("openai: %w", err)
 	}
 	return out, nil
 }

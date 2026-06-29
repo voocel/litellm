@@ -340,6 +340,41 @@ func TestChatRetriesWhenRetryPolicyIsConfigured(t *testing.T) {
 	}
 }
 
+func TestNewRejectsUnknownAPI(t *testing.T) {
+	_, err := New(Config{APIKey: "test-key", API: "legacy"})
+	if err == nil || !strings.Contains(err.Error(), "api must be chat or responses") {
+		t.Fatalf("expected api validation error, got %v", err)
+	}
+}
+
+func TestDefaultAPIRoutesChatToCompletionsEndpoint(t *testing.T) {
+	var capturedPath string
+	provider, err := New(Config{
+		APIKey:  "test-key",
+		BaseURL: "https://example.test",
+		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			capturedPath = req.URL.Path
+			return jsonResponse(http.StatusOK, `{
+				"model":"gpt-4.1",
+				"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]
+			}`), nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = provider.Chat(context.Background(), &litellm.Request{
+		Model:    "gpt-4.1",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	if capturedPath != "/v1/chat/completions" {
+		t.Fatalf("path = %q, want /v1/chat/completions", capturedPath)
+	}
+}
+
 func TestChatSetsProviderHeaders(t *testing.T) {
 	provider, err := New(Config{
 		APIKey:    "test-key",
