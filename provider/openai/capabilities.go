@@ -1,6 +1,30 @@
 package openai
 
-import "github.com/voocel/litellm"
+import (
+	"net/url"
+	"strings"
+
+	"github.com/voocel/litellm"
+)
+
+// promptCacheParamsSupport reports whether this endpoint is trusted to accept
+// OpenAI's prompt cache params (prompt_cache_key / prompt_cache_retention).
+// Only the official endpoint guarantees the field contract; see
+// Config.PromptCacheParams for the opt-in on compatible backends.
+func (p *Provider) promptCacheParamsSupport() litellm.Support {
+	if p.cfg.PromptCacheParams || isOfficialBaseURL(p.cfg.BaseURL) {
+		return litellm.SupportYes
+	}
+	return litellm.SupportUnknown
+}
+
+func isOfficialBaseURL(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Hostname(), "api.openai.com")
+}
 
 func (p *Provider) Capabilities(model string) litellm.Capabilities {
 	reasoningModel := p.isReasoningModel(model)
@@ -43,8 +67,8 @@ func (p *Provider) Capabilities(model string) litellm.Capabilities {
 		},
 		Cache: litellm.CacheCapabilities{
 			Block:      litellm.SupportNo,
-			PromptKey:  litellm.SupportYes,
-			Retention:  litellm.SupportYes,
+			PromptKey:  p.promptCacheParamsSupport(),
+			Retention:  p.promptCacheParamsSupport(),
 			UsageRead:  litellm.SupportYes,
 			UsageWrite: litellm.SupportNo,
 		},

@@ -33,6 +33,15 @@ type Config struct {
 	StreamIdleTimeout time.Duration
 	UserAgent         string
 	Headers           map[string]string
+
+	// PromptCacheParams declares that this endpoint accepts OpenAI's prompt
+	// cache params (prompt_cache_key / prompt_cache_retention). By default
+	// only the official api.openai.com endpoint advertises them in
+	// Capabilities: OpenAI-compatible backends have no unknown-field
+	// contract — strict ones (Groq, Cerebras, Fireworks, Volcengine) reject
+	// such requests with 400/422, and re-marshalling relays silently drop
+	// the fields. Set this for passthrough relays known to forward them.
+	PromptCacheParams bool
 }
 
 type HTTPClient interface {
