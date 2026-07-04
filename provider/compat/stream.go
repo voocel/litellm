@@ -26,6 +26,19 @@ type stream struct {
 	lastReasoning string
 	toolIDs       map[toolKey]string
 	toolStarted   map[toolKey]bool
+	toolPending   map[toolKey]*pendingTool
+}
+
+// pendingTool buffers a tool call whose opening chunk did not carry a name.
+// Several OpenAI-compatible gateways (vLLM/sglang deployments, relay services)
+// send the first delta with only an id and deliver function.name in a later
+// chunk. Emitting ToolUseStart with an empty name at that point loses the name
+// forever — ToolUseDelta has no channel to backfill it — and the consumer ends
+// up dispatching `tool "" not found`. Buffer until the name arrives (or
+// finish_reason forces a close), then flush Start + accumulated arguments.
+type pendingTool struct {
+	name string
+	args strings.Builder
 }
 
 func newStream(resp *http.Response, req *litellm.Request, spec Spec) *stream {
@@ -40,6 +53,7 @@ func newStream(resp *http.Response, req *litellm.Request, spec Spec) *stream {
 		model:       req.Model,
 		toolIDs:     make(map[toolKey]string),
 		toolStarted: make(map[toolKey]bool),
+		toolPending: make(map[toolKey]*pendingTool),
 	}
 }
 
@@ -181,12 +195,21 @@ func (s *stream) events(chunk streamChunk) ([]litellm.Event, error) {
 // Compat providers carry no per-call terminator, so completion is inferred from
 // finish_reason. Returns the events and clears the open set so a stream with
 // multiple finish_reason chunks does not double-close.
+//
+// Calls still pending (the name never arrived) are flushed here with whatever
+// the provider sent — an empty name surfaces as a visible downstream error
+// instead of the call being silently swallowed.
 func (s *stream) toolDoneEvents(choiceIndex int) []litellm.Event {
-	if len(s.toolStarted) == 0 {
+	if len(s.toolStarted) == 0 && len(s.toolPending) == 0 {
 		return nil
 	}
-	keys := make([]toolKey, 0, len(s.toolStarted))
+	keys := make([]toolKey, 0, len(s.toolStarted)+len(s.toolPending))
 	for key := range s.toolStarted {
+		if key.choice == choiceIndex {
+			keys = append(keys, key)
+		}
+	}
+	for key := range s.toolPending {
 		if key.choice == choiceIndex {
 			keys = append(keys, key)
 		}
@@ -199,6 +222,9 @@ func (s *stream) toolDoneEvents(choiceIndex int) []litellm.Event {
 	})
 	events := make([]litellm.Event, 0, len(keys))
 	for _, key := range keys {
+		if p := s.toolPending[key]; p != nil {
+			events = append(events, s.flushPending(key, p)...)
+		}
 		events = append(events, litellm.ToolUseDone{
 			ID:          s.toolIDs[key],
 			Index:       litellm.IntPtr(key.call),
@@ -343,14 +369,49 @@ func (s *stream) toolEvents(raw any, choiceIndex int) ([]litellm.Event, error) {
 	// chunks deliver argument deltas (often with the id omitted, which we backfill
 	// above). Without this guard a backfilled id would re-trigger a start for every
 	// delta, splitting one call into several empty-named duplicates.
-	if !s.toolStarted[key] && (id != "" || name != "") {
-		s.toolStarted[key] = true
-		events = append(events, litellm.ToolUseStart{ID: id, Name: name, Index: litellm.IntPtr(index), OutputIndex: litellm.IntPtr(choiceIndex)})
+	if s.toolStarted[key] {
+		if args != "" {
+			events = append(events, litellm.ToolUseDelta{ID: id, Index: litellm.IntPtr(index), OutputIndex: litellm.IntPtr(choiceIndex), ArgumentsDelta: []byte(args)})
+		}
+		return events, nil
 	}
-	if args != "" {
-		events = append(events, litellm.ToolUseDelta{ID: id, Index: litellm.IntPtr(index), OutputIndex: litellm.IntPtr(choiceIndex), ArgumentsDelta: []byte(args)})
+	if id == "" && name == "" && args == "" {
+		return events, nil
 	}
+	// Not started yet: hold the call until we know its name. Keep the first
+	// non-empty name and ignore later ones — gateways that resend the full name
+	// on every chunk would corrupt a concatenating accumulator, and genuinely
+	// fragmented names are unheard of (names are short single tokens).
+	p := s.toolPending[key]
+	if p == nil {
+		p = &pendingTool{}
+		s.toolPending[key] = p
+	}
+	if p.name == "" {
+		p.name = name
+	}
+	p.args.WriteString(args)
+	if p.name == "" {
+		return events, nil
+	}
+	events = append(events, s.flushPending(key, p)...)
 	return events, nil
+}
+
+// flushPending promotes a buffered call to started: emits ToolUseStart with the
+// resolved name plus one ToolUseDelta carrying the arguments accumulated while
+// the name was outstanding.
+func (s *stream) flushPending(key toolKey, p *pendingTool) []litellm.Event {
+	s.toolStarted[key] = true
+	delete(s.toolPending, key)
+	id := s.toolIDs[key]
+	events := []litellm.Event{
+		litellm.ToolUseStart{ID: id, Name: p.name, Index: litellm.IntPtr(key.call), OutputIndex: litellm.IntPtr(key.choice)},
+	}
+	if p.args.Len() > 0 {
+		events = append(events, litellm.ToolUseDelta{ID: id, Index: litellm.IntPtr(key.call), OutputIndex: litellm.IntPtr(key.choice), ArgumentsDelta: []byte(p.args.String())})
+	}
+	return events
 }
 
 func optionalString(m map[string]any, key, provider, context string) (string, error) {

@@ -193,6 +193,99 @@ func TestStreamMergesToolCallChunksIntoOneStart(t *testing.T) {
 	}
 }
 
+// TestStreamHoldsToolCallUntilLateName reproduces the gateway behavior behind
+// ainovel-cli issue #75: the opening chunk carries only the id (arguments may
+// even start streaming) and function.name arrives in a later chunk. The stream
+// must defer ToolUseStart until the name is known — an early start with an
+// empty name can never be corrected and downstream dispatch fails with
+// `tool "" not found`.
+func TestStreamHoldsToolCallUntilLateName(t *testing.T) {
+	stream := streamFromSSE(t, strings.Join([]string{
+		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"arguments":"{\"q\":"}}]}}]}`,
+		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"name":"lookup","arguments":"\"x\"}"}}]}}]}`,
+		`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+		``,
+	}, "\n"), Spec{Name: "compat"}, nil)
+	resp, err := litellm.Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+	calls := resp.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("tool calls len = %d, want 1: %#v", len(calls), calls)
+	}
+	if calls[0].ID != "call_1" || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
+		t.Fatalf("call = %#v", calls[0])
+	}
+}
+
+// TestStreamIgnoresResentToolCallName guards against gateways that echo the
+// full function.name on every argument chunk: the first non-empty name wins and
+// later repeats must neither concatenate nor re-open the call.
+func TestStreamIgnoresResentToolCallName(t *testing.T) {
+	stream := streamFromSSE(t, strings.Join([]string{
+		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"lookup","arguments":"{\"q\":"}}]}}]}`,
+		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"name":"lookup","arguments":"\"x\"}"}}]}}]}`,
+		`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+		``,
+	}, "\n"), Spec{Name: "compat"}, nil)
+	resp, err := litellm.Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+	calls := resp.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("tool calls len = %d, want 1: %#v", len(calls), calls)
+	}
+	if calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
+		t.Fatalf("call = %#v", calls[0])
+	}
+}
+
+// TestStreamFlushesNamelessToolCallOnFinish covers the pathological case where
+// the name never arrives at all: finish_reason must flush the buffered call
+// (empty name and all) so the consumer sees a visible dispatch error instead of
+// the call silently vanishing.
+func TestStreamFlushesNamelessToolCallOnFinish(t *testing.T) {
+	stream := streamFromSSE(t, strings.Join([]string{
+		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"arguments":"{}"}}]}}]}`,
+		`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+		``,
+	}, "\n"), Spec{Name: "compat"}, nil)
+	var starts []litellm.ToolUseStart
+	var dones []litellm.ToolUseDone
+	var args strings.Builder
+	for {
+		ev, err := stream.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next returned error: %v", err)
+		}
+		switch e := ev.(type) {
+		case litellm.ToolUseStart:
+			starts = append(starts, e)
+		case litellm.ToolUseDelta:
+			args.Write(e.ArgumentsDelta)
+		case litellm.ToolUseDone:
+			dones = append(dones, e)
+		}
+	}
+	if len(starts) != 1 || starts[0].ID != "call_1" || starts[0].Name != "" {
+		t.Fatalf("starts = %+v, want 1 start with id call_1 and empty name", starts)
+	}
+	if args.String() != `{}` {
+		t.Fatalf("aggregated arguments = %q", args.String())
+	}
+	if len(dones) != 1 || dones[0].ID != "call_1" {
+		t.Fatalf("dones = %+v", dones)
+	}
+}
+
 // TestStreamClosesArglessToolCall reproduces an argument-less tool call: the
 // model opens a call and finishes without streaming any arguments. The stream
 // must still emit ToolUseDone so the consumer can finalize the call.
