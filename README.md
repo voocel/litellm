@@ -236,7 +236,7 @@ resp, err := client.Chat(ctx, litellm.Request{
 })
 ```
 
-Provider constraints are validated locally. For example, Anthropic thinking requires `max_tokens >= 1024`, a budget or effort, and no conflicting explicit temperature.
+Provider constraints are validated locally. For example, on Claude models before 4.6 Anthropic thinking requires `max_tokens >= 1024`, a budget or effort, and no conflicting explicit temperature; Claude 4.6 and later use adaptive thinking and map effort to `output_config.effort`.
 Portable effort values are `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; providers that require token budgets map these values to `budget_tokens`.
 Use `client.Capabilities(model)` or `litellm.GetCapabilities(provider, model)` for UI/preflight checks across providers.
 

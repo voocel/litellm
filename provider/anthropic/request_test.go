@@ -59,9 +59,12 @@ func TestBuildRequestThinkingToolsCacheRoundTrip(t *testing.T) {
 			Effort: "low",
 		},
 	}
-	wire, err := provider.buildRequest(req, false)
+	wire, warnings, err := provider.buildRequest(req, false)
 	if err != nil {
 		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none", warnings)
 	}
 	testgolden.AssertJSON(t, "../../testdata/anthropic/request_tools_cache.golden.json", wire)
 
@@ -97,7 +100,7 @@ func TestBuildRequestUsesRedactedThinkingData(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 	maxTokens := 4096
-	wire, err := provider.buildRequest(&litellm.Request{
+	wire, _, err := provider.buildRequest(&litellm.Request{
 		Model:     "claude",
 		MaxTokens: &maxTokens,
 		Messages: []litellm.Message{
@@ -126,7 +129,7 @@ func TestBuildRequestRejectsInvalidBlockCache(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 	maxTokens := 4096
-	_, err = provider.buildRequest(&litellm.Request{
+	_, _, err = provider.buildRequest(&litellm.Request{
 		Model:     "claude",
 		MaxTokens: &maxTokens,
 		Messages: []litellm.Message{
@@ -140,7 +143,7 @@ func TestBuildRequestRejectsInvalidBlockCache(t *testing.T) {
 		t.Fatalf("expected cache ttl error, got %v", err)
 	}
 
-	_, err = provider.buildRequest(&litellm.Request{
+	_, _, err = provider.buildRequest(&litellm.Request{
 		Model:     "claude",
 		MaxTokens: &maxTokens,
 		Messages: []litellm.Message{
@@ -161,7 +164,7 @@ func TestBuildRequestRejectsOneHourCacheAfterFiveMinuteCache(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 	maxTokens := 4096
-	_, err = provider.buildRequest(&litellm.Request{
+	_, _, err = provider.buildRequest(&litellm.Request{
 		Model:     "claude",
 		MaxTokens: &maxTokens,
 		Messages: []litellm.Message{
@@ -186,7 +189,7 @@ func TestBuildRequestAllowsOneHourCacheBeforeFiveMinuteCache(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 	maxTokens := 4096
-	_, err = provider.buildRequest(&litellm.Request{
+	_, _, err = provider.buildRequest(&litellm.Request{
 		Model:     "claude",
 		MaxTokens: &maxTokens,
 		Messages: []litellm.Message{
@@ -211,7 +214,7 @@ func TestBuildRequestRejectsSilentThinkingBudgetDefault(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 	maxTokens := 4096
-	_, err = provider.buildRequest(&litellm.Request{
+	_, _, err = provider.buildRequest(&litellm.Request{
 		Model:     "claude",
 		MaxTokens: &maxTokens,
 		Messages:  []litellm.Message{litellm.UserText("hi")},
@@ -228,7 +231,7 @@ func TestBuildRequestRejectsUnknownThinkingEffort(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 	maxTokens := 4096
-	_, err = provider.buildRequest(&litellm.Request{
+	_, _, err = provider.buildRequest(&litellm.Request{
 		Model:     "claude",
 		MaxTokens: &maxTokens,
 		Messages:  []litellm.Message{litellm.UserText("hi")},
@@ -245,7 +248,7 @@ func TestBuildRequestMapsMaxThinkingEffort(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 	maxTokens := 65536
-	wire, err := provider.buildRequest(&litellm.Request{
+	wire, _, err := provider.buildRequest(&litellm.Request{
 		Model:     "claude",
 		MaxTokens: &maxTokens,
 		Messages:  []litellm.Message{litellm.UserText("hi")},
@@ -266,7 +269,7 @@ func TestBuildRequestRejectsThinkingBudgetEqualToMaxTokens(t *testing.T) {
 	}
 	maxTokens := 1024
 	budget := 1024
-	_, err = provider.buildRequest(&litellm.Request{
+	_, _, err = provider.buildRequest(&litellm.Request{
 		Model:     "claude",
 		MaxTokens: &maxTokens,
 		Messages:  []litellm.Message{litellm.UserText("hi")},
@@ -285,7 +288,7 @@ func TestBuildRequestValidatesThinkingTopP(t *testing.T) {
 	maxTokens := 2048
 	budget := 1024
 	topP := 0.94
-	_, err = provider.buildRequest(&litellm.Request{
+	_, _, err = provider.buildRequest(&litellm.Request{
 		Model:     "claude",
 		MaxTokens: &maxTokens,
 		TopP:      &topP,
@@ -297,7 +300,7 @@ func TestBuildRequestValidatesThinkingTopP(t *testing.T) {
 	}
 
 	topP = 0.95
-	if _, err := provider.buildRequest(&litellm.Request{
+	if _, _, err := provider.buildRequest(&litellm.Request{
 		Model:     "claude",
 		MaxTokens: &maxTokens,
 		TopP:      &topP,
@@ -315,7 +318,7 @@ func TestBuildRequestRejectsForcedToolChoiceWithThinking(t *testing.T) {
 	}
 	maxTokens := 2048
 	budget := 1024
-	_, err = provider.buildRequest(&litellm.Request{
+	_, _, err = provider.buildRequest(&litellm.Request{
 		Model:      "claude",
 		MaxTokens:  &maxTokens,
 		Messages:   []litellm.Message{litellm.UserText("hi")},
@@ -326,7 +329,7 @@ func TestBuildRequestRejectsForcedToolChoiceWithThinking(t *testing.T) {
 		t.Fatalf("expected tool_choice error, got %v", err)
 	}
 
-	if _, err := provider.buildRequest(&litellm.Request{
+	if _, _, err := provider.buildRequest(&litellm.Request{
 		Model:      "claude",
 		MaxTokens:  &maxTokens,
 		Messages:   []litellm.Message{litellm.UserText("hi")},
@@ -342,7 +345,7 @@ func TestBuildRequestRequiresMaxTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
-	_, err = provider.buildRequest(&litellm.Request{
+	_, _, err = provider.buildRequest(&litellm.Request{
 		Model:    "claude",
 		Messages: []litellm.Message{litellm.UserText("hi")},
 	}, false)
@@ -373,7 +376,7 @@ func TestBuildRequestRejectsTemperatureAndTopP(t *testing.T) {
 	maxTokens := 1024
 	temp := 0.7
 	topP := 0.9
-	_, err = provider.buildRequest(&litellm.Request{
+	_, _, err = provider.buildRequest(&litellm.Request{
 		Model:       "claude",
 		MaxTokens:   &maxTokens,
 		Temperature: &temp,
@@ -392,7 +395,7 @@ func TestBuildRequestKeepsTopPWhenTemperatureUnset(t *testing.T) {
 	}
 	maxTokens := 1024
 	topP := 0.9
-	wire, err := provider.buildRequest(&litellm.Request{
+	wire, _, err := provider.buildRequest(&litellm.Request{
 		Model:     "claude",
 		MaxTokens: &maxTokens,
 		TopP:      &topP,
@@ -412,7 +415,7 @@ func TestBuildRequestProviderOptions(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 	maxTokens := 1024
-	wire, err := provider.buildRequest(&litellm.Request{
+	wire, _, err := provider.buildRequest(&litellm.Request{
 		Model:     "claude",
 		MaxTokens: &maxTokens,
 		Messages:  []litellm.Message{litellm.UserText("hi")},
@@ -427,7 +430,7 @@ func TestBuildRequestProviderOptions(t *testing.T) {
 		t.Fatalf("metadata = %#v", wire.Metadata)
 	}
 
-	_, err = provider.buildRequest(&litellm.Request{
+	_, _, err = provider.buildRequest(&litellm.Request{
 		Model:           "claude",
 		MaxTokens:       &maxTokens,
 		Messages:        []litellm.Message{litellm.UserText("hi")},
@@ -549,38 +552,40 @@ func TestConvertResponsePreservesRedactedThinkingData(t *testing.T) {
 	}
 }
 
-func TestConvertResponseMapsThinkingTokenUsage(t *testing.T) {
+func TestConvertResponseMapsUsage(t *testing.T) {
 	resp, err := convertResponse(&anthropicResponse{
 		Model: "claude",
 		Usage: anthropicUsage{
-			InputTokens:  5,
-			OutputTokens: 9,
-			OutputTokensDetails: &anthropicOutputTokensDetails{
-				ThinkingTokens: 4,
-			},
+			InputTokens:          5,
+			OutputTokens:         9,
+			CacheReadInputTokens: 2,
 		},
 		Content: []anthropicContent{{Type: "text", Text: "ok"}},
 	}, "fallback")
 	if err != nil {
 		t.Fatalf("convertResponse returned error: %v", err)
 	}
-	if resp.Usage.ReasoningTokens != 4 {
-		t.Fatalf("reasoning tokens = %d, want 4", resp.Usage.ReasoningTokens)
-	}
-	if resp.Usage.OutputTokens != 9 || resp.Usage.TotalTokens != 14 {
+	if resp.Usage.InputTokens != 7 || resp.Usage.OutputTokens != 9 || resp.Usage.TotalTokens != 16 || resp.Usage.CacheReadTokens != 2 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
 }
 
-func TestConvertResponseRejectsUnsupportedContentType(t *testing.T) {
-	_, err := convertResponse(&anthropicResponse{
+func TestConvertResponseDropsUnsupportedContentTypeWithWarning(t *testing.T) {
+	resp, err := convertResponse(&anthropicResponse{
 		Model: "claude",
 		Content: []anthropicContent{
 			{Type: "server_tool_use"},
+			{Type: "text", Text: "ok"},
 		},
 	}, "fallback")
-	if err == nil || !strings.Contains(err.Error(), "unsupported response content type") {
-		t.Fatalf("expected unsupported content error, got %v", err)
+	if err != nil {
+		t.Fatalf("convertResponse returned error: %v", err)
+	}
+	if resp.Text() != "ok" {
+		t.Fatalf("text = %q", resp.Text())
+	}
+	if len(resp.Warnings) != 1 || resp.Warnings[0].Code != "anthropic.unsupported_content_block" {
+		t.Fatalf("warnings = %+v", resp.Warnings)
 	}
 }
 
@@ -607,7 +612,7 @@ func TestResponseBlocksRoundTripBackIntoAssistantMessage(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 	maxTokens := 4096
-	wire, err := provider.buildRequest(&litellm.Request{
+	wire, _, err := provider.buildRequest(&litellm.Request{
 		Model:     "claude",
 		MaxTokens: &maxTokens,
 		Messages: []litellm.Message{
@@ -645,7 +650,7 @@ func TestStreamPreservesRedactedThinkingData(t *testing.T) {
 		`event: message_stop`,
 		`data: {"type":"message_stop"}`,
 		``,
-	}, "\n")), &litellm.Request{Model: "claude"})
+	}, "\n")), &litellm.Request{Model: "claude"}, nil)
 	resp, err := litellm.Collect(stream)
 	if err != nil {
 		t.Fatalf("Collect returned error: %v", err)
@@ -659,7 +664,7 @@ func TestStreamPreservesRedactedThinkingData(t *testing.T) {
 	}
 }
 
-func TestStreamMapsThinkingTokenUsage(t *testing.T) {
+func TestStreamMergesUsageFromMessageDelta(t *testing.T) {
 	stream := newStream(streamResponse(strings.Join([]string{
 		`event: message_start`,
 		`data: {"type":"message_start","message":{"model":"claude","usage":{"input_tokens":5}}}`,
@@ -668,21 +673,18 @@ func TestStreamMapsThinkingTokenUsage(t *testing.T) {
 		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`,
 		``,
 		`event: message_delta`,
-		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":9,"output_tokens_details":{"thinking_tokens":4}}}`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":9}}`,
 		``,
 		`event: message_stop`,
 		`data: {"type":"message_stop"}`,
 		``,
-	}, "\n")), &litellm.Request{Model: "claude"})
+	}, "\n")), &litellm.Request{Model: "claude"}, nil)
 	resp, err := litellm.Collect(stream)
 	if err != nil {
 		t.Fatalf("Collect returned error: %v", err)
 	}
 	if resp.Text() != "ok" {
 		t.Fatalf("text = %q", resp.Text())
-	}
-	if resp.Usage.ReasoningTokens != 4 {
-		t.Fatalf("reasoning tokens = %d, want 4", resp.Usage.ReasoningTokens)
 	}
 	if resp.Usage.OutputTokens != 9 || resp.Usage.TotalTokens != 14 {
 		t.Fatalf("usage = %+v", resp.Usage)
@@ -694,10 +696,282 @@ func TestStreamRejectsEOFBeforeMessageStop(t *testing.T) {
 		`event: content_block_delta`,
 		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
 		``,
-	}, "\n")), &litellm.Request{Model: "claude"})
+	}, "\n")), &litellm.Request{Model: "claude"}, nil)
 	_, err := litellm.Collect(stream)
 	if err == nil || !strings.Contains(err.Error(), "before message_stop") || !litellm.IsProviderError(err) {
 		t.Fatalf("expected truncated stream error, got %v", err)
+	}
+}
+
+func TestBuildRequestAdaptiveThinkingOnModernModels(t *testing.T) {
+	provider, err := New(Config{APIKey: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	maxTokens := 4096
+	wire, warnings, err := provider.buildRequest(&litellm.Request{
+		Model:     "claude-opus-4-8",
+		MaxTokens: &maxTokens,
+		Messages:  []litellm.Message{litellm.UserText("hi")},
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "xhigh"},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none", warnings)
+	}
+	if wire.Thinking == nil || wire.Thinking.Type != "adaptive" || wire.Thinking.BudgetTokens != nil {
+		t.Fatalf("thinking = %+v, want adaptive without budget", wire.Thinking)
+	}
+	if wire.OutputConfig == nil || wire.OutputConfig.Effort != "xhigh" {
+		t.Fatalf("output_config = %+v, want effort xhigh", wire.OutputConfig)
+	}
+}
+
+func TestBuildRequestFoldsMinimalEffortWithWarning(t *testing.T) {
+	provider, err := New(Config{APIKey: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	maxTokens := 4096
+	wire, warnings, err := provider.buildRequest(&litellm.Request{
+		Model:     "claude-sonnet-5",
+		MaxTokens: &maxTokens,
+		Messages:  []litellm.Message{litellm.UserText("hi")},
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "minimal"},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	if wire.OutputConfig == nil || wire.OutputConfig.Effort != "low" {
+		t.Fatalf("output_config = %+v, want effort low", wire.OutputConfig)
+	}
+	if len(warnings) != 1 || warnings[0].Code != "anthropic.thinking_effort_folded" {
+		t.Fatalf("warnings = %+v", warnings)
+	}
+}
+
+func TestBuildRequestDropsBudgetOnAdaptiveModels(t *testing.T) {
+	provider, err := New(Config{APIKey: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	maxTokens := 4096
+	budget := 2048
+	wire, warnings, err := provider.buildRequest(&litellm.Request{
+		Model:     "claude-opus-4-7",
+		MaxTokens: &maxTokens,
+		Messages:  []litellm.Message{litellm.UserText("hi")},
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, BudgetTokens: &budget},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	if wire.Thinking == nil || wire.Thinking.Type != "adaptive" || wire.Thinking.BudgetTokens != nil {
+		t.Fatalf("thinking = %+v, want adaptive without budget", wire.Thinking)
+	}
+	if len(warnings) != 1 || warnings[0].Code != "anthropic.thinking_budget_dropped" {
+		t.Fatalf("warnings = %+v", warnings)
+	}
+}
+
+func TestBuildRequestKeepsBudgetOnClaude46(t *testing.T) {
+	provider, err := New(Config{APIKey: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	maxTokens := 4096
+	budget := 2048
+	wire, warnings, err := provider.buildRequest(&litellm.Request{
+		Model:     "claude-sonnet-4-6",
+		MaxTokens: &maxTokens,
+		Messages:  []litellm.Message{litellm.UserText("hi")},
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, BudgetTokens: &budget},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	if wire.Thinking == nil || wire.Thinking.Type != "enabled" || wire.Thinking.BudgetTokens == nil || *wire.Thinking.BudgetTokens != 2048 {
+		t.Fatalf("thinking = %+v, want enabled with budget 2048", wire.Thinking)
+	}
+	if len(warnings) != 1 || warnings[0].Code != "anthropic.thinking_budget_deprecated" {
+		t.Fatalf("warnings = %+v", warnings)
+	}
+}
+
+func TestBuildRequestClaude46FoldsXHighToMax(t *testing.T) {
+	provider, err := New(Config{APIKey: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	maxTokens := 4096
+	wire, warnings, err := provider.buildRequest(&litellm.Request{
+		Model:     "claude-opus-4-6",
+		MaxTokens: &maxTokens,
+		Messages:  []litellm.Message{litellm.UserText("hi")},
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "xhigh"},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	if wire.Thinking == nil || wire.Thinking.Type != "adaptive" {
+		t.Fatalf("thinking = %+v, want adaptive", wire.Thinking)
+	}
+	if wire.OutputConfig == nil || wire.OutputConfig.Effort != "max" {
+		t.Fatalf("output_config = %+v, want effort max", wire.OutputConfig)
+	}
+	if len(warnings) != 1 || warnings[0].Code != "anthropic.thinking_effort_folded" {
+		t.Fatalf("warnings = %+v", warnings)
+	}
+}
+
+func TestBuildRequestDropsSamplingOnModernModels(t *testing.T) {
+	provider, err := New(Config{APIKey: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	maxTokens := 1024
+	temp := 0.7
+	wire, warnings, err := provider.buildRequest(&litellm.Request{
+		Model:       "claude-sonnet-5",
+		MaxTokens:   &maxTokens,
+		Temperature: &temp,
+		Messages:    []litellm.Message{litellm.UserText("hi")},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	if wire.Temperature != nil {
+		t.Fatalf("temperature = %v, want dropped", *wire.Temperature)
+	}
+	if len(warnings) != 1 || warnings[0].Code != "anthropic.sampling_params_dropped" {
+		t.Fatalf("warnings = %+v", warnings)
+	}
+}
+
+func TestBuildRequestOmitsDisabledThinkingOnFable(t *testing.T) {
+	provider, err := New(Config{APIKey: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	maxTokens := 1024
+	wire, warnings, err := provider.buildRequest(&litellm.Request{
+		Model:     "claude-fable-5",
+		MaxTokens: &maxTokens,
+		Messages:  []litellm.Message{litellm.UserText("hi")},
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingDisabled},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	if wire.Thinking != nil {
+		t.Fatalf("thinking = %+v, want omitted", wire.Thinking)
+	}
+	if len(warnings) != 1 || warnings[0].Code != "anthropic.thinking_always_on" {
+		t.Fatalf("warnings = %+v", warnings)
+	}
+}
+
+func TestBuildRequestMapsIncludeOutputToDisplay(t *testing.T) {
+	provider, err := New(Config{APIKey: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	maxTokens := 4096
+	wire, _, err := provider.buildRequest(&litellm.Request{
+		Model:     "claude-opus-4-8",
+		MaxTokens: &maxTokens,
+		Messages:  []litellm.Message{litellm.UserText("hi")},
+		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, IncludeOutput: true},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	if wire.Thinking == nil || wire.Thinking.Display != "summarized" {
+		t.Fatalf("thinking = %+v, want display summarized", wire.Thinking)
+	}
+}
+
+func TestBuildRequestMapsJSONSchemaResponseFormat(t *testing.T) {
+	provider, err := New(Config{APIKey: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	maxTokens := 1024
+	schema, err := litellm.SchemaFrom(map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{"name": map[string]any{"type": "string"}},
+		"required":             []string{"name"},
+		"additionalProperties": false,
+	})
+	if err != nil {
+		t.Fatalf("SchemaFrom: %v", err)
+	}
+	wire, warnings, err := provider.buildRequest(&litellm.Request{
+		Model:     "claude-opus-4-8",
+		MaxTokens: &maxTokens,
+		Messages:  []litellm.Message{litellm.UserText("hi")},
+		ResponseFormat: &litellm.ResponseFormat{
+			Type:       litellm.ResponseFormatJSONSchema,
+			JSONSchema: &litellm.JSONSchema{Name: "person", Schema: schema},
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none", warnings)
+	}
+	if wire.OutputConfig == nil || wire.OutputConfig.Format == nil || wire.OutputConfig.Format.Type != "json_schema" {
+		t.Fatalf("output_config = %+v, want json_schema format", wire.OutputConfig)
+	}
+	if len(wire.OutputConfig.Format.Schema) == 0 {
+		t.Fatalf("format schema is empty")
+	}
+
+	_, _, err = provider.buildRequest(&litellm.Request{
+		Model:          "claude-opus-4-8",
+		MaxTokens:      &maxTokens,
+		Messages:       []litellm.Message{litellm.UserText("hi")},
+		ResponseFormat: &litellm.ResponseFormat{Type: litellm.ResponseFormatJSONObject},
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), "json_object is not supported") {
+		t.Fatalf("expected json_object error, got %v", err)
+	}
+}
+
+func TestBuildRequestMergesConsecutiveToolResultMessages(t *testing.T) {
+	provider, err := New(Config{APIKey: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	maxTokens := 1024
+	wire, _, err := provider.buildRequest(&litellm.Request{
+		Model:     "claude",
+		MaxTokens: &maxTokens,
+		Messages: []litellm.Message{
+			litellm.UserText("hi"),
+			litellm.Assistant(
+				litellm.ToolUseBlock{ID: "toolu_1", Name: "a", Arguments: litellm.MustJSONRaw(map[string]any{})},
+				litellm.ToolUseBlock{ID: "toolu_2", Name: "b", Arguments: litellm.MustJSONRaw(map[string]any{})},
+			),
+			litellm.ToolResultText("toolu_1", "one"),
+			litellm.ToolResultText("toolu_2", "two"),
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest returned error: %v", err)
+	}
+	if len(wire.Messages) != 3 {
+		t.Fatalf("messages = %d, want 3 (user, assistant, merged tool results)", len(wire.Messages))
+	}
+	last := wire.Messages[2]
+	if last.Role != "user" || len(last.Content) != 2 {
+		t.Fatalf("last message = %+v, want user with 2 tool_result blocks", last)
+	}
+	if last.Content[0].Type != "tool_result" || last.Content[1].Type != "tool_result" {
+		t.Fatalf("last message content = %+v", last.Content)
 	}
 }
 

@@ -62,11 +62,11 @@ type streamDelta struct {
 	StopReason  string `json:"stop_reason,omitempty"`
 }
 
-func newStream(resp *http.Response, req *litellm.Request) *stream {
+func newStream(resp *http.Response, req *litellm.Request, warnings []litellm.Warning) *stream {
 	scanner := bufio.NewScanner(resp.Body)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024)
-	return &stream{
+	s := &stream{
 		resp:             resp,
 		scanner:          scanner,
 		includeReasoning: req == nil || req.Thinking == nil || req.Thinking.Mode != litellm.ThinkingDisabled,
@@ -74,6 +74,10 @@ func newStream(resp *http.Response, req *litellm.Request) *stream {
 		toolIDs:          make(map[int]string),
 		toolNames:        make(map[int]string),
 	}
+	for _, w := range warnings {
+		s.pending = append(s.pending, litellm.WarningEvent{Warning: w})
+	}
+	return s
 }
 
 func (s *stream) Next() (litellm.Event, error) {
@@ -243,7 +247,6 @@ func convertStreamUsage(u *anthropicUsage, model string) litellm.Usage {
 		InputTokens:      u.InputTokens + u.CacheReadInputTokens,
 		OutputTokens:     u.OutputTokens,
 		TotalTokens:      u.InputTokens + u.CacheReadInputTokens + u.OutputTokens,
-		ReasoningTokens:  u.reasoningTokens(),
 		CacheReadTokens:  u.CacheReadInputTokens,
 		CacheWriteTokens: u.CacheCreationInputTokens,
 		Provider:         "anthropic",
@@ -259,9 +262,6 @@ func (s *stream) mergeUsage(u *anthropicUsage) {
 	}
 	if next.OutputTokens > 0 {
 		s.usage.OutputTokens = next.OutputTokens
-	}
-	if next.ReasoningTokens > 0 {
-		s.usage.ReasoningTokens = next.ReasoningTokens
 	}
 	if next.CacheWriteTokens > 0 {
 		s.usage.CacheWriteTokens = next.CacheWriteTokens

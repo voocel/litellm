@@ -15,15 +15,10 @@ type anthropicResponse struct {
 }
 
 type anthropicUsage struct {
-	InputTokens              int                           `json:"input_tokens"`
-	OutputTokens             int                           `json:"output_tokens"`
-	CacheCreationInputTokens int                           `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int                           `json:"cache_read_input_tokens,omitempty"`
-	OutputTokensDetails      *anthropicOutputTokensDetails `json:"output_tokens_details,omitempty"`
-}
-
-type anthropicOutputTokensDetails struct {
-	ThinkingTokens int `json:"thinking_tokens,omitempty"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }
 
 func convertResponse(resp *anthropicResponse, fallbackModel string) (*litellm.Response, error) {
@@ -38,7 +33,6 @@ func convertResponse(resp *anthropicResponse, fallbackModel string) (*litellm.Re
 			InputTokens:      resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens,
 			OutputTokens:     resp.Usage.OutputTokens,
 			TotalTokens:      resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.OutputTokens,
-			ReasoningTokens:  resp.Usage.reasoningTokens(),
 			CacheReadTokens:  resp.Usage.CacheReadInputTokens,
 			CacheWriteTokens: resp.Usage.CacheCreationInputTokens,
 			Provider:         "anthropic",
@@ -67,15 +61,12 @@ func convertResponse(resp *anthropicResponse, fallbackModel string) (*litellm.Re
 				Arguments: args,
 			})
 		default:
-			return nil, fmt.Errorf("anthropic: unsupported response content type %q", content.Type)
+			// Beta features (server tools, compaction, fallback blocks, ...)
+			// can add block types this provider does not model; keep the
+			// response usable and surface the drop instead of failing.
+			out.Warnings = append(out.Warnings, warning("anthropic.unsupported_content_block",
+				fmt.Sprintf("dropped unsupported response content block %q", content.Type)))
 		}
 	}
 	return out, nil
-}
-
-func (u anthropicUsage) reasoningTokens() int {
-	if u.OutputTokensDetails == nil {
-		return 0
-	}
-	return u.OutputTokensDetails.ThinkingTokens
 }

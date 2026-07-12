@@ -23,7 +23,7 @@ Portable `Thinking.Effort` values are `minimal`, `low`, `medium`, `high`, `xhigh
 | --- | --- | --- | --- | --- | --- | --- |
 | OpenAI Chat | partial | yes | partial | no | no | Only reasoning chat models are supported; accepted efforts are `low`, `medium`, `high`, and `xhigh`; disable sends `none`. |
 | OpenAI Responses | yes | yes | yes | no | yes | `IncludeOutput` maps to `reasoning.summary=auto`. Responses also exposes native `ReasoningEffort` and `ReasoningSummary`. |
-| Anthropic | yes | yes | yes | yes | no | Requires `MaxTokens`; effort maps to `budget_tokens`. |
+| Anthropic | yes | partial | yes | partial | partial | Requires `MaxTokens`. Claude 4.6+ uses adaptive thinking with `output_config.effort` (`minimal` folds to `low`; `xhigh` folds to `max` on 4.6); `budget_tokens` only on pre-4.7 models; Fable/Mythos cannot disable thinking; `IncludeOutput` maps to `display: summarized` on 4.7+. |
 | Bedrock | yes | yes | yes | yes | no | Claude models only; effort maps to Anthropic `thinking.budget_tokens`. |
 | Gemini | yes | yes | yes | yes | no | Gemini 3 uses `thinkingLevel`; other thinking models use `thinkingBudget`. |
 | DeepSeek | yes | yes | partial | no | no | `low/medium/high` map to `high`; `xhigh/max` map to `max` and emit a warning when folding low/medium. |
@@ -41,7 +41,7 @@ Portable `Thinking.Effort` values are `minimal`, `low`, `medium`, `high`, `xhigh
 | --- | --- | --- | --- | --- |
 | OpenAI Chat | yes | yes | yes | cache read |
 | OpenAI Responses | yes | yes | yes | cache read |
-| Anthropic | yes | yes | yes | read and write |
+| Anthropic | yes | yes | no | read and write |
 | Bedrock | yes | yes | no | read and write |
 | Gemini | yes | yes | yes | cache read |
 | DeepSeek | yes | yes | yes | cache read |

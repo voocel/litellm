@@ -106,7 +106,7 @@ const (
 
 func NormalizeFinishReason(raw string) FinishReason {
 	switch raw {
-	case "stop", "end_turn", "STOP", "stop_sequence", "pause_turn":
+	case "stop", "end_turn", "STOP", "stop_sequence":
 		return FinishReasonStop
 	case "length", "max_tokens", "MAX_TOKENS":
 		return FinishReasonLength

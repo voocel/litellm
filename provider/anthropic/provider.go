@@ -78,7 +78,7 @@ func (p *Provider) Name() string {
 }
 
 func (p *Provider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
-	wire, err := p.buildRequest(req, false)
+	wire, warnings, err := p.buildRequest(req, false)
 	if err != nil {
 		return nil, litellm.WrapValidationError(p.Name(), err)
 	}
@@ -114,12 +114,13 @@ func (p *Provider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Res
 	if err != nil {
 		return nil, litellm.WrapError(err, p.Name())
 	}
+	out.Warnings = append(warnings, out.Warnings...)
 	litellm.CaptureRawResponse(req, out, data)
 	return out, nil
 }
 
 func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.Stream, error) {
-	wire, err := p.buildRequest(req, true)
+	wire, warnings, err := p.buildRequest(req, true)
 	if err != nil {
 		return nil, litellm.WrapValidationError(p.Name(), err)
 	}
@@ -144,7 +145,7 @@ func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.St
 		resp.Body.Close()
 		return nil, litellm.NewHTTPError(p.Name(), resp.StatusCode, string(data))
 	}
-	return newStream(resp, req), nil
+	return newStream(resp, req, warnings), nil
 }
 
 func (p *Provider) setHeaders(ctx context.Context, req *http.Request) error {

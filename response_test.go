@@ -9,7 +9,7 @@ func TestNormalizeFinishReasonPreservesProviderContracts(t *testing.T) {
 	}{
 		{raw: "stop", want: FinishReasonStop},
 		{raw: "end_turn", want: FinishReasonStop},
-		{raw: "pause_turn", want: FinishReasonStop},
+		{raw: "pause_turn", want: FinishReason("pause_turn")},
 		{raw: "STOP", want: FinishReasonStop},
 		{raw: "length", want: FinishReasonLength},
 		{raw: "max_tokens", want: FinishReasonLength},
