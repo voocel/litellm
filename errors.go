@@ -22,6 +22,7 @@ const (
 	ErrorTypeInternal        ErrorType = "internal"
 	ErrorTypeContextOverflow ErrorType = "context_overflow"
 	ErrorTypeOverloaded      ErrorType = "overloaded"
+	ErrorTypeContentFilter   ErrorType = "content_filter"
 )
 
 type LiteLLMError struct {
@@ -86,8 +87,15 @@ func NewProviderErrorWithCause(provider string, errorType ErrorType, message str
 }
 
 func NewHTTPError(provider string, statusCode int, message string) *LiteLLMError {
-	errorType := classifyHTTPError(statusCode)
 	code, message := parseHTTPErrorMessage(message)
+	errorType := classifyHTTPError(statusCode)
+	// Content moderation rejections are deterministic: the same payload will be
+	// rejected again, so retrying is futile. Providers signal them with vendor
+	// error codes rather than a common status (proxies often rewrite it to a
+	// retryable 429/5xx), hence the detection is by code, not by status.
+	if isContentFilterError(code, message) {
+		errorType = ErrorTypeContentFilter
+	}
 	return &LiteLLMError{
 		Type:       errorType,
 		Code:       code,
@@ -195,6 +203,7 @@ func IsTimeoutError(err error) bool         { return isErrorType(err, ErrorTypeT
 func IsModelError(err error) bool           { return isErrorType(err, ErrorTypeModel) }
 func IsContextOverflowError(err error) bool { return isErrorType(err, ErrorTypeContextOverflow) }
 func IsOverloadedError(err error) bool      { return isErrorType(err, ErrorTypeOverloaded) }
+func IsContentFilterError(err error) bool   { return isErrorType(err, ErrorTypeContentFilter) }
 
 func IsRetryableError(err error) bool {
 	var e *LiteLLMError
@@ -234,6 +243,36 @@ func WrapError(err error, provider string) error {
 func isErrorType(err error, errorType ErrorType) bool {
 	var e *LiteLLMError
 	return errors.As(err, &e) && e.Type == errorType
+}
+
+// contentFilterTokens are stable vendor error codes for content moderation
+// rejections: Azure (content_filter), OpenAI (content_policy_violation;
+// invalid_prompt on reasoning models), Zhipu-style gateways
+// (sensitive_words_detected), DashScope/Qwen (data_inspection_failed in
+// OpenAI-compat mode, InternalError.Algo.DataInspectionFailed natively).
+// Anthropic has no dedicated code — its block is a generic
+// invalid_request_error whose only marker is the fixed message
+// "Output blocked by content filtering policy", hence a message token.
+// Matched case-insensitively as substrings of the parsed error code and
+// message; misses just fall back to status-based classification.
+var contentFilterTokens = []string{
+	"content_filter",
+	"content_policy",
+	"sensitive_words",
+	"data_inspection_failed",
+	"datainspectionfailed",
+	"invalid_prompt",
+	"content filtering policy",
+}
+
+func isContentFilterError(code, message string) bool {
+	haystack := strings.ToLower(code + " " + message)
+	for _, token := range contentFilterTokens {
+		if strings.Contains(haystack, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func classifyHTTPError(statusCode int) ErrorType {
