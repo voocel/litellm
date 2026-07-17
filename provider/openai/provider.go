@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -243,8 +244,11 @@ func (p *Provider) setHeaders(ctx context.Context, req *http.Request) error {
 
 func (p *Provider) url(path string) string {
 	baseURL := strings.TrimRight(p.cfg.BaseURL, "/")
-	if strings.HasSuffix(baseURL, "/v1") {
-		return baseURL + path
+	// A bare origin keeps the historical OpenAI default. Once the caller has
+	// supplied a path, it is the complete API root (for example Volcengine's
+	// /api/v3) and must not be rewritten to /api/v3/v1.
+	if parsed, err := url.Parse(baseURL); err == nil && (parsed.Path == "" || parsed.Path == "/") {
+		baseURL += "/v1"
 	}
-	return baseURL + "/v1" + path
+	return baseURL + path
 }

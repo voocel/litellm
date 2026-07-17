@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 )
@@ -52,6 +53,16 @@ func (e *LiteLLMError) Error() string {
 	}
 	if e.Code != "" {
 		return e.Code
+	}
+	if e.StatusCode != 0 {
+		message := fmt.Sprintf("HTTP %d", e.StatusCode)
+		if e.Provider != "" {
+			message = e.Provider + ": " + message
+		}
+		if e.Type != "" {
+			message += " (" + string(e.Type) + ")"
+		}
+		return message
 	}
 	if e.Type != "" {
 		return string(e.Type)
