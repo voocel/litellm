@@ -125,6 +125,23 @@ func parseHTTPErrorMessage(body string) (string, string) {
 	case map[string]any:
 		code := stringField(e, "code")
 		msg := stringField(e, "message")
+		// Aggregator gateways (OpenRouter) wrap the upstream provider's real
+		// error under error.metadata: message is a generic "Provider returned
+		// error" while metadata.raw carries the actual reason (unsupported
+		// response_format, context overflow, ...). Dropping raw makes such
+		// failures undiagnosable, so surface it with the serving provider name.
+		if meta, ok := e["metadata"].(map[string]any); ok {
+			if raw := stringField(meta, "raw"); raw != "" {
+				if pn := stringField(meta, "provider_name"); pn != "" {
+					raw = pn + ": " + raw
+				}
+				if msg == "" {
+					msg = raw
+				} else {
+					msg += " — " + raw
+				}
+			}
+		}
 		if msg == "" {
 			msg = body
 		}
