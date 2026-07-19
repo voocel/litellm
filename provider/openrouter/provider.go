@@ -16,6 +16,7 @@ type Config = compat.Config
 const (
 	ProviderOptionCacheRetention = "cache_retention"
 	ProviderOptionSessionID      = "session_id"
+	ProviderOptionRouting        = "provider"
 )
 
 func New(cfg Config) (*compat.Provider, error) {
@@ -40,6 +41,7 @@ func New(cfg Config) (*compat.Provider, error) {
 			AllowedProviderOptions: map[string]struct{}{
 				ProviderOptionCacheRetention: {},
 				ProviderOptionSessionID:      {},
+				ProviderOptionRouting:        {},
 			},
 		},
 		Response: compat.ResponseSpec{
@@ -131,9 +133,27 @@ func mapExtra(options litellm.ProviderOptions, body map[string]any, req *litellm
 				return fmt.Errorf("openrouter: provider option %q must be at most 256 characters", key)
 			}
 			body["session_id"] = sessionID
+		case ProviderOptionRouting:
+			routing, ok := value.(map[string]any)
+			if !ok {
+				return fmt.Errorf("openrouter: provider option %q must be an object", key)
+			}
+			copy := make(map[string]any, len(routing)+1)
+			for field, fieldValue := range routing {
+				copy[field] = fieldValue
+			}
+			body["provider"] = copy
 		default:
 			return fmt.Errorf("openrouter: unsupported provider option %q", key)
 		}
+	}
+	if req.ResponseFormat != nil && req.ResponseFormat.Type == litellm.ResponseFormatJSONSchema {
+		routing, _ := body["provider"].(map[string]any)
+		if routing == nil {
+			routing = make(map[string]any, 1)
+			body["provider"] = routing
+		}
+		routing["require_parameters"] = true
 	}
 	return nil
 }

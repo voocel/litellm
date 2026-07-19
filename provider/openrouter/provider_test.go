@@ -307,10 +307,21 @@ func TestJSONSchemaCleaned(t *testing.T) {
 		Model:          "openai/gpt-4o-mini",
 		Messages:       []litellm.Message{litellm.UserText("hi")},
 		ResponseFormat: format,
+		ProviderOptions: litellm.ProviderOptions{ProviderOptionRouting: map[string]any{
+			"order":              []any{"OpenAI"},
+			"require_parameters": false,
+		}},
 	})
 	schema := body["response_format"].(map[string]any)["json_schema"].(map[string]any)["schema"].(map[string]any)
 	if schema["additionalProperties"] != false {
 		t.Fatalf("schema should be cleaned: %#v", schema)
+	}
+	provider := body["provider"].(map[string]any)
+	if provider["require_parameters"] != true {
+		t.Fatalf("structured output must require compatible upstream parameters: %#v", provider)
+	}
+	if order := provider["order"].([]any); len(order) != 1 || order[0] != "OpenAI" {
+		t.Fatalf("provider routing preferences were not preserved: %#v", provider)
 	}
 }
 

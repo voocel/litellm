@@ -502,6 +502,25 @@ func TestConvertResponseRejectsNil(t *testing.T) {
 	}
 }
 
+func TestConvertResponsePreservesRefusal(t *testing.T) {
+	resp, err := convertResponse(&chatResponse{
+		Model: "gpt-5.1",
+		Choices: []choice{{
+			Message:      responseMessage{Refusal: "I can't help."},
+			FinishReason: "stop",
+		}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("convertResponse: %v", err)
+	}
+	if resp.Refusal != "I can't help." || resp.Text() != resp.Refusal {
+		t.Fatalf("refusal/text = %q/%q", resp.Refusal, resp.Text())
+	}
+	if resp.FinishReason != litellm.FinishReasonSafety || resp.FinishReasonRaw != "stop" {
+		t.Fatalf("finish/raw = %q/%q", resp.FinishReason, resp.FinishReasonRaw)
+	}
+}
+
 func TestChatRejectsUnsupportedResponseContent(t *testing.T) {
 	provider, err := New(Config{
 		APIKey:  "test-key",
@@ -627,6 +646,22 @@ func TestStreamRejectsEOFBeforeDone(t *testing.T) {
 	_, err := litellm.Collect(stream)
 	if err == nil || !strings.Contains(err.Error(), "before [DONE]") || !litellm.IsProviderError(err) {
 		t.Fatalf("expected truncated stream error, got %v", err)
+	}
+}
+
+func TestStreamPreservesRefusal(t *testing.T) {
+	stream := newStream(streamResponse(strings.Join([]string{
+		`data: {"choices":[{"index":0,"delta":{"refusal":"I can't help."}}]}`,
+		`data: {"choices":[{"index":0,"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")), &litellm.Request{Model: "gpt-5.1"})
+	resp, err := litellm.Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if resp.Refusal != "I can't help." || resp.FinishReason != litellm.FinishReasonSafety {
+		t.Fatalf("refusal/finish = %q/%q", resp.Refusal, resp.FinishReason)
 	}
 }
 

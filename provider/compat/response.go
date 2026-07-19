@@ -22,6 +22,7 @@ func (p *Provider) convertResponse(resp *chatResponse, req *litellm.Request) (*l
 	}
 	choice := resp.Choices[0]
 	out.FinishReason = litellm.NormalizeFinishReason(choice.FinishReason)
+	out.FinishReasonRaw = choice.FinishReason
 	reasoning := findReasoning(messageReasoningMap(choice.Message), p.reasoningFields(false))
 	extra, err := rawReasoningExtra(choice.Message)
 	if err != nil {
@@ -30,13 +31,17 @@ func (p *Provider) convertResponse(resp *chatResponse, req *litellm.Request) (*l
 	if reasoning != "" || len(extra) > 0 {
 		out.Blocks = append(out.Blocks, litellm.ReasoningBlock{Text: reasoning, Extra: extra})
 	}
-	blocks, err := contentBlocks(choice.Message.Content)
+	blocks, contentRefusal, err := contentBlocks(choice.Message.Content)
 	if err != nil {
 		return nil, fmt.Errorf("%s: convert response content: %w", p.Name(), err)
 	}
 	out.Blocks = append(out.Blocks, blocks...)
+	out.Refusal = contentRefusal + choice.Message.Refusal
 	if choice.Message.Refusal != "" {
 		out.Blocks = append(out.Blocks, litellm.TextBlock{Text: choice.Message.Refusal})
+	}
+	if out.Refusal != "" {
+		out.FinishReason = litellm.FinishReasonSafety
 	}
 	for _, call := range choice.Message.ToolCalls {
 		out.Blocks = append(out.Blocks, litellm.ToolUseBlock{
@@ -69,22 +74,23 @@ func convertUsage(u usage, spec Spec, provider, model string) litellm.Usage {
 	return out
 }
 
-func contentBlocks(raw json.RawMessage) ([]litellm.Block, error) {
+func contentBlocks(raw json.RawMessage) ([]litellm.Block, string, error) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return nil, nil
+		return nil, "", nil
 	}
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
 		if text == "" {
-			return nil, nil
+			return nil, "", nil
 		}
-		return []litellm.Block{litellm.TextBlock{Text: text}}, nil
+		return []litellm.Block{litellm.TextBlock{Text: text}}, "", nil
 	}
 	var parts []map[string]any
 	if err := json.Unmarshal(raw, &parts); err != nil {
-		return nil, fmt.Errorf("unsupported content payload: %w", err)
+		return nil, "", fmt.Errorf("unsupported content payload: %w", err)
 	}
 	blocks := make([]litellm.Block, 0, len(parts))
+	var refusal string
 	for _, part := range parts {
 		partType, _ := part["type"].(string)
 		switch partType {
@@ -94,13 +100,14 @@ func contentBlocks(raw json.RawMessage) ([]litellm.Block, error) {
 			}
 		case "refusal":
 			if text, _ := part["refusal"].(string); text != "" {
+				refusal += text
 				blocks = append(blocks, litellm.TextBlock{Text: text})
 			}
 		default:
-			return nil, fmt.Errorf("unsupported content part type %q", partType)
+			return nil, "", fmt.Errorf("unsupported content part type %q", partType)
 		}
 	}
-	return blocks, nil
+	return blocks, refusal, nil
 }
 
 func rawReasoningExtra(msg message) (json.RawMessage, error) {

@@ -692,6 +692,40 @@ func TestResponsesConvertsOutputBlocks(t *testing.T) {
 	}
 }
 
+func TestResponsesPreservesRefusalAndIncompleteReason(t *testing.T) {
+	resp, err := convertResponsesResponse(&responsesResponse{
+		Model:             "gpt-5.1",
+		Status:            "incomplete",
+		IncompleteDetails: &responsesIncompleteDetails{Reason: "content_filter"},
+		Output: []responsesOutputItem{{
+			Type:    "message",
+			Content: []responsesContentItem{{Type: "refusal", Refusal: "I can't help."}},
+		}},
+	}, "")
+	if err != nil {
+		t.Fatalf("convertResponsesResponse: %v", err)
+	}
+	if resp.Refusal != "I can't help." || resp.Text() != resp.Refusal {
+		t.Fatalf("refusal/text = %q/%q", resp.Refusal, resp.Text())
+	}
+	if resp.FinishReason != litellm.FinishReasonSafety || resp.FinishReasonRaw != "content_filter" {
+		t.Fatalf("finish/raw = %q/%q", resp.FinishReason, resp.FinishReasonRaw)
+	}
+}
+
+func TestResponsesIncompleteMaxOutputTokensMapsToLength(t *testing.T) {
+	resp, err := convertResponsesResponse(&responsesResponse{
+		Status:            "incomplete",
+		IncompleteDetails: &responsesIncompleteDetails{Reason: "max_output_tokens"},
+	}, "gpt-5.1")
+	if err != nil {
+		t.Fatalf("convertResponsesResponse: %v", err)
+	}
+	if resp.FinishReason != litellm.FinishReasonLength || resp.FinishReasonRaw != "max_output_tokens" {
+		t.Fatalf("finish/raw = %q/%q", resp.FinishReason, resp.FinishReasonRaw)
+	}
+}
+
 func TestResponsesReasoningItemRoundTripsWithEncryptedContent(t *testing.T) {
 	resp, err := convertResponsesResponse(&responsesResponse{
 		Model:  "gpt-5.1",
@@ -977,6 +1011,42 @@ func TestResponsesStreamFailedEventSurfacesStructuredError(t *testing.T) {
 	_, err := litellm.Collect(stream)
 	if err == nil || !strings.Contains(err.Error(), "failed") || !litellm.IsProviderError(err) {
 		t.Fatalf("expected structured failed event error, got %v", err)
+	}
+}
+
+func TestResponsesStreamPreservesIncompleteReason(t *testing.T) {
+	stream := newResponsesStream(streamResponse(strings.Join([]string{
+		`event: response.incomplete`,
+		`data: {"type":"response.incomplete","response":{"model":"gpt-5.1","status":"incomplete","incomplete_details":{"reason":"content_filter"},"usage":{}},"sequence_number":1}`,
+		``,
+	}, "\n")), "gpt-5.1")
+	resp, err := litellm.Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if resp.FinishReason != litellm.FinishReasonSafety || resp.FinishReasonRaw != "content_filter" {
+		t.Fatalf("finish/raw = %q/%q", resp.FinishReason, resp.FinishReasonRaw)
+	}
+}
+
+func TestResponsesStreamDoesNotDuplicateRefusalDone(t *testing.T) {
+	stream := newResponsesStream(streamResponse(strings.Join([]string{
+		`event: response.refusal.delta`,
+		`data: {"type":"response.refusal.delta","delta":"I can't help.","sequence_number":1}`,
+		``,
+		`event: response.refusal.done`,
+		`data: {"type":"response.refusal.done","refusal":"I can't help.","sequence_number":2}`,
+		``,
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"model":"gpt-5.1","status":"completed","usage":{}},"sequence_number":3}`,
+		``,
+	}, "\n")), "gpt-5.1")
+	resp, err := litellm.Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if resp.Refusal != "I can't help." || resp.Text() != resp.Refusal {
+		t.Fatalf("refusal/text = %q/%q", resp.Refusal, resp.Text())
 	}
 }
 

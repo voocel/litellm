@@ -148,6 +148,7 @@ type choice struct {
 type responseMessage struct {
 	Role             string          `json:"role"`
 	Content          json.RawMessage `json:"content,omitempty"`
+	Refusal          string          `json:"refusal,omitempty"`
 	ToolCalls        []toolCall      `json:"tool_calls,omitempty"`
 	Reasoning        string          `json:"reasoning,omitempty"`
 	ReasoningContent string          `json:"reasoning_content,omitempty"`
@@ -159,6 +160,7 @@ type reasoningSummary struct {
 
 type delta struct {
 	Content          string            `json:"content,omitempty"`
+	Refusal          string            `json:"refusal,omitempty"`
 	ToolCalls        []toolCallDelta   `json:"tool_calls,omitempty"`
 	ReasoningSummary *reasoningSummary `json:"reasoning_summary,omitempty"`
 	Reasoning        string            `json:"reasoning,omitempty"`

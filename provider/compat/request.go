@@ -384,5 +384,5 @@ func injectJSONSchema(messages []litellm.Message, schema *litellm.JSONSchema) []
 			return out
 		}
 	}
-	return out
+	return append(out, litellm.UserText(strings.TrimSpace(text)))
 }

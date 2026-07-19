@@ -5,13 +5,17 @@ import "encoding/json"
 type Response struct {
 	Blocks []Block
 	Usage  Usage
+	// Refusal preserves the model's explicit refusal text. Refusals also map to
+	// FinishReasonSafety so callers do not mistake an empty response for a parse failure.
+	Refusal string
 
 	Model    string
 	Provider string
 
-	FinishReason FinishReason
-	Warnings     []Warning
-	Raw          json.RawMessage
+	FinishReason    FinishReason
+	FinishReasonRaw string
+	Warnings        []Warning
+	Raw             json.RawMessage
 }
 
 func CaptureRawResponse(req *Request, resp *Response, raw []byte) {
@@ -108,7 +112,7 @@ func NormalizeFinishReason(raw string) FinishReason {
 	switch raw {
 	case "stop", "end_turn", "STOP", "stop_sequence":
 		return FinishReasonStop
-	case "length", "max_tokens", "MAX_TOKENS":
+	case "length", "max_tokens", "max_output_tokens", "MAX_TOKENS", "model_context_window_exceeded":
 		return FinishReasonLength
 	case "tool_calls", "tool_use", "FUNCTION_CALLING":
 		return FinishReasonToolCall
@@ -116,12 +120,12 @@ func NormalizeFinishReason(raw string) FinishReason {
 		return FinishReasonStop
 	case "incomplete":
 		return FinishReasonLength
-	case "safety", "SAFETY", "content_filter", "refusal", "RECITATION", "sensitive", "BLOCKLIST",
+	case "safety", "SAFETY", "content_filter", "content_filtered", "guardrail_intervened", "refusal", "RECITATION", "sensitive", "BLOCKLIST",
 		"PROHIBITED_CONTENT", "SPII", "LANGUAGE", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT",
 		"IMAGE_RECITATION":
 		return FinishReasonSafety
 	case "failed", "error", "cancelled", "canceled", "insufficient_system_resource", "network_error",
-		"MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL", "TOO_MANY_TOOL_CALLS", "OTHER",
+		"MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL", "TOO_MANY_TOOL_CALLS", "malformed_model_output", "malformed_tool_use", "OTHER",
 		"IMAGE_OTHER", "NO_IMAGE", "MISSING_THOUGHT_SIGNATURE":
 		return FinishReasonError
 	case "":

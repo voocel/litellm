@@ -210,6 +210,7 @@ func (i responsesInputItem) MarshalJSON() ([]byte, error) {
 type responsesContentItem struct {
 	Type        string                   `json:"type"`
 	Text        string                   `json:"text,omitempty"`
+	Refusal     string                   `json:"refusal,omitempty"`
 	ImageURL    *responsesImageURL       `json:"image_url,omitempty"`
 	Annotations []map[string]interface{} `json:"annotations,omitempty"`
 	Logprobs    []map[string]interface{} `json:"logprobs,omitempty"`
@@ -221,20 +222,26 @@ type responsesImageURL struct {
 }
 
 type responsesResponse struct {
-	ID         string                `json:"id"`
-	Model      string                `json:"model"`
-	Status     string                `json:"status,omitempty"`
-	OutputText string                `json:"output_text"`
-	Output     []responsesOutputItem `json:"output"`
-	Usage      responsesUsage        `json:"usage"`
-	Error      *responsesError       `json:"error,omitempty"`
+	ID                string                      `json:"id"`
+	Model             string                      `json:"model"`
+	Status            string                      `json:"status,omitempty"`
+	OutputText        string                      `json:"output_text"`
+	Output            []responsesOutputItem       `json:"output"`
+	Usage             responsesUsage              `json:"usage"`
+	Error             *responsesError             `json:"error,omitempty"`
+	IncompleteDetails *responsesIncompleteDetails `json:"incomplete_details,omitempty"`
+}
+
+type responsesIncompleteDetails struct {
+	Reason string `json:"reason,omitempty"`
 }
 
 type responsesCompletedEvent struct {
 	Response struct {
-		Model  string         `json:"model"`
-		Status string         `json:"status,omitempty"`
-		Usage  responsesUsage `json:"usage"`
+		Model             string                      `json:"model"`
+		Status            string                      `json:"status,omitempty"`
+		Usage             responsesUsage              `json:"usage"`
+		IncompleteDetails *responsesIncompleteDetails `json:"incomplete_details,omitempty"`
 	} `json:"response"`
 	SequenceNumber int `json:"sequence_number,omitempty"`
 }
@@ -883,9 +890,10 @@ func convertResponsesResponse(resp *responsesResponse, fallbackModel string) (*l
 		return nil, fmt.Errorf("openai: responses response cannot be nil")
 	}
 	out := &litellm.Response{
-		Model:        resp.Model,
-		Provider:     "openai",
-		FinishReason: litellm.NormalizeFinishReason(resp.Status),
+		Model:           resp.Model,
+		Provider:        "openai",
+		FinishReason:    litellm.NormalizeFinishReason(resp.Status),
+		FinishReasonRaw: resp.Status,
 		Usage: litellm.Usage{
 			InputTokens:  resp.Usage.InputTokens,
 			OutputTokens: resp.Usage.OutputTokens,
@@ -893,6 +901,10 @@ func convertResponsesResponse(resp *responsesResponse, fallbackModel string) (*l
 			Provider:     "openai",
 			Model:        resp.Model,
 		},
+	}
+	if resp.IncompleteDetails != nil && resp.IncompleteDetails.Reason != "" {
+		out.FinishReasonRaw = resp.IncompleteDetails.Reason
+		out.FinishReason = litellm.NormalizeFinishReason(resp.IncompleteDetails.Reason)
 	}
 	if out.Model == "" {
 		out.Model = fallbackModel
@@ -912,6 +924,19 @@ func convertResponsesResponse(resp *responsesResponse, fallbackModel string) (*l
 				return nil, err
 			}
 			out.Blocks = append(out.Blocks, blocks...)
+			for _, content := range item.Content {
+				if content.Type != "refusal" {
+					continue
+				}
+				refusal := content.Refusal
+				if refusal == "" {
+					refusal = content.Text
+				}
+				out.Refusal += refusal
+			}
+			if out.Refusal != "" {
+				out.FinishReason = litellm.FinishReasonSafety
+			}
 		case "function_call", "tool_call":
 			id := item.CallID
 			if id == "" {
@@ -1078,20 +1103,6 @@ func (s *responsesStream) events(name string, raw json.RawMessage) ([]litellm.Ev
 			return nil, nil
 		}
 		return []litellm.Event{litellm.RefusalDelta{Text: delta.Delta, OutputIndex: delta.OutputIndex, ContentIndex: delta.ContentIndex}}, nil
-	case "response.refusal.done":
-		var done struct {
-			Refusal      string `json:"refusal"`
-			OutputIndex  *int   `json:"output_index,omitempty"`
-			ContentIndex *int   `json:"content_index,omitempty"`
-			Sequence     int    `json:"sequence_number,omitempty"`
-		}
-		if err := json.Unmarshal(raw, &done); err != nil {
-			return nil, responsesStreamParseError("openai: parse responses refusal done", err)
-		}
-		if done.Refusal == "" || !s.shouldEmit(done.Sequence) {
-			return nil, nil
-		}
-		return []litellm.Event{litellm.RefusalDelta{Text: done.Refusal, OutputIndex: done.OutputIndex, ContentIndex: done.ContentIndex}}, nil
 	case "response.reasoning_text.delta":
 		var delta struct {
 			Delta    string `json:"delta"`
@@ -1206,7 +1217,7 @@ func (s *responsesStream) events(name string, raw json.RawMessage) ([]litellm.Ev
 		s.done = true
 		return []litellm.Event{
 			litellm.UsageEvent{Usage: responsesUsageToUsage(completed.Response.Usage, s.model)},
-			litellm.DoneEvent{FinishReason: litellm.NormalizeFinishReason(completed.Response.Status), Provider: "openai", Model: s.model},
+			litellm.DoneEvent{FinishReason: litellm.NormalizeFinishReason(completed.Response.Status), FinishReasonRaw: completed.Response.Status, Provider: "openai", Model: s.model},
 		}, nil
 	case "response.incomplete":
 		var incomplete responsesCompletedEvent
@@ -1220,9 +1231,14 @@ func (s *responsesStream) events(name string, raw json.RawMessage) ([]litellm.Ev
 			s.model = incomplete.Response.Model
 		}
 		s.done = true
+		finish, rawReason := litellm.FinishReasonLength, incomplete.Response.Status
+		if incomplete.Response.IncompleteDetails != nil && incomplete.Response.IncompleteDetails.Reason != "" {
+			rawReason = incomplete.Response.IncompleteDetails.Reason
+			finish = litellm.NormalizeFinishReason(rawReason)
+		}
 		return []litellm.Event{
 			litellm.UsageEvent{Usage: responsesUsageToUsage(incomplete.Response.Usage, s.model)},
-			litellm.DoneEvent{FinishReason: litellm.FinishReasonLength, Provider: "openai", Model: s.model},
+			litellm.DoneEvent{FinishReason: finish, FinishReasonRaw: rawReason, Provider: "openai", Model: s.model},
 		}, nil
 	case "response.failed":
 		var failed struct {
@@ -1247,7 +1263,7 @@ func (s *responsesStream) events(name string, raw json.RawMessage) ([]litellm.Ev
 	case "response.created", "response.in_progress", "response.queued",
 		"response.output_item.done",
 		"response.content_part.added", "response.content_part.done",
-		"response.output_text.done",
+		"response.output_text.done", "response.refusal.done",
 		"response.reasoning_text.done", "response.reasoning_summary_text.done",
 		"response.reasoning_summary_part.added", "response.reasoning_summary_part.done",
 		"response.file_search_call.in_progress", "response.file_search_call.searching", "response.file_search_call.completed",
@@ -1330,8 +1346,12 @@ func responsesOutputBlocks(items []responsesContentItem) ([]litellm.Block, error
 				blocks = append(blocks, litellm.ImageBlock{URL: item.ImageURL.URL, Detail: item.ImageURL.Detail})
 			}
 		case "refusal":
-			if item.Text != "" {
-				blocks = append(blocks, litellm.TextBlock{Text: item.Text})
+			refusal := item.Refusal
+			if refusal == "" {
+				refusal = item.Text
+			}
+			if refusal != "" {
+				blocks = append(blocks, litellm.TextBlock{Text: refusal})
 			}
 		default:
 			return nil, fmt.Errorf("openai: unsupported responses content item type %q", item.Type)

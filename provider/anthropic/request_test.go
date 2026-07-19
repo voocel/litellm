@@ -94,6 +94,16 @@ func TestBuildRequestThinkingToolsCacheRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStructuredCapabilityIsModelDependent(t *testing.T) {
+	provider, err := New(Config{APIKey: "test"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := provider.Capabilities("claude-custom").Structured.JSONSchema; got != litellm.SupportUnknown {
+		t.Fatalf("JSONSchema = %v, want unknown", got)
+	}
+}
+
 func TestBuildRequestUsesRedactedThinkingData(t *testing.T) {
 	provider, err := New(Config{APIKey: "test"})
 	if err != nil {

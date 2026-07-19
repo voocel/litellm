@@ -309,6 +309,22 @@ func TestHandleWithNilCallbacksAreSkipped(t *testing.T) {
 	}
 }
 
+func TestCollectPreservesRefusalAndMarksSafety(t *testing.T) {
+	resp, err := Collect(&eventSliceStream{events: []Event{
+		RefusalDelta{Text: "I can't help."},
+		DoneEvent{FinishReason: FinishReasonStop, FinishReasonRaw: "completed", Provider: "test", Model: "m"},
+	}})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if resp.Refusal != "I can't help." || resp.Text() != resp.Refusal {
+		t.Fatalf("refusal/text = %q/%q", resp.Refusal, resp.Text())
+	}
+	if resp.FinishReason != FinishReasonSafety || resp.FinishReasonRaw != "completed" {
+		t.Fatalf("finish/raw = %q/%q", resp.FinishReason, resp.FinishReasonRaw)
+	}
+}
+
 type eventSliceStream struct {
 	events []Event
 	index  int

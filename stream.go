@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 type Event interface {
@@ -67,9 +68,10 @@ type WarningEvent struct {
 }
 
 type DoneEvent struct {
-	FinishReason FinishReason
-	Provider     string
-	Model        string
+	FinishReason    FinishReason
+	FinishReasonRaw string
+	Provider        string
+	Model           string
 }
 
 type ErrorEvent struct {
@@ -276,6 +278,8 @@ type EventCollector struct {
 	toolIndexes map[string]int
 	usage       Usage
 	finish      FinishReason
+	finishRaw   string
+	refusal     strings.Builder
 	provider    string
 	model       string
 	warnings    []Warning
@@ -294,7 +298,7 @@ func (c *EventCollector) Apply(event Event) (bool, error) {
 	case ContentDelta:
 		c.appendContent(e.Text)
 	case RefusalDelta:
-		c.appendContent(e.Text)
+		c.appendRefusal(e.Text)
 	case ReasoningDelta:
 		c.appendReasoning(e)
 	case ToolUseStart:
@@ -338,6 +342,10 @@ func (c *EventCollector) Apply(event Event) (bool, error) {
 		// collector ignores them unless they are promoted to typed events.
 	case DoneEvent:
 		c.finish = e.FinishReason
+		c.finishRaw = e.FinishReasonRaw
+		if c.refusal.Len() > 0 {
+			c.finish = FinishReasonSafety
+		}
 		if e.Provider != "" {
 			c.provider = e.Provider
 		}
@@ -390,15 +398,25 @@ func normalizeInvalidToolArguments(tool *ToolUseBlock) *Warning {
 
 func (c *EventCollector) Response() *Response {
 	resp := &Response{
-		Blocks:       c.cloneBlocks(),
-		Usage:        c.usage,
-		Model:        c.model,
-		Provider:     c.provider,
-		FinishReason: c.finish,
-		Warnings:     append([]Warning(nil), c.warnings...),
+		Blocks:          c.cloneBlocks(),
+		Usage:           c.usage,
+		Model:           c.model,
+		Provider:        c.provider,
+		FinishReason:    c.finish,
+		FinishReasonRaw: c.finishRaw,
+		Refusal:         c.refusal.String(),
+		Warnings:        append([]Warning(nil), c.warnings...),
 	}
 	resp.Usage.StampModel(resp.Provider, resp.Model)
 	return resp
+}
+
+func (c *EventCollector) appendRefusal(text string) {
+	if text == "" {
+		return
+	}
+	c.refusal.WriteString(text)
+	c.appendContent(text)
 }
 
 func (c *EventCollector) appendContent(text string) {

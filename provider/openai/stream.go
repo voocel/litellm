@@ -99,6 +99,12 @@ func (s *stream) events(chunk streamChunk) []litellm.Event {
 				OutputIndex: litellm.IntPtr(choice.Index),
 			})
 		}
+		if choice.Delta.Refusal != "" {
+			events = append(events, litellm.RefusalDelta{
+				Text:        choice.Delta.Refusal,
+				OutputIndex: litellm.IntPtr(choice.Index),
+			})
+		}
 		if s.includeReasoning {
 			if text, summary := extractDeltaReasoning(choice.Delta); text != "" {
 				events = append(events, litellm.ReasoningDelta{

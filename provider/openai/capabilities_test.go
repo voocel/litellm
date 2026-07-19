@@ -31,6 +31,42 @@ func TestCapabilitiesNonReasoningModel(t *testing.T) {
 	}
 }
 
+// TestCapabilitiesStructuredOutputsByEndpoint verifies that Structured
+// Outputs are an official endpoint contract, while compatible custom
+// endpoints remain Unknown unless the caller explicitly declares support.
+func TestCapabilitiesStructuredOutputsByEndpoint(t *testing.T) {
+	official := Config{APIKey: "test"}
+	custom := Config{APIKey: "test", BaseURL: "https://relay.example.com/v1"}
+	cases := []struct {
+		name  string
+		cfg   Config
+		model string
+		want  litellm.Support
+	}{
+		{"official endpoint", official, "gpt-5.6", litellm.SupportYes},
+		{"custom endpoint", custom, "gpt-5.6", litellm.SupportUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := New(tc.cfg)
+			if err != nil {
+				t.Fatalf("New returned error: %v", err)
+			}
+			caps := provider.Capabilities(tc.model)
+			if caps.Structured.JSONSchema != tc.want || caps.Structured.Strict != tc.want {
+				t.Fatalf("structured caps = %+v, want json_schema/strict %v", caps.Structured, tc.want)
+			}
+		})
+	}
+	provider, err := New(custom)
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	if got := provider.Capabilities("gpt-4o").Structured.JSONObject; got != litellm.SupportUnknown {
+		t.Fatalf("custom base URL json_object = %v, want unknown", got)
+	}
+}
+
 // TestCapabilitiesPromptCacheParamsGating verifies that prompt cache params
 // are only advertised for the official endpoint by default: compatible
 // backends have no unknown-field contract (strict ones return 400/422), so

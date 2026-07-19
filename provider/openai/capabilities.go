@@ -26,6 +26,26 @@ func isOfficialBaseURL(baseURL string) bool {
 	return strings.EqualFold(u.Hostname(), "api.openai.com")
 }
 
+// structuredSupport reports the endpoint contract implemented by this
+// provider. The official OpenAI Chat/Responses APIs accept Structured Outputs;
+// a compatible custom endpoint makes no such guarantee and remains Unknown.
+// Model-specific exceptions belong to endpoint/model metadata or an explicit
+// caller override, not an ever-growing model-name list here.
+func (p *Provider) structuredSupport() litellm.StructuredCapabilities {
+	if !isOfficialBaseURL(p.cfg.BaseURL) {
+		return litellm.StructuredCapabilities{
+			JSONObject: litellm.SupportUnknown,
+			JSONSchema: litellm.SupportUnknown,
+			Strict:     litellm.SupportUnknown,
+		}
+	}
+	return litellm.StructuredCapabilities{
+		JSONObject: litellm.SupportYes,
+		JSONSchema: litellm.SupportYes,
+		Strict:     litellm.SupportYes,
+	}
+}
+
 func (p *Provider) Capabilities(model string) litellm.Capabilities {
 	reasoningModel := p.isReasoningModel(model)
 	thinking := litellm.ThinkingCapabilities{
@@ -54,11 +74,7 @@ func (p *Provider) Capabilities(model string) litellm.Capabilities {
 			Choice:              litellm.SupportYes,
 			HostedProviderTools: litellm.SupportPartial,
 		},
-		Structured: litellm.StructuredCapabilities{
-			JSONObject: litellm.SupportYes,
-			JSONSchema: litellm.SupportYes,
-			Strict:     litellm.SupportYes,
-		},
+		Structured: p.structuredSupport(),
 		Media: litellm.MediaCapabilities{
 			ImageURL:    litellm.SupportYes,
 			ImageBytes:  litellm.SupportYes,

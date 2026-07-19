@@ -38,8 +38,8 @@ func (p *Provider) Capabilities(model string) litellm.Capabilities {
 			RoundTripSignatures: litellm.SupportYes,
 		},
 		Structured: litellm.StructuredCapabilities{
-			JSONObject: litellm.SupportYes,
-			JSONSchema: litellm.SupportYes,
+			JSONObject: litellm.SupportUnknown,
+			JSONSchema: litellm.SupportUnknown,
 			Strict:     litellm.SupportNo,
 		},
 		Media: litellm.MediaCapabilities{

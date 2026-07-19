@@ -123,7 +123,7 @@ func TestCapabilities(t *testing.T) {
 	if caps.Thinking.Supported != litellm.SupportYes || !caps.Thinking.SupportsEffort("max") {
 		t.Fatalf("thinking caps = %+v", caps.Thinking)
 	}
-	if caps.Structured.JSONObject != litellm.SupportYes || caps.Structured.JSONSchema != litellm.SupportYes {
+	if caps.Structured.JSONObject != litellm.SupportUnknown || caps.Structured.JSONSchema != litellm.SupportUnknown {
 		t.Fatalf("structured caps = %+v", caps.Structured)
 	}
 	if caps.Structured.Strict != litellm.SupportNo {

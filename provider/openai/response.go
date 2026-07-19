@@ -26,6 +26,7 @@ func convertResponse(resp *chatResponse, req *litellm.Request) (*litellm.Respons
 	}
 	choice := resp.Choices[0]
 	out.FinishReason = litellm.NormalizeFinishReason(choice.FinishReason)
+	out.FinishReasonRaw = choice.FinishReason
 	if reasoning := extractReasoning(choice); reasoning != "" && thinkingEnabled(req) {
 		out.Blocks = append(out.Blocks, litellm.ReasoningBlock{Text: reasoning, Summary: choice.ReasoningSummary != nil})
 	}
@@ -34,6 +35,11 @@ func convertResponse(resp *chatResponse, req *litellm.Request) (*litellm.Respons
 		return nil, err
 	}
 	out.Blocks = append(out.Blocks, blocks...)
+	if choice.Message.Refusal != "" {
+		out.Refusal = choice.Message.Refusal
+		out.Blocks = append(out.Blocks, litellm.Text(choice.Message.Refusal))
+		out.FinishReason = litellm.FinishReasonSafety
+	}
 	for _, call := range choice.Message.ToolCalls {
 		out.Blocks = append(out.Blocks, litellm.ToolUseBlock{
 			ID:        call.ID,

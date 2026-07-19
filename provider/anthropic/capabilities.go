@@ -25,7 +25,7 @@ func (p *Provider) Capabilities(model string) litellm.Capabilities {
 		},
 		Structured: litellm.StructuredCapabilities{
 			JSONObject: litellm.SupportNo,
-			JSONSchema: litellm.SupportYes,
+			JSONSchema: litellm.SupportUnknown,
 			Strict:     litellm.SupportYes,
 		},
 		Media: litellm.MediaCapabilities{

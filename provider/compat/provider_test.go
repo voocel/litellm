@@ -534,7 +534,24 @@ func TestChatConvertsRefusalMessageAndContentPart(t *testing.T) {
 			if resp.Text() != tt.want {
 				t.Fatalf("text = %q, want %q", resp.Text(), tt.want)
 			}
+			if resp.Refusal != tt.want || resp.FinishReason != litellm.FinishReasonSafety {
+				t.Fatalf("refusal/finish = %q/%q", resp.Refusal, resp.FinishReason)
+			}
 		})
+	}
+}
+
+func TestInjectJSONSchemaAddsUserMessageWhenMissing(t *testing.T) {
+	messages := injectJSONSchema([]litellm.Message{litellm.System("system only")}, &litellm.JSONSchema{
+		Name:   "result",
+		Schema: litellm.Schema(`{"type":"object"}`),
+	})
+	if len(messages) != 2 || messages[1].Role != litellm.RoleUser {
+		t.Fatalf("messages = %#v", messages)
+	}
+	text, ok := messages[1].Blocks[0].(litellm.TextBlock)
+	if !ok || !strings.Contains(text.Text, "Return JSON matching schema result") {
+		t.Fatalf("injected block = %#v", messages[1].Blocks)
 	}
 }
 
