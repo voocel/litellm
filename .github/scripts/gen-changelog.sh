@@ -54,9 +54,13 @@ fallback() {
 }
 
 if [ -n "$GEMINI_API_KEY" ]; then
-    API_URL="${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com}/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}"
+    API_URL="${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com}/v1beta/models/gemini-2.5-flash:generateContent"
     build_body '{contents: [{parts: [{text: .}]}]}'
-    if curl -fsSL "$API_URL" -H "content-type: application/json" -d @"$TMPDIR/body.json" -o "$TMPDIR/result.json"; then
+    if curl -fsSL "$API_URL" \
+        -H "x-goog-api-key: ${GEMINI_API_KEY}" \
+        -H "content-type: application/json" \
+        -d @"$TMPDIR/body.json" \
+        -o "$TMPDIR/result.json"; then
         extract "d['candidates'][0]['content']['parts'][0]['text']"
     else
         fallback

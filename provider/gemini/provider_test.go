@@ -3,6 +3,7 @@ package gemini
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -283,8 +284,11 @@ func TestChatConvertsThinkingToolAndUsage(t *testing.T) {
 		APIKey:  "test-key",
 		BaseURL: "https://example.test",
 		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			if !strings.Contains(req.URL.RawQuery, "key=test-key") {
-				t.Fatalf("request URL missing key: %s", req.URL.String())
+			if req.URL.RawQuery != "" {
+				t.Fatalf("request URL contains query credentials: %s", req.URL.String())
+			}
+			if got := req.Header.Get("x-goog-api-key"); got != "test-key" {
+				t.Fatalf("x-goog-api-key = %q, want test-key", got)
 			}
 			return jsonResponse(200, `{
 				"candidates":[{
@@ -334,6 +338,30 @@ func TestConvertResponseRejectsNil(t *testing.T) {
 	_, err := convertResponse(nil, &litellm.Request{Model: "gemini-3-pro"})
 	if err == nil || !strings.Contains(err.Error(), "response cannot be nil") {
 		t.Fatalf("expected nil response error, got %v", err)
+	}
+}
+
+func TestNetworkErrorDoesNotExposeAPIKey(t *testing.T) {
+	const secret = "gemini-secret-key"
+	provider, err := New(Config{
+		APIKey:  secret,
+		BaseURL: "https://example.test",
+		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("request to %s failed", req.URL.String())
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	_, err = provider.Chat(context.Background(), &litellm.Request{
+		Model:    "gemini-3-pro",
+		Messages: []litellm.Message{litellm.UserText("hi")},
+	})
+	if err == nil {
+		t.Fatal("expected network error")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("network error exposed API key: %v", err)
 	}
 }
 
@@ -435,8 +463,11 @@ func TestStreamConvertsSSEToTypedEvents(t *testing.T) {
 			if req.Header.Get("Accept") != "text/event-stream" {
 				t.Fatalf("Accept = %q, want text/event-stream", req.Header.Get("Accept"))
 			}
-			if !strings.Contains(req.URL.RawQuery, "alt=sse") {
-				t.Fatalf("stream URL missing alt=sse: %s", req.URL.String())
+			if req.URL.Query().Get("alt") != "sse" || req.URL.Query().Has("key") {
+				t.Fatalf("stream URL query = %q, want only alt=sse", req.URL.RawQuery)
+			}
+			if got := req.Header.Get("x-goog-api-key"); got != "test-key" {
+				t.Fatalf("x-goog-api-key = %q, want test-key", got)
 			}
 			return streamResponse(testgolden.ReadFixtureString(t, "../../testdata/gemini/stream.jsonl")), nil
 		}),
@@ -471,6 +502,32 @@ func TestStreamConvertsSSEToTypedEvents(t *testing.T) {
 	}
 	if resp.FinishReason != litellm.FinishReasonToolCall {
 		t.Fatalf("finish reason = %q", resp.FinishReason)
+	}
+}
+
+func TestListModelsUsesHeaderAuthentication(t *testing.T) {
+	provider, err := New(Config{
+		APIKey:  "test-key",
+		BaseURL: "https://example.test",
+		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.RawQuery != "" {
+				t.Fatalf("models URL contains query credentials: %s", req.URL.String())
+			}
+			if got := req.Header.Get("x-goog-api-key"); got != "test-key" {
+				t.Fatalf("x-goog-api-key = %q, want test-key", got)
+			}
+			return jsonResponse(http.StatusOK, `{"models":[]}`), nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	models, err := provider.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels returned error: %v", err)
+	}
+	if len(models) != 0 {
+		t.Fatalf("models = %+v, want none", models)
 	}
 }
 

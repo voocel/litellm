@@ -354,7 +354,20 @@ client, err := litellm.New(provider, litellm.WithHook(litellm.HookFuncs{
 }))
 ```
 
-The optional `github.com/voocel/litellm/otel` module adapts hooks to OpenTelemetry spans.
+The optional `github.com/voocel/litellm/otel` module adapts hooks to OpenTelemetry spans
+using the current GenAI semantic conventions. It records metadata such as
+`gen_ai.provider.name`, model, duration, and token usage by default, but does not
+record prompts or completions. Content may include user data, tool arguments,
+and tool results; enable it only after accepting the privacy and storage
+implications. When enabled, messages are recorded as schema-compliant JSON in
+`gen_ai.input.messages` and `gen_ai.output.messages`. Deprecated attributes
+such as `gen_ai.system`, `gen_ai.prompt`, and `gen_ai.completion` are not emitted:
+
+```go
+import litellmotel "github.com/voocel/litellm/otel"
+
+hook := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
+```
 
 ## Pricing
 

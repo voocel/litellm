@@ -72,15 +72,14 @@ func (p *Provider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Res
 	if err != nil {
 		return nil, fmt.Errorf("gemini: marshal request: %w", err)
 	}
-	url, err := p.url(ctx, req.Model, "generateContent")
-	if err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.url(req.Model, "generateContent"), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("gemini: create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if err := p.setHeaders(ctx, httpReq); err != nil {
+		return nil, litellm.WrapValidationError(p.Name(), err)
+	}
 	resp, err := p.cfg.HTTPClient.Do(httpReq)
 	if err != nil {
 		return nil, litellm.NewNetworkError(p.Name(), "request failed", err)
@@ -115,17 +114,16 @@ func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.St
 	if err != nil {
 		return nil, fmt.Errorf("gemini: marshal stream request: %w", err)
 	}
-	url, err := p.url(ctx, req.Model, "streamGenerateContent")
-	if err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
-	}
-	url += "&alt=sse"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	endpoint := p.url(req.Model, "streamGenerateContent") + "?alt=sse"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("gemini: create stream request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
+	if err := p.setHeaders(ctx, httpReq); err != nil {
+		return nil, litellm.WrapValidationError(p.Name(), err)
+	}
 	resp, err := p.cfg.HTTPClient.Do(httpReq)
 	if err != nil {
 		return nil, litellm.NewNetworkError(p.Name(), "stream request failed", err)
@@ -139,13 +137,12 @@ func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.St
 }
 
 func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) {
-	url, err := p.modelsURL(ctx)
-	if err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.modelsURL(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("gemini: create models request: %w", err)
+	}
+	if err := p.setHeaders(ctx, httpReq); err != nil {
+		return nil, litellm.WrapValidationError(p.Name(), err)
 	}
 	resp, err := p.cfg.HTTPClient.Do(httpReq)
 	if err != nil {
@@ -179,22 +176,23 @@ func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) 
 	return models, nil
 }
 
-func (p *Provider) url(ctx context.Context, model, method string) (string, error) {
+func (p *Provider) url(model, method string) string {
 	baseURL := strings.TrimRight(p.cfg.BaseURL, "/")
-	key, err := p.apiKey(ctx)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%s/v1beta/models/%s:%s?key=%s", baseURL, model, method, key), nil
+	return fmt.Sprintf("%s/v1beta/models/%s:%s", baseURL, model, method)
 }
 
-func (p *Provider) modelsURL(ctx context.Context) (string, error) {
+func (p *Provider) modelsURL() string {
 	baseURL := strings.TrimRight(p.cfg.BaseURL, "/")
+	return baseURL + "/v1beta/models"
+}
+
+func (p *Provider) setHeaders(ctx context.Context, req *http.Request) error {
 	key, err := p.apiKey(ctx)
 	if err != nil {
-		return "", err
+		return err
 	}
-	return fmt.Sprintf("%s/v1beta/models?key=%s", baseURL, key), nil
+	req.Header.Set("x-goog-api-key", key)
+	return nil
 }
 
 func (p *Provider) apiKey(ctx context.Context) (string, error) {

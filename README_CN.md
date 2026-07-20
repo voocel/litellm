@@ -354,7 +354,18 @@ client, err := litellm.New(provider, litellm.WithHook(litellm.HookFuncs{
 }))
 ```
 
-可选的 `github.com/voocel/litellm/otel` 模块会把 hooks 适配成 OpenTelemetry span。
+可选的 `github.com/voocel/litellm/otel` 模块会按照当前 GenAI 语义约定把 hooks 适配成
+OpenTelemetry span。该模块默认只记录 `gen_ai.provider.name`、模型、耗时和 token usage
+等元数据，不记录提示词或回答内容。内容可能包含用户数据、工具参数和工具结果；只有在明确
+接受相应隐私与存储风险时才应显式开启。开启后，消息会以符合官方 JSON Schema 的格式写入
+`gen_ai.input.messages` 和 `gen_ai.output.messages`；模块不会继续输出 `gen_ai.system`、
+`gen_ai.prompt`、`gen_ai.completion` 等已废弃字段：
+
+```go
+import litellmotel "github.com/voocel/litellm/otel"
+
+hook := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
+```
 
 ## Pricing
 

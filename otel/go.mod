@@ -3,7 +3,7 @@ module github.com/voocel/litellm/otel
 go 1.25.0
 
 require (
-	github.com/voocel/litellm v1.8.1
+	github.com/voocel/litellm v1.8.8
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
@@ -18,5 +18,3 @@ require (
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 )
-
-replace github.com/voocel/litellm => ../

@@ -6,8 +6,6 @@ package otel
 
 import (
 	"context"
-	"encoding/json"
-	"strings"
 	"sync"
 
 	"github.com/voocel/litellm"
@@ -18,10 +16,10 @@ import (
 
 // callState tracks an in-flight call between the BeforeRequest /
 // OnStreamEvent / AfterResponse callbacks, keyed by litellm CallMeta.CallID.
-// content accumulates streamed output (non-streaming reads it from Response).
+// collector is present only when streamed content capture is enabled.
 type callState struct {
-	span    trace.Span
-	content strings.Builder
+	span      trace.Span
+	collector *litellm.EventCollector
 }
 
 // OTelHook implements litellm.Hook, emitting one OpenTelemetry span per LLM
@@ -45,23 +43,39 @@ var _ litellm.Hook = (*OTelHook)(nil)
 // BeforeRequest opens the span and records request-side attributes.
 func (h *OTelHook) BeforeRequest(ctx context.Context, meta litellm.CallMeta, req *litellm.Request) {
 	defer recoverHook()
-	_, span := h.tracer.Start(ctx, meta.Operation+" "+meta.Model)
-	span.SetAttributes(
-		attribute.String(attrSystem, meta.Provider),
+	operation := semanticOperation(meta)
+	attrs := []attribute.KeyValue{
+		attribute.String(attrProviderName, semanticProvider(meta.Provider)),
+		attribute.String(attrOperationName, operation),
 		attribute.String(attrRequestModel, meta.Model),
-	)
-	if h.attrFn != nil {
-		if extra := h.attrFn(ctx); len(extra) > 0 {
-			span.SetAttributes(extra...)
-		}
+	}
+	if meta.Streaming {
+		attrs = append(attrs, attribute.Bool(attrRequestStream, true))
 	}
 	if h.captureContent && req != nil && len(req.Messages) > 0 {
-		if data, err := json.Marshal(req.Messages); err == nil {
-			span.SetAttributes(attribute.String(attrPrompt, string(data)))
+		if data, err := marshalInputMessages(req.Messages); err == nil {
+			attrs = append(attrs, attribute.String(attrInputMessages, data))
 		}
 	}
+	if h.attrFn != nil {
+		if extra := h.attrFn(ctx); len(extra) > 0 {
+			attrs = append(attrs, extra...)
+		}
+	}
+	spanName := operation
+	if meta.Model != "" {
+		spanName += " " + meta.Model
+	}
+	_, span := h.tracer.Start(ctx, spanName,
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(attrs...),
+	)
+	state := &callState{span: span}
+	if h.captureContent && meta.Streaming {
+		state.collector = litellm.NewEventCollector()
+	}
 	h.mu.Lock()
-	h.spans[meta.CallID] = &callState{span: span}
+	h.spans[meta.CallID] = state
 	h.mu.Unlock()
 }
 
@@ -78,21 +92,20 @@ func (h *OTelHook) AfterResponse(ctx context.Context, meta litellm.CallMeta, res
 		return
 	}
 	if err != nil {
-		st.span.RecordError(err)
-		st.span.SetStatus(codes.Error, err.Error())
+		recordSpanError(st.span, err)
 		st.span.End()
 		return
 	}
 	if resp != nil {
 		stampResponse(st.span, resp.Model, string(resp.FinishReason), &resp.Usage)
-		if h.captureContent && resp.Text() != "" {
-			st.span.SetAttributes(attribute.String(attrCompletion, resp.Text()))
+		if h.captureContent && len(resp.Blocks) > 0 {
+			setOutputMessages(st.span, resp.Blocks, resp.FinishReason)
 		}
 	}
 	st.span.End()
 }
 
-// OnStreamEvent accumulates streamed output and finishes the span on DoneEvent.
+// OnStreamEvent records stream metadata and finishes the span on DoneEvent.
 func (h *OTelHook) OnStreamEvent(ctx context.Context, meta litellm.CallMeta, event litellm.Event) {
 	defer recoverHook()
 	if event == nil {
@@ -104,15 +117,33 @@ func (h *OTelHook) OnStreamEvent(ctx context.Context, meta litellm.CallMeta, eve
 	if st == nil {
 		return
 	}
-	switch e := event.(type) {
-	case litellm.ContentDelta:
-		if h.captureContent && e.Text != "" {
-			st.content.WriteString(e.Text)
+	var collected *litellm.Response
+	if st.collector != nil {
+		done, err := st.collector.Apply(event)
+		if err != nil {
+			recordSpanError(st.span, err)
+			return
 		}
+		if done {
+			collected = st.collector.Response()
+		}
+	}
+	switch e := event.(type) {
 	case litellm.DoneEvent:
-		stampResponse(st.span, meta.Model, string(e.FinishReason), nil)
-		if h.captureContent && st.content.Len() > 0 {
-			st.span.SetAttributes(attribute.String(attrCompletion, st.content.String()))
+		model := e.Model
+		finishReason := e.FinishReason
+		if collected != nil {
+			if collected.Model != "" {
+				model = collected.Model
+			}
+			finishReason = collected.FinishReason
+		}
+		if model == "" {
+			model = meta.Model
+		}
+		stampResponse(st.span, model, string(finishReason), nil)
+		if collected != nil && len(collected.Blocks) > 0 {
+			setOutputMessages(st.span, collected.Blocks, finishReason)
 		}
 		st.span.End()
 		h.mu.Lock()
@@ -120,8 +151,6 @@ func (h *OTelHook) OnStreamEvent(ctx context.Context, meta litellm.CallMeta, eve
 		h.mu.Unlock()
 	case litellm.UsageEvent:
 		stampResponse(st.span, meta.Model, "", &e.Usage)
-	default:
-		return
 	}
 }
 
@@ -138,11 +167,17 @@ func (h *OTelHook) OnStreamEnd(ctx context.Context, meta litellm.CallMeta, err e
 		return
 	}
 	if err != nil {
-		st.span.RecordError(err)
-		st.span.SetStatus(codes.Error, err.Error())
+		recordSpanError(st.span, err)
 	}
-	if h.captureContent && st.content.Len() > 0 {
-		st.span.SetAttributes(attribute.String(attrCompletion, st.content.String()))
+	if st.collector != nil {
+		resp := st.collector.Response()
+		finishReason := litellm.FinishReason("")
+		if err != nil {
+			finishReason = litellm.FinishReasonError
+		}
+		if len(resp.Blocks) > 0 {
+			setOutputMessages(st.span, resp.Blocks, finishReason)
+		}
 	}
 	st.span.End()
 }
@@ -167,7 +202,7 @@ func stampResponse(span trace.Span, model, finishReason string, usage *litellm.U
 		span.SetAttributes(attribute.String(attrResponseModel, model))
 	}
 	if finishReason != "" {
-		span.SetAttributes(attribute.String(attrFinishReason, finishReason))
+		span.SetAttributes(attribute.StringSlice(attrFinishReasons, []string{semanticFinishReason(litellm.FinishReason(finishReason))}))
 	}
 	if usage != nil {
 		span.SetAttributes(
@@ -177,7 +212,25 @@ func stampResponse(span trace.Span, model, finishReason string, usage *litellm.U
 		if usage.CacheReadTokens > 0 {
 			span.SetAttributes(attribute.Int(attrCacheReadTokens, usage.CacheReadTokens))
 		}
+		if usage.CacheWriteTokens > 0 {
+			span.SetAttributes(attribute.Int(attrCacheWriteTokens, usage.CacheWriteTokens))
+		}
+		if usage.ReasoningTokens > 0 {
+			span.SetAttributes(attribute.Int(attrReasoningTokens, usage.ReasoningTokens))
+		}
 	}
+}
+
+func setOutputMessages(span trace.Span, blocks []litellm.Block, finishReason litellm.FinishReason) {
+	if data, err := marshalOutputMessages(blocks, finishReason); err == nil {
+		span.SetAttributes(attribute.String(attrOutputMessages, data))
+	}
+}
+
+func recordSpanError(span trace.Span, err error) {
+	span.RecordError(err)
+	span.SetStatus(codes.Error, err.Error())
+	span.SetAttributes(attribute.String(attrErrorType, semanticErrorType(err)))
 }
 
 func recoverHook() {

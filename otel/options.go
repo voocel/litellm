@@ -10,8 +10,9 @@ import (
 // Option configures an OTelHook.
 type Option func(*OTelHook)
 
-// WithCaptureContent controls whether prompt and completion text are recorded
-// on the span. Enabled by default; disable for privacy or to shrink span size.
+// WithCaptureContent controls whether input and output messages are recorded
+// on the span. Content capture is disabled by default because messages may
+// contain sensitive information.
 func WithCaptureContent(capture bool) Option {
 	return func(h *OTelHook) { h.captureContent = capture }
 }
@@ -33,7 +34,7 @@ func New(tracer trace.Tracer, opts ...Option) *OTelHook {
 	h := &OTelHook{
 		tracer:         tracer,
 		spans:          make(map[string]*callState),
-		captureContent: true,
+		captureContent: false,
 	}
 	for _, opt := range opts {
 		opt(h)

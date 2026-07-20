@@ -202,7 +202,7 @@ func Handle(stream Stream, fn func(Event) error) (*Response, error) {
 	if stream == nil {
 		return nil, fmt.Errorf("stream cannot be nil")
 	}
-	collector := newEventCollector()
+	collector := NewEventCollector()
 	for {
 		event, err := stream.Next()
 		if err != nil {
@@ -273,6 +273,9 @@ func HandleWith(stream Stream, handler StreamHandler) (*Response, error) {
 	})
 }
 
+// EventCollector incrementally aggregates stream events into a Response.
+// Create one with NewEventCollector, call Apply for each event in order, then
+// read Response after Apply reports completion.
 type EventCollector struct {
 	blocks      []Block
 	toolIndexes map[string]int
@@ -286,7 +289,8 @@ type EventCollector struct {
 	tools       *ToolUseAccumulator
 }
 
-func newEventCollector() *EventCollector {
+// NewEventCollector returns an initialized stream event collector.
+func NewEventCollector() *EventCollector {
 	return &EventCollector{
 		toolIndexes: make(map[string]int),
 		tools:       NewToolUseAccumulator(),
