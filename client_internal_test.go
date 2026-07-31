@@ -581,18 +581,26 @@ func TestClientAllowsMalformedToolArgumentsFromModel(t *testing.T) {
 }
 
 func TestClientRejectsNilStreamWithoutError(t *testing.T) {
+	var hookErr error
 	client, err := New(&testProvider{
 		name: "test",
 		streamFunc: func(context.Context, *Request) (Stream, error) {
 			return nil, nil
 		},
-	})
+	}, WithHook(HookFuncs{
+		AfterResponseFunc: func(_ context.Context, _ CallMeta, _ *Response, err error) {
+			hookErr = err
+		},
+	}))
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
 	_, err = client.Stream(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}})
 	if err == nil || !strings.Contains(err.Error(), "nil stream without error") {
 		t.Fatalf("expected nil stream error, got %v", err)
+	}
+	if hookErr == nil || !strings.Contains(hookErr.Error(), "nil stream without error") {
+		t.Fatalf("AfterResponse received %v, want nil stream error", hookErr)
 	}
 }
 

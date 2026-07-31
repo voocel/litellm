@@ -132,6 +132,28 @@ func TestBuildRequestOpenAIProviderOptions(t *testing.T) {
 	}
 }
 
+func TestBuildRequestRequiresSingleOutput(t *testing.T) {
+	provider := mustProvider(t)
+	req := &litellm.Request{
+		Model:           "gpt-4.1",
+		Messages:        []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{ProviderOptionN: 1},
+	}
+	wire, err := provider.buildRequest(req, false)
+	if err != nil {
+		t.Fatalf("buildRequest returned error for n=1: %v", err)
+	}
+	if wire.N == nil || *wire.N != 1 {
+		t.Fatalf("n = %v, want 1", wire.N)
+	}
+
+	req.ProviderOptions[ProviderOptionN] = 2
+	_, err = provider.buildRequest(req, false)
+	if err == nil || !strings.Contains(err.Error(), `provider option "n" must be 1`) {
+		t.Fatalf("expected single-output error, got %v", err)
+	}
+}
+
 func TestBuildRequestRoundTripsTextReasoningBlockHistory(t *testing.T) {
 	provider := mustProvider(t)
 	wire, err := provider.buildRequest(&litellm.Request{

@@ -12,6 +12,9 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) ([]byte, []li
 	if err := p.validateProviderOptions(req.ProviderOptions); err != nil {
 		return nil, nil, err
 	}
+	if n, ok := req.ProviderOptions["n"]; ok && !isSingleOutput(n) {
+		return nil, nil, fmt.Errorf("%s: provider option %q must be 1; litellm.Response supports a single output", p.Name(), "n")
+	}
 	body := map[string]any{"model": req.Model}
 	var warnings []litellm.Warning
 	if p.spec.Request.Warnings != nil {
@@ -127,6 +130,18 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) ([]byte, []li
 	}
 	data, err := json.Marshal(body)
 	return data, warnings, err
+}
+
+func isSingleOutput(value any) bool {
+	switch value := value.(type) {
+	case int:
+		return value == 1
+	case int64:
+		return value == 1
+	case float64:
+		return value == 1
+	}
+	return false
 }
 
 func (p *Provider) putProviderOption(body map[string]any, key string, value any) error {

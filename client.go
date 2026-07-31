@@ -128,6 +128,8 @@ func (c *Client) Stream(ctx context.Context, req Request) (Stream, error) {
 	stream, err := c.provider.Stream(streamCtx, prepared)
 	if err != nil {
 		err = WrapError(err, c.provider.Name())
+	} else if stream == nil {
+		err = NewProviderError(c.provider.Name(), ErrorTypeInternal, "provider returned nil stream without error")
 	}
 	meta.Duration = time.Since(start)
 	c.notifyAfterResponse(streamCtx, meta, nil, err)
@@ -135,13 +137,6 @@ func (c *Client) Stream(ctx context.Context, req Request) (Stream, error) {
 		if cancel != nil {
 			cancel()
 		}
-		return nil, err
-	}
-	if stream == nil {
-		if cancel != nil {
-			cancel()
-		}
-		err := NewProviderError(c.provider.Name(), ErrorTypeInternal, "provider returned nil stream without error")
 		return nil, err
 	}
 	stream = wrapProviderStreamErrors(c.provider.Name(), stream)

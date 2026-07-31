@@ -179,6 +179,39 @@ func TestConfigCanAllowUnknownProviderOptions(t *testing.T) {
 	}
 }
 
+func TestBuildRequestRequiresSingleOutput(t *testing.T) {
+	provider, err := New(Config{
+		BaseURL:    "https://compat.example",
+		HTTPClient: roundTripFunc(nil),
+	}, Spec{
+		Name: "testcompat",
+		Request: RequestSpec{
+			AllowedProviderOptions: map[string]struct{}{"n": {}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	req := &litellm.Request{
+		Model:           "m",
+		Messages:        []litellm.Message{litellm.UserText("hi")},
+		ProviderOptions: litellm.ProviderOptions{"n": 1},
+	}
+	data, _, err := provider.buildRequest(req, false)
+	if err != nil {
+		t.Fatalf("buildRequest returned error for n=1: %v", err)
+	}
+	if !strings.Contains(string(data), `"n":1`) {
+		t.Fatalf("body missing n=1: %s", data)
+	}
+
+	req.ProviderOptions["n"] = 2
+	_, _, err = provider.buildRequest(req, false)
+	if err == nil || !strings.Contains(err.Error(), `provider option "n" must be 1`) {
+		t.Fatalf("expected single-output error, got %v", err)
+	}
+}
+
 func TestConfigAllowsUnknownProviderOptionsWithoutBypassingKnownMapper(t *testing.T) {
 	provider, err := New(Config{
 		BaseURL:                     "https://compat.example",

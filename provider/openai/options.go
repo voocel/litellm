@@ -85,6 +85,9 @@ func applyProviderOptions(req *chatRequest, options map[string]any) error {
 			if err != nil {
 				return err
 			}
+			if v != 1 {
+				return fmt.Errorf("openai: provider option %q must be 1; litellm.Response supports a single output", key)
+			}
 			req.N = &v
 		case ProviderOptionLogprobs:
 			v, err := optionBool(key, value)
