@@ -45,6 +45,64 @@ func TestCollectPreservesBlockOrder(t *testing.T) {
 	}
 }
 
+func TestEventCollectorContinuesAfterResponseSnapshot(t *testing.T) {
+	collector := NewEventCollector()
+	for _, event := range []Event{
+		ContentDelta{Text: "hel"},
+		ContentDelta{Text: "lo"},
+	} {
+		if _, err := collector.Apply(event); err != nil {
+			t.Fatalf("Apply(%T): %v", event, err)
+		}
+	}
+	if got := collector.Response().Text(); got != "hello" {
+		t.Fatalf("first snapshot text = %q, want %q", got, "hello")
+	}
+
+	for _, event := range []Event{
+		ContentDelta{Text: " world"},
+		ReasoningDelta{Text: "think"},
+		ReasoningDelta{Text: "ing", Signature: "sig"},
+	} {
+		if _, err := collector.Apply(event); err != nil {
+			t.Fatalf("Apply(%T): %v", event, err)
+		}
+	}
+	resp := collector.Response()
+	if got := resp.Text(); got != "hello world" {
+		t.Fatalf("second snapshot text = %q, want %q", got, "hello world")
+	}
+	if got := resp.Reasoning(); got != "thinking" {
+		t.Fatalf("second snapshot reasoning = %q, want %q", got, "thinking")
+	}
+	block, ok := resp.Blocks[1].(ReasoningBlock)
+	if !ok || block.Signature != "sig" {
+		t.Fatalf("reasoning block = %#v", resp.Blocks[1])
+	}
+}
+
+func BenchmarkEventCollectorContent(b *testing.B) {
+	for _, tc := range []struct {
+		name   string
+		deltas int
+	}{
+		{name: "100_deltas", deltas: 100},
+		{name: "1000_deltas", deltas: 1_000},
+		{name: "5000_deltas", deltas: 5_000},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			for b.Loop() {
+				collector := NewEventCollector()
+				for range tc.deltas {
+					_, _ = collector.Apply(ContentDelta{Text: "x"})
+				}
+				_, _ = collector.Apply(DoneEvent{})
+				_ = collector.Response()
+			}
+		})
+	}
+}
+
 func TestCollectMergesToolUseWhenStableIDArrivesAfterIndex(t *testing.T) {
 	stream := &eventSliceStream{events: []Event{
 		ToolUseStart{Name: "lookup", Index: IntPtr(0)},

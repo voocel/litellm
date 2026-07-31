@@ -277,7 +277,10 @@ func HandleWith(stream Stream, handler StreamHandler) (*Response, error) {
 // Create one with NewEventCollector, call Apply for each event in order, then
 // read Response after Apply reports completion.
 type EventCollector struct {
-	blocks      []Block
+	blocks []Block
+	// blockText incrementally builds the final text-bearing block and is
+	// materialized before another block is appended or a Response is returned.
+	blockText   *strings.Builder
 	toolIndexes map[string]int
 	usage       Usage
 	finish      FinishReason
@@ -428,13 +431,20 @@ func (c *EventCollector) appendContent(text string) {
 		return
 	}
 	if len(c.blocks) > 0 {
-		if block, ok := c.blocks[len(c.blocks)-1].(TextBlock); ok {
-			block.Text += text
-			c.blocks[len(c.blocks)-1] = block
+		index := len(c.blocks) - 1
+		if block, ok := c.blocks[index].(TextBlock); ok {
+			if c.blockText == nil {
+				c.blockText = newBlockTextBuilder(block.Text, len(text))
+				block.Text = ""
+				c.blocks[index] = block
+			}
+			c.blockText.WriteString(text)
 			return
 		}
 	}
-	c.blocks = append(c.blocks, TextBlock{Text: text})
+	c.flushBlockText()
+	c.blockText = newBlockTextBuilder(text, 0)
+	c.blocks = append(c.blocks, TextBlock{})
 }
 
 func (c *EventCollector) appendReasoning(delta ReasoningDelta) {
@@ -442,6 +452,7 @@ func (c *EventCollector) appendReasoning(delta ReasoningDelta) {
 		return
 	}
 	if len(delta.Redacted) > 0 {
+		c.flushBlockText()
 		c.blocks = append(c.blocks, ReasoningBlock{
 			Signature: delta.Signature,
 			Redacted:  cloneBytes(delta.Redacted),
@@ -449,17 +460,55 @@ func (c *EventCollector) appendReasoning(delta ReasoningDelta) {
 		return
 	}
 	if len(c.blocks) > 0 {
-		if block, ok := c.blocks[len(c.blocks)-1].(ReasoningBlock); ok && len(block.Redacted) == 0 && block.Summary == delta.Summary {
-			block.Text += delta.Text
+		index := len(c.blocks) - 1
+		if block, ok := c.blocks[index].(ReasoningBlock); ok && len(block.Redacted) == 0 && block.Summary == delta.Summary {
+			if delta.Text != "" {
+				if c.blockText == nil {
+					c.blockText = newBlockTextBuilder(block.Text, len(delta.Text))
+					block.Text = ""
+				}
+				c.blockText.WriteString(delta.Text)
+			}
 			if delta.Signature != "" {
 				block.Signature = delta.Signature
 			}
 			block.Extra = mergeReasoningExtra(block.Extra, delta)
-			c.blocks[len(c.blocks)-1] = block
+			c.blocks[index] = block
 			return
 		}
 	}
-	c.blocks = append(c.blocks, ReasoningBlock{Text: delta.Text, Summary: delta.Summary, Signature: delta.Signature, Extra: cloneBytes(delta.Extra)})
+	c.flushBlockText()
+	block := ReasoningBlock{Summary: delta.Summary, Signature: delta.Signature, Extra: cloneBytes(delta.Extra)}
+	if delta.Text != "" {
+		c.blockText = newBlockTextBuilder(delta.Text, 0)
+	}
+	c.blocks = append(c.blocks, block)
+}
+
+func newBlockTextBuilder(text string, additional int) *strings.Builder {
+	builder := &strings.Builder{}
+	builder.Grow(len(text) + additional)
+	builder.WriteString(text)
+	return builder
+}
+
+func (c *EventCollector) flushBlockText() {
+	if c.blockText == nil {
+		return
+	}
+	index := len(c.blocks) - 1
+	text := c.blockText.String()
+	switch block := c.blocks[index].(type) {
+	case TextBlock:
+		block.Text = text
+		c.blocks[index] = block
+	case ReasoningBlock:
+		block.Text = text
+		c.blocks[index] = block
+	default:
+		panic(fmt.Sprintf("litellm: block text builder has unsupported block %T", block))
+	}
+	c.blockText = nil
 }
 
 func mergeReasoningExtra(current json.RawMessage, delta ReasoningDelta) json.RawMessage {
@@ -492,11 +541,13 @@ func (c *EventCollector) appendTool(key string, tool *ToolUseBlock) {
 		c.blocks[index] = cloneToolUseBlock(*tool)
 		return
 	}
+	c.flushBlockText()
 	c.toolIndexes[key] = len(c.blocks)
 	c.blocks = append(c.blocks, cloneToolUseBlock(*tool))
 }
 
 func (c *EventCollector) cloneBlocks() []Block {
+	c.flushBlockText()
 	if len(c.blocks) == 0 {
 		return nil
 	}
