@@ -581,9 +581,9 @@ func convertBlocks(blocks []litellm.Block) ([]anthropicContent, error) {
 				if err := json.Unmarshal(b.Arguments, &input); err != nil {
 					return nil, fmt.Errorf("anthropic: tool use %q arguments must be object: %w", b.ID, err)
 				}
-			}
-			if input == nil {
-				input = map[string]any{}
+				if input == nil {
+					return nil, fmt.Errorf("anthropic: tool use %q arguments must be object", b.ID)
+				}
 			}
 			cache, err := cacheControl(b.Cache)
 			if err != nil {
