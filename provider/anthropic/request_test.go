@@ -607,11 +607,12 @@ func TestConvertResponseRejectsNil(t *testing.T) {
 }
 
 func TestResponseBlocksRoundTripBackIntoAssistantMessage(t *testing.T) {
+	input := map[string]any{"q": "x"}
 	resp, err := convertResponse(&anthropicResponse{
 		Model: "claude",
 		Content: []anthropicContent{
 			{Type: "thinking", Thinking: "Need lookup.", Signature: "sig-thinking"},
-			{Type: "tool_use", ID: "toolu_1", Name: "lookup", Input: map[string]any{"q": "x"}},
+			{Type: "tool_use", ID: "toolu_1", Name: "lookup", Input: &input},
 		},
 	}, "fallback")
 	if err != nil {
@@ -948,6 +949,65 @@ func TestBuildRequestMapsJSONSchemaResponseFormat(t *testing.T) {
 	}, false)
 	if err == nil || !strings.Contains(err.Error(), "json_object is not supported") {
 		t.Fatalf("expected json_object error, got %v", err)
+	}
+}
+
+func TestBuildRequestKeepsEmptyToolUseInput(t *testing.T) {
+	provider, err := New(Config{APIKey: "test"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	maxTokens := 1024
+	cases := []struct {
+		name string
+		call litellm.ToolUseBlock
+	}{
+		{
+			name: "missing arguments",
+			call: litellm.ToolUseBlock{ID: "toolu_empty", Name: "novel_context"},
+		},
+		{
+			name: "empty object arguments",
+			call: litellm.ToolUseBlock{
+				ID:        "toolu_empty",
+				Name:      "novel_context",
+				Arguments: litellm.MustJSONRaw(map[string]any{}),
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wire, _, err := provider.buildRequest(&litellm.Request{
+				Model:     "claude",
+				MaxTokens: &maxTokens,
+				Messages: []litellm.Message{
+					litellm.UserText("use the tool"),
+					litellm.Assistant(tc.call),
+				},
+			}, false)
+			if err != nil {
+				t.Fatalf("buildRequest returned error: %v", err)
+			}
+			data, err := json.Marshal(wire)
+			if err != nil {
+				t.Fatalf("marshal wire: %v", err)
+			}
+			var payload struct {
+				Messages []struct {
+					Content []struct {
+						Type  string          `json:"type"`
+						Input json.RawMessage `json:"input"`
+					} `json:"content"`
+				} `json:"messages"`
+			}
+			if err := json.Unmarshal(data, &payload); err != nil {
+				t.Fatalf("unmarshal wire: %v", err)
+			}
+			input := payload.Messages[1].Content[0].Input
+			if string(input) != `{}` {
+				t.Fatalf("tool_use input = %s, want {}\nwire: %s", input, data)
+			}
+		})
 	}
 }
 

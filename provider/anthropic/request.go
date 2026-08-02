@@ -39,7 +39,7 @@ type anthropicContent struct {
 	ID           string                 `json:"id,omitempty"`
 	ToolUseID    string                 `json:"tool_use_id,omitempty"`
 	Name         string                 `json:"name,omitempty"`
-	Input        map[string]any         `json:"input,omitempty"`
+	Input        *map[string]any        `json:"input,omitempty"`
 	Content      any                    `json:"content,omitempty"`
 	ToolName     string                 `json:"tool_name,omitempty"`
 	IsError      bool                   `json:"is_error,omitempty"`
@@ -576,17 +576,20 @@ func convertBlocks(blocks []litellm.Block) ([]anthropicContent, error) {
 				out = append(out, anthropicContent{Type: "thinking", Thinking: b.Text, Signature: b.Signature, CacheControl: cache})
 			}
 		case litellm.ToolUseBlock:
-			var input map[string]any
+			input := map[string]any{}
 			if len(b.Arguments) > 0 {
 				if err := json.Unmarshal(b.Arguments, &input); err != nil {
 					return nil, fmt.Errorf("anthropic: tool use %q arguments must be object: %w", b.ID, err)
 				}
 			}
+			if input == nil {
+				input = map[string]any{}
+			}
 			cache, err := cacheControl(b.Cache)
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, anthropicContent{Type: "tool_use", ID: b.ID, Name: b.Name, Input: input, CacheControl: cache})
+			out = append(out, anthropicContent{Type: "tool_use", ID: b.ID, Name: b.Name, Input: &input, CacheControl: cache})
 		case litellm.ToolResultBlock:
 			content, err := convertToolResultContent(b.Content)
 			if err != nil {
