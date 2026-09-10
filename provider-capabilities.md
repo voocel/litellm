@@ -75,7 +75,7 @@ Portable `Thinking.Effort` values are `minimal`, `low`, `medium`, `high`, `xhigh
 
 ## Native APIs
 
-OpenAI Responses is provider-native. Use `provider/openai.Provider.Responses` and `ResponsesStream` when you need hosted tools, conversation IDs, `previous_response_id`, or other Responses-only fields. Generic `Client.Chat` and `Client.Stream` continue to use the shared chat model.
+Generic `Client.Chat` and `Client.Stream` use Chat Completions by default. Set `openai.Config.API = openai.APIResponses` to route them through Responses while keeping the shared request and response types. Use `provider/openai.Provider.Responses` and `ResponsesStream` when you need hosted tools, conversation IDs, `previous_response_id`, or other native Responses fields.
 
 Provider-specific request fields are exposed through typed constants in each provider package. Unknown provider options are rejected by default; compat providers can opt into pass-through with `AllowUnknownProviderOptions`.
 

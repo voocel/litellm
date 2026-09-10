@@ -223,6 +223,8 @@ const (
 	CachePlacementPrefix CachePlacement = "prefix"
 )
 
+// ProviderOptions holds provider-specific request values. Exported struct fields
+// are copied recursively; unexported state must be treated as immutable.
 type ProviderOptions map[string]any
 
 type Request struct {

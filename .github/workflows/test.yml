@@ -22,8 +22,15 @@ jobs:
           go-version-file: go.mod
 
       - name: Test root module
-        run: go test -v ./...
+        run: go test -race -v ./...
 
       - name: Test otel module
         working-directory: otel
-        run: go test -v ./...
+        run: go test -race -v ./...
+
+      - name: Test otel module against current root module
+        env:
+          GOWORK: ${{ runner.temp }}/litellm.go.work
+        run: |
+          go work init . ./otel
+          go test -race -v ./otel/...

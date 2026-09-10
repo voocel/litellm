@@ -541,6 +541,17 @@ func cloneValue(v reflect.Value) reflect.Value {
 			out.Index(i).Set(cloneValue(v.Index(i)))
 		}
 		return out
+	case reflect.Struct:
+		out := reflect.New(v.Type()).Elem()
+		// Preserve private state, such as time.Time's internals. Reflection
+		// can only recursively copy exported fields without unsafe access.
+		out.Set(v)
+		for i := 0; i < v.NumField(); i++ {
+			if out.Field(i).CanSet() {
+				out.Field(i).Set(cloneValue(v.Field(i)))
+			}
+		}
+		return out
 	default:
 		return v
 	}

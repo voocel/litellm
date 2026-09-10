@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -486,6 +487,61 @@ func TestHooksCannotMutateProviderRequestOrReturnedResponse(t *testing.T) {
 	}
 }
 
+func TestHooksCannotMutateStructProviderOptions(t *testing.T) {
+	type options struct {
+		Tags     []string
+		Metadata map[string]string
+		Limit    *int
+		Created  time.Time
+	}
+	newOptions := func() options {
+		return options{
+			Tags:     []string{"original"},
+			Metadata: map[string]string{"key": "original"},
+			Limit:    IntPtr(10),
+			Created:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		}
+	}
+	original, want := newOptions(), newOptions()
+	checkOptions := func(got any) {
+		t.Helper()
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("options = %#v, want %#v", got, want)
+		}
+	}
+	provider := &testProvider{
+		name: "hook",
+		chatFunc: func(ctx context.Context, req *Request) (*Response, error) {
+			checkOptions(req.ProviderOptions["custom"])
+			req.ProviderOptions["custom"].(options).Tags[0] = "provider"
+			return &Response{Blocks: []Block{Text("ok")}}, nil
+		},
+	}
+	client, err := New(provider, WithHooks(
+		HookFuncs{BeforeRequestFunc: func(ctx context.Context, meta CallMeta, req *Request) {
+			value := req.ProviderOptions["custom"].(options)
+			value.Tags[0] = "hook"
+			value.Metadata["key"] = "hook"
+			*value.Limit = 99
+		}},
+		HookFuncs{BeforeRequestFunc: func(ctx context.Context, meta CallMeta, req *Request) {
+			checkOptions(req.ProviderOptions["custom"])
+		}},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Chat(context.Background(), Request{
+		Model:           "m",
+		Messages:        []Message{UserText("hi")},
+		ProviderOptions: ProviderOptions{"custom": original},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkOptions(original)
+}
+
 func TestClientCaptureRawResponseOption(t *testing.T) {
 	raw := []byte(`{"ok":true}`)
 	client, err := New(&testProvider{
@@ -943,23 +999,55 @@ func TestStreamWrapsRuntimeProviderErrors(t *testing.T) {
 }
 
 func TestStreamHooksCannotMutateReturnedEvents(t *testing.T) {
+	newEvents := func() []Event {
+		return []Event{
+			ContentDelta{Text: "hi", OutputIndex: IntPtr(0), ContentIndex: IntPtr(1)},
+			RefusalDelta{Text: "no", OutputIndex: IntPtr(0), ContentIndex: IntPtr(1)},
+			ReasoningDelta{Text: "thinking", Index: IntPtr(0), Redacted: []byte("data"), Extra: []byte(`{}`)},
+			ToolUseStart{ID: "call_1", Index: IntPtr(0), OutputIndex: IntPtr(1)},
+			ToolUseDelta{ID: "call_1", Index: IntPtr(0), OutputIndex: IntPtr(1), ArgumentsDelta: []byte(`{"q":"x"}`)},
+			ToolUseDone{ID: "call_1", Index: IntPtr(0), OutputIndex: IntPtr(1)},
+			ProviderEvent{Name: "provider.event", Raw: []byte(`{"ok":true}`)},
+			ContentDelta{Text: "without indices"},
+			DoneEvent{FinishReason: FinishReasonStop, Provider: "stream", Model: "m"},
+		}
+	}
+	events, want := newEvents(), newEvents()
+	observed := 0
 	client, err := New(&testProvider{
 		name: "stream",
 		streamFunc: func(ctx context.Context, req *Request) (Stream, error) {
-			return &testStream{events: []Event{
-				ToolUseDelta{ID: "call_1", ArgumentsDelta: []byte(`{"q":"x"}`)},
-				ProviderEvent{Name: "provider.event", Raw: []byte(`{"ok":true}`)},
-				DoneEvent{FinishReason: FinishReasonStop, Provider: "stream", Model: req.Model},
-			}}, nil
+			return &testStream{events: events}, nil
 		},
-	}, WithHook(HookFuncs{
+	}, WithHooks(HookFuncs{
 		OnStreamEventFunc: func(ctx context.Context, meta CallMeta, event Event) {
 			switch e := event.(type) {
+			case ContentDelta:
+				if e.OutputIndex != nil {
+					*e.OutputIndex, *e.ContentIndex = 99, 99
+				}
+			case RefusalDelta:
+				*e.OutputIndex, *e.ContentIndex = 99, 99
+			case ReasoningDelta:
+				*e.Index = 99
+				e.Redacted[0], e.Extra[0] = 'x', '['
+			case ToolUseStart:
+				*e.Index, *e.OutputIndex = 99, 99
 			case ToolUseDelta:
+				*e.Index, *e.OutputIndex = 99, 99
 				e.ArgumentsDelta[0] = '['
+			case ToolUseDone:
+				*e.Index, *e.OutputIndex = 99, 99
 			case ProviderEvent:
 				e.Raw[0] = '['
 			}
+		},
+	}, HookFuncs{
+		OnStreamEventFunc: func(ctx context.Context, meta CallMeta, event Event) {
+			if !reflect.DeepEqual(event, want[observed]) {
+				t.Errorf("second hook saw mutated event %T: %#v", event, event)
+			}
+			observed++
 		},
 	}))
 	if err != nil {
@@ -969,21 +1057,18 @@ func TestStreamHooksCannotMutateReturnedEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
-	toolEvent, err := stream.Next()
-	if err != nil {
-		t.Fatalf("Next tool event: %v", err)
+	defer stream.Close()
+	for _, expected := range want {
+		event, err := stream.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(event, expected) {
+			t.Errorf("caller saw mutated event %T: %#v", event, event)
+		}
 	}
-	toolDelta := toolEvent.(ToolUseDelta)
-	if string(toolDelta.ArgumentsDelta) != `{"q":"x"}` {
-		t.Fatalf("tool delta mutated: %s", toolDelta.ArgumentsDelta)
-	}
-	providerEvent, err := stream.Next()
-	if err != nil {
-		t.Fatalf("Next provider event: %v", err)
-	}
-	providerDelta := providerEvent.(ProviderEvent)
-	if string(providerDelta.Raw) != `{"ok":true}` {
-		t.Fatalf("provider event mutated: %s", providerDelta.Raw)
+	if !reflect.DeepEqual(events, want) {
+		t.Error("provider events were mutated")
 	}
 }
 

@@ -98,19 +98,30 @@ func (ProviderEvent) isEvent()  {}
 func cloneEvent(event Event) Event {
 	switch e := event.(type) {
 	case ContentDelta:
+		e.OutputIndex = cloneIntPtr(e.OutputIndex)
+		e.ContentIndex = cloneIntPtr(e.ContentIndex)
 		return e
 	case RefusalDelta:
+		e.OutputIndex = cloneIntPtr(e.OutputIndex)
+		e.ContentIndex = cloneIntPtr(e.ContentIndex)
 		return e
 	case ReasoningDelta:
+		e.Index = cloneIntPtr(e.Index)
 		e.Redacted = cloneBytes(e.Redacted)
 		e.Extra = cloneBytes(e.Extra)
 		return e
 	case ToolUseStart:
+		e.Index = cloneIntPtr(e.Index)
+		e.OutputIndex = cloneIntPtr(e.OutputIndex)
 		return e
 	case ToolUseDelta:
+		e.Index = cloneIntPtr(e.Index)
+		e.OutputIndex = cloneIntPtr(e.OutputIndex)
 		e.ArgumentsDelta = cloneBytes(e.ArgumentsDelta)
 		return e
 	case ToolUseDone:
+		e.Index = cloneIntPtr(e.Index)
+		e.OutputIndex = cloneIntPtr(e.OutputIndex)
 		return e
 	case UsageEvent:
 		return e

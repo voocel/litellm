@@ -242,7 +242,16 @@ Use `client.Capabilities(model)` or `litellm.GetCapabilities(provider, model)` f
 
 ## OpenAI Responses
 
-OpenAI Responses is provider-native and lives on `provider/openai.Provider`, not the generic client.
+Set `openai.Config.API = openai.APIResponses` to route generic `Client.Chat` and `Client.Stream` calls through the Responses API while keeping the shared `litellm.Request` and return types. The default is the Chat Completions API.
+
+```go
+client, err := openai.NewClient(openai.Config{
+	APIKey: os.Getenv("OPENAI_API_KEY"),
+	API:    openai.APIResponses,
+})
+```
+
+For native fields such as hosted tools, conversation IDs, and `previous_response_id`, use `Responses` and `ResponsesStream` on `provider/openai.Provider`:
 
 ```go
 oai, err := openai.New(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")})
@@ -345,6 +354,8 @@ resp, err := client.Chat(ctx, litellm.Request{
 ## Hooks And OTel
 
 Hooks observe requests, responses, warnings, and stream events. Hook inputs are copies; mutating them does not affect provider calls, returned responses, or events seen by the caller. Core hooks do not recover panics.
+
+Exported fields in custom request option structs are copied recursively. Unexported state is preserved by value; any references it contains must be treated as read-only.
 
 ```go
 client, err := litellm.New(provider, litellm.WithHook(litellm.HookFuncs{

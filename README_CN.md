@@ -242,7 +242,16 @@ resp, err := client.Chat(ctx, litellm.Request{
 
 ## OpenAI Responses
 
-OpenAI Responses 是 provider-native 能力，挂在 `provider/openai.Provider` 上，不进入通用 `Client`。
+设置 `openai.Config.API = openai.APIResponses` 后，通用 `Client.Chat` 和 `Client.Stream` 会通过 Responses API 发送请求，继续使用统一的 `litellm.Request` 和返回类型。默认使用 Chat Completions API。
+
+```go
+client, err := openai.NewClient(openai.Config{
+	APIKey: os.Getenv("OPENAI_API_KEY"),
+	API:    openai.APIResponses,
+})
+```
+
+需要 hosted tools、conversation ID、`previous_response_id` 等原生字段时，使用 `provider/openai.Provider` 上的 `Responses` 和 `ResponsesStream`：
 
 ```go
 oai, err := openai.New(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")})
@@ -345,6 +354,8 @@ resp, err := client.Chat(ctx, litellm.Request{
 ## Hooks 与 OTel
 
 Hooks 只观察请求、响应、warning 和 stream event。Hook 收到的是副本；修改它们不会影响 Provider 调用、最终返回的 response，也不会影响调用方看到的 event。核心 hooks 不 recover panic。
+
+自定义请求选项结构体的导出字段会递归复制；未导出状态按值保留，其中的引用数据须视为只读。
 
 ```go
 client, err := litellm.New(provider, litellm.WithHook(litellm.HookFuncs{
