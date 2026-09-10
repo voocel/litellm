@@ -68,7 +68,7 @@
         {
           "description": "Get weather.",
           "name": "get_weather",
-          "parameters": {
+          "parametersJsonSchema": {
             "properties": {
               "city": {
                 "type": "string"

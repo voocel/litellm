@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -236,6 +237,66 @@ func TestBuildRequestRejectsToolResultWithoutPrecedingToolUse(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "no preceding tool use name") {
 		t.Fatalf("expected tool result mapping error, got %v", err)
+	}
+}
+
+func TestBuildRequestPreservesNullableToolJSONSchema(t *testing.T) {
+	provider := mustProvider(t)
+	schema := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"issues": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"suggestion": {"type": ["string", "null"]}
+					},
+					"required": ["suggestion"],
+					"additionalProperties": false
+				}
+			}
+		},
+		"required": ["issues"],
+		"additionalProperties": false
+	}`)
+	var want map[string]any
+	if err := json.Unmarshal(schema, &want); err != nil {
+		t.Fatal(err)
+	}
+	for _, strict := range []litellm.StrictMode{litellm.StrictDefault, litellm.StrictEnabled, litellm.StrictDisabled} {
+		t.Run(fmt.Sprintf("strict=%d", strict), func(t *testing.T) {
+			tool := mustTool(t, "audit_foundation", "Audit foundation.", schema)
+			tool.Strict = strict
+			wire, err := provider.buildRequest(&litellm.Request{
+				Model:      "gemini-3-pro",
+				Messages:   []litellm.Message{litellm.UserText("Audit the foundation.")},
+				Tools:      []litellm.Tool{tool},
+				ToolChoice: "auto",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body struct {
+				Tools []struct {
+					FunctionDeclarations []map[string]any `json:"functionDeclarations"`
+				} `json:"tools"`
+			}
+			if err := json.Unmarshal(data, &body); err != nil {
+				t.Fatal(err)
+			}
+			declaration := body.Tools[0].FunctionDeclarations[0]
+			if _, ok := declaration["parameters"]; ok {
+				t.Error("JSON Schema must not be sent through OpenAPI parameters")
+			}
+			if got := declaration["parametersJsonSchema"]; !reflect.DeepEqual(got, want) {
+				t.Errorf("parametersJsonSchema = %#v, want %#v", got, want)
+			}
+		})
 	}
 }
 

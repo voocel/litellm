@@ -364,9 +364,9 @@ func convertTools(tools []litellm.Tool) ([]tool, bool, error) {
 			}
 		}
 		out.FunctionDeclarations = append(out.FunctionDeclarations, functionDeclaration{
-			Name:        t.Name,
-			Description: t.Description,
-			Parameters:  params,
+			Name:                 t.Name,
+			Description:          t.Description,
+			ParametersJSONSchema: params,
 		})
 	}
 	return []tool{out}, strict, nil

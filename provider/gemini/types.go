@@ -73,9 +73,9 @@ type tool struct {
 }
 
 type functionDeclaration struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Parameters  map[string]any `json:"parameters,omitempty"`
+	Name                 string         `json:"name"`
+	Description          string         `json:"description"`
+	ParametersJSONSchema map[string]any `json:"parametersJsonSchema,omitempty"`
 }
 
 type toolConfig struct {
