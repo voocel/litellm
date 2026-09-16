@@ -1001,10 +1001,14 @@ func TestStreamWrapsRuntimeProviderErrors(t *testing.T) {
 func TestStreamHooksCannotMutateReturnedEvents(t *testing.T) {
 	newEvents := func() []Event {
 		return []Event{
+			ContentStart{Block: ReasoningBlock{Extra: []byte(`{}`)}, OutputIndex: IntPtr(2), ContentIndex: IntPtr(0)},
+			ContentEnd{OutputIndex: IntPtr(2), ContentIndex: IntPtr(0)},
+			ContentStart{Block: TextBlock{}, OutputIndex: IntPtr(3), ContentIndex: IntPtr(0)},
+			ContentEnd{Block: TextBlock{Annotations: []Annotation{{Extra: []byte(`{}`)}}}, OutputIndex: IntPtr(3), ContentIndex: IntPtr(0)},
 			ContentDelta{Text: "hi", OutputIndex: IntPtr(0), ContentIndex: IntPtr(1)},
 			RefusalDelta{Text: "no", OutputIndex: IntPtr(0), ContentIndex: IntPtr(1)},
-			ReasoningDelta{Text: "thinking", Index: IntPtr(0), Redacted: []byte("data"), Extra: []byte(`{}`)},
-			ToolUseStart{ID: "call_1", Index: IntPtr(0), OutputIndex: IntPtr(1)},
+			ReasoningDelta{Text: "thinking", ContentIndex: IntPtr(0), Redacted: []byte("data"), Extra: []byte(`{}`)},
+			ToolUseStart{ID: "call_1", Name: "lookup", Index: IntPtr(0), OutputIndex: IntPtr(1)},
 			ToolUseDelta{ID: "call_1", Index: IntPtr(0), OutputIndex: IntPtr(1), ArgumentsDelta: []byte(`{"q":"x"}`)},
 			ToolUseDone{ID: "call_1", Index: IntPtr(0), OutputIndex: IntPtr(1)},
 			ProviderEvent{Name: "provider.event", Raw: []byte(`{"ok":true}`)},
@@ -1022,6 +1026,16 @@ func TestStreamHooksCannotMutateReturnedEvents(t *testing.T) {
 	}, WithHooks(HookFuncs{
 		OnStreamEventFunc: func(ctx context.Context, meta CallMeta, event Event) {
 			switch e := event.(type) {
+			case ContentStart:
+				*e.OutputIndex, *e.ContentIndex = 99, 99
+				if block, ok := e.Block.(ReasoningBlock); ok {
+					block.Extra[0] = '['
+				}
+			case ContentEnd:
+				*e.OutputIndex, *e.ContentIndex = 99, 99
+				if block, ok := e.Block.(TextBlock); ok {
+					block.Annotations[0].Extra[0] = '['
+				}
 			case ContentDelta:
 				if e.OutputIndex != nil {
 					*e.OutputIndex, *e.ContentIndex = 99, 99
@@ -1029,7 +1043,7 @@ func TestStreamHooksCannotMutateReturnedEvents(t *testing.T) {
 			case RefusalDelta:
 				*e.OutputIndex, *e.ContentIndex = 99, 99
 			case ReasoningDelta:
-				*e.Index = 99
+				*e.ContentIndex = 99
 				e.Redacted[0], e.Extra[0] = 'x', '['
 			case ToolUseStart:
 				*e.Index, *e.OutputIndex = 99, 99

@@ -706,6 +706,7 @@ func TestStreamPreservesRedactedThinkingData(t *testing.T) {
 		`event: content_block_start`,
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"opaque"}}`,
 		``,
+		`data: {"type":"content_block_stop","index":0}`,
 		`event: message_stop`,
 		`data: {"type":"message_stop"}`,
 		``,

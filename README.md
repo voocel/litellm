@@ -106,6 +106,7 @@ client, err := openai.NewClient(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY"
 ## Streaming
 
 Streams emit typed `Event` values.
+Providers with explicit content boundaries emit `ContentStart` / `ContentEnd`. The start carries initial content; the end may carry a complete final snapshot with metadata, not another delta. Snapshot text must match streamed text; mismatches return an error and the partial response. `Collect` handles both; `StreamText` / `StreamWith` deliver initial text and subsequent deltas.
 `Stream` is intended for single-goroutine consumption; do not call `Next` concurrently.
 Use `WithStreamIdleTimeout` when you want an explicit per-event idle timeout; it is off by default.
 `WithStreamIdleTimeout` only covers generic `Client.Stream`; OpenAI Responses native streaming uses `openai.Config.StreamIdleTimeout`.
@@ -131,6 +132,13 @@ for {
 		log.Fatal(err)
 	}
 	switch e := event.(type) {
+	case litellm.ContentStart:
+		switch block := e.Block.(type) {
+		case litellm.TextBlock:
+			fmt.Print(block.Text)
+		case litellm.ReasoningBlock:
+			fmt.Print(block.Text)
+		}
 	case litellm.ContentDelta:
 		fmt.Print(e.Text)
 	case litellm.ReasoningDelta:
@@ -143,7 +151,7 @@ for {
 }
 ```
 
-To aggregate a stream:
+To aggregate a stream (on failure, both a partial response and an error are returned; always check the error):
 
 ```go
 resp, err := litellm.Collect(stream)

@@ -65,6 +65,10 @@ concurrently.
 	        panic(err)
 	    }
 	    switch e := event.(type) {
+	    case litellm.ContentStart:
+	        if text, ok := e.Block.(litellm.TextBlock); ok {
+	            fmt.Print(text.Text)
+	        }
 	    case litellm.ContentDelta:
 	        fmt.Print(e.Text)
 	    case litellm.DoneEvent:

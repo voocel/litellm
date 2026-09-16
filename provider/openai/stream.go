@@ -34,7 +34,12 @@ func newStream(resp *http.Response, req *litellm.Request) *stream {
 	}
 }
 
-func (s *stream) Next() (litellm.Event, error) {
+func (s *stream) Next() (event litellm.Event, err error) {
+	defer func() {
+		if err != nil {
+			s.done = true
+		}
+	}()
 	if len(s.pending) > 0 {
 		event := s.pending[0]
 		s.pending = s.pending[1:]
@@ -84,6 +89,8 @@ func (s *stream) Next() (litellm.Event, error) {
 }
 
 func (s *stream) Close() error {
+	s.done = true
+	s.pending = nil
 	return s.resp.Body.Close()
 }
 
@@ -108,9 +115,9 @@ func (s *stream) events(chunk streamChunk) []litellm.Event {
 		if s.includeReasoning {
 			if text, summary := extractDeltaReasoning(choice.Delta); text != "" {
 				events = append(events, litellm.ReasoningDelta{
-					Text:    text,
-					Summary: summary,
-					Index:   litellm.IntPtr(choice.Index),
+					Text:        text,
+					Summary:     summary,
+					OutputIndex: litellm.IntPtr(choice.Index),
 				})
 			}
 		}

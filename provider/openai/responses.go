@@ -1100,7 +1100,12 @@ func newResponsesStream(resp *http.Response, model string) *responsesStream {
 	}
 }
 
-func (s *responsesStream) Next() (litellm.Event, error) {
+func (s *responsesStream) Next() (event litellm.Event, err error) {
+	defer func() {
+		if err != nil {
+			s.done = true
+		}
+	}()
 	if len(s.pending) > 0 {
 		event := s.pending[0]
 		s.pending = s.pending[1:]
@@ -1160,6 +1165,8 @@ func (s *responsesStream) Next() (litellm.Event, error) {
 }
 
 func (s *responsesStream) Close() error {
+	s.done = true
+	s.pending = nil
 	return s.resp.Body.Close()
 }
 
@@ -1169,6 +1176,30 @@ func responsesStreamParseError(message string, cause error) error {
 
 func (s *responsesStream) events(name string, raw json.RawMessage) ([]litellm.Event, error) {
 	switch name {
+	case "response.content_part.added", "response.content_part.done":
+		var boundary struct {
+			Part         responsesContentItem `json:"part"`
+			OutputIndex  *int                 `json:"output_index"`
+			ContentIndex *int                 `json:"content_index"`
+			Sequence     int                  `json:"sequence_number,omitempty"`
+		}
+		if err := json.Unmarshal(raw, &boundary); err != nil {
+			return nil, responsesStreamParseError("openai: parse responses content boundary", err)
+		}
+		if !s.shouldEmit(boundary.Sequence) {
+			return nil, nil
+		}
+		if boundary.Part.Type != "output_text" && boundary.Part.Type != "text" {
+			return []litellm.Event{litellm.ProviderEvent{Name: name, Raw: raw}}, nil
+		}
+		block, err := responsesTextBlock(boundary.Part)
+		if err != nil {
+			return nil, responsesStreamParseError("openai: decode responses content boundary", err)
+		}
+		if name == "response.content_part.added" {
+			return []litellm.Event{litellm.ContentStart{Block: block, OutputIndex: boundary.OutputIndex, ContentIndex: boundary.ContentIndex}}, nil
+		}
+		return []litellm.Event{litellm.ContentEnd{Block: block, OutputIndex: boundary.OutputIndex, ContentIndex: boundary.ContentIndex}}, nil
 	case "response.output_text.delta":
 		var delta struct {
 			Delta        string `json:"delta"`
@@ -1199,8 +1230,10 @@ func (s *responsesStream) events(name string, raw json.RawMessage) ([]litellm.Ev
 		return []litellm.Event{litellm.RefusalDelta{Text: delta.Delta, OutputIndex: delta.OutputIndex, ContentIndex: delta.ContentIndex}}, nil
 	case "response.reasoning_text.delta":
 		var delta struct {
-			Delta    string `json:"delta"`
-			Sequence int    `json:"sequence_number,omitempty"`
+			Delta        string `json:"delta"`
+			OutputIndex  *int   `json:"output_index,omitempty"`
+			ContentIndex *int   `json:"content_index,omitempty"`
+			Sequence     int    `json:"sequence_number,omitempty"`
 		}
 		if err := json.Unmarshal(raw, &delta); err != nil {
 			return nil, responsesStreamParseError("openai: parse responses reasoning delta", err)
@@ -1208,11 +1241,13 @@ func (s *responsesStream) events(name string, raw json.RawMessage) ([]litellm.Ev
 		if !s.shouldEmit(delta.Sequence) {
 			return nil, nil
 		}
-		return []litellm.Event{litellm.ReasoningDelta{Text: delta.Delta}}, nil
+		return []litellm.Event{litellm.ReasoningDelta{Text: delta.Delta, OutputIndex: delta.OutputIndex, ContentIndex: delta.ContentIndex}}, nil
 	case "response.reasoning_summary_text.delta":
 		var delta struct {
-			Delta    string `json:"delta"`
-			Sequence int    `json:"sequence_number,omitempty"`
+			Delta        string `json:"delta"`
+			OutputIndex  *int   `json:"output_index,omitempty"`
+			ContentIndex *int   `json:"summary_index,omitempty"`
+			Sequence     int    `json:"sequence_number,omitempty"`
 		}
 		if err := json.Unmarshal(raw, &delta); err != nil {
 			return nil, responsesStreamParseError("openai: parse responses reasoning summary delta", err)
@@ -1220,7 +1255,7 @@ func (s *responsesStream) events(name string, raw json.RawMessage) ([]litellm.Ev
 		if !s.shouldEmit(delta.Sequence) {
 			return nil, nil
 		}
-		return []litellm.Event{litellm.ReasoningDelta{Text: delta.Delta, Summary: true}}, nil
+		return []litellm.Event{litellm.ReasoningDelta{Text: delta.Delta, OutputIndex: delta.OutputIndex, ContentIndex: delta.ContentIndex, Summary: true}}, nil
 	case "response.output_item.added":
 		var item struct {
 			Item struct {
@@ -1347,16 +1382,15 @@ func (s *responsesStream) events(name string, raw json.RawMessage) ([]litellm.Ev
 		if !s.shouldEmit(failed.Sequence) {
 			return nil, nil
 		}
-		return []litellm.Event{litellm.ErrorEvent{Err: litellm.NewProviderError("openai", litellm.ErrorTypeProvider, fmt.Sprintf("openai: response failed: [%s] %s", failed.Response.Error.Code, failed.Response.Error.Message))}}, nil
+		return nil, litellm.NewProviderError("openai", litellm.ErrorTypeProvider, fmt.Sprintf("openai: response failed: [%s] %s", failed.Response.Error.Code, failed.Response.Error.Message))
 	case "error":
 		var responseErr responsesErrorEvent
 		if err := json.Unmarshal(raw, &responseErr); err != nil {
 			return nil, responsesStreamParseError("openai: parse responses error", err)
 		}
-		return []litellm.Event{litellm.ErrorEvent{Err: litellm.NewProviderError("openai", litellm.ErrorTypeProvider, "openai: stream error: "+responseErr.Error.Message)}}, nil
+		return nil, litellm.NewProviderError("openai", litellm.ErrorTypeProvider, "openai: stream error: "+responseErr.Error.Message)
 	case "response.created", "response.in_progress", "response.queued",
 		"response.output_item.done",
-		"response.content_part.added", "response.content_part.done",
 		"response.output_text.done", "response.refusal.done",
 		"response.reasoning_text.done", "response.reasoning_summary_text.done",
 		"response.reasoning_summary_part.added", "response.reasoning_summary_part.done",
@@ -1425,17 +1459,11 @@ func responsesOutputBlocks(items []responsesContentItem) ([]litellm.Block, error
 	for _, item := range items {
 		switch item.Type {
 		case "output_text", "text":
-			if item.Text != "" {
-				annotations, err := responseAnnotations(item)
-				if err != nil {
-					return nil, err
-				}
-				logprobs, err := marshalRaw(item.Logprobs)
-				if err != nil {
-					return nil, fmt.Errorf("openai: marshal response logprobs: %w", err)
-				}
-				blocks = append(blocks, litellm.TextBlock{Text: item.Text, Annotations: annotations, Logprobs: logprobs})
+			block, err := responsesTextBlock(item)
+			if err != nil {
+				return nil, err
 			}
+			blocks = append(blocks, block)
 		case "image", "image_url", "output_image":
 			if item.ImageURL != nil && item.ImageURL.URL != "" {
 				blocks = append(blocks, litellm.ImageBlock{URL: item.ImageURL.URL, Detail: item.ImageURL.Detail})
@@ -1453,6 +1481,18 @@ func responsesOutputBlocks(items []responsesContentItem) ([]litellm.Block, error
 		}
 	}
 	return blocks, nil
+}
+
+func responsesTextBlock(item responsesContentItem) (litellm.TextBlock, error) {
+	annotations, err := responseAnnotations(item)
+	if err != nil {
+		return litellm.TextBlock{}, err
+	}
+	logprobs, err := marshalRaw(item.Logprobs)
+	if err != nil {
+		return litellm.TextBlock{}, fmt.Errorf("openai: marshal response logprobs: %w", err)
+	}
+	return litellm.TextBlock{Text: item.Text, Annotations: annotations, Logprobs: logprobs}, nil
 }
 
 func responseAnnotations(item responsesContentItem) ([]litellm.Annotation, error) {

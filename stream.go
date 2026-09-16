@@ -12,8 +12,29 @@ type Event interface {
 	isEvent()
 }
 
+// ContentStart opens an explicitly addressed text or reasoning block. Block is
+// its initial value, including any content already supplied by the provider.
+// At least one coordinate is required. Tool calls use ToolUseStart/Done.
+type ContentStart struct {
+	Block        Block
+	OutputIndex  *int
+	ContentIndex *int
+}
+
+// ContentEnd closes a block opened by ContentStart. When Block is non-nil it is
+// the final snapshot. Its text must match accumulated text; its metadata
+// replaces prior metadata. It is not a delta or text correction. Later deltas
+// for this block are invalid.
+type ContentEnd struct {
+	Block        Block
+	OutputIndex  *int
+	ContentIndex *int
+}
+
 type ContentDelta struct {
-	Text         string
+	Text string
+	// Coordinates identify a block within this stream. Providers without block
+	// coordinates may omit them only when content arrives in contiguous runs.
 	OutputIndex  *int
 	ContentIndex *int
 }
@@ -25,13 +46,14 @@ type RefusalDelta struct {
 }
 
 type ReasoningDelta struct {
-	Text      string
-	Summary   bool
-	Signature string
-	Redacted  []byte
-	Extra     json.RawMessage
-	ExtraFull bool
-	Index     *int
+	Text         string
+	Summary      bool
+	Signature    string
+	Redacted     []byte
+	Extra        json.RawMessage
+	ExtraFull    bool
+	OutputIndex  *int
+	ContentIndex *int
 }
 
 type ToolUseStart struct {
@@ -74,16 +96,14 @@ type DoneEvent struct {
 	Model           string
 }
 
-type ErrorEvent struct {
-	Err error
-}
-
 type ProviderEvent struct {
 	Name string
 	Raw  json.RawMessage
 }
 
 func (ContentDelta) isEvent()   {}
+func (ContentStart) isEvent()   {}
+func (ContentEnd) isEvent()     {}
 func (RefusalDelta) isEvent()   {}
 func (ReasoningDelta) isEvent() {}
 func (ToolUseStart) isEvent()   {}
@@ -92,11 +112,20 @@ func (ToolUseDone) isEvent()    {}
 func (UsageEvent) isEvent()     {}
 func (WarningEvent) isEvent()   {}
 func (DoneEvent) isEvent()      {}
-func (ErrorEvent) isEvent()     {}
 func (ProviderEvent) isEvent()  {}
 
 func cloneEvent(event Event) Event {
 	switch e := event.(type) {
+	case ContentStart:
+		e.Block = cloneBlock(e.Block)
+		e.OutputIndex = cloneIntPtr(e.OutputIndex)
+		e.ContentIndex = cloneIntPtr(e.ContentIndex)
+		return e
+	case ContentEnd:
+		e.Block = cloneBlock(e.Block)
+		e.OutputIndex = cloneIntPtr(e.OutputIndex)
+		e.ContentIndex = cloneIntPtr(e.ContentIndex)
+		return e
 	case ContentDelta:
 		e.OutputIndex = cloneIntPtr(e.OutputIndex)
 		e.ContentIndex = cloneIntPtr(e.ContentIndex)
@@ -106,7 +135,8 @@ func cloneEvent(event Event) Event {
 		e.ContentIndex = cloneIntPtr(e.ContentIndex)
 		return e
 	case ReasoningDelta:
-		e.Index = cloneIntPtr(e.Index)
+		e.OutputIndex = cloneIntPtr(e.OutputIndex)
+		e.ContentIndex = cloneIntPtr(e.ContentIndex)
 		e.Redacted = cloneBytes(e.Redacted)
 		e.Extra = cloneBytes(e.Extra)
 		return e
@@ -129,8 +159,6 @@ func cloneEvent(event Event) Event {
 		return e
 	case DoneEvent:
 		return e
-	case ErrorEvent:
-		return e
 	case ProviderEvent:
 		e.Raw = cloneBytes(e.Raw)
 		return e
@@ -139,32 +167,71 @@ func cloneEvent(event Event) Event {
 	}
 }
 
+// Stream is consumed by one goroutine. A successful stream emits exactly one
+// DoneEvent. Failures are returned by Next, never encoded as events. Callers
+// must Close the stream, including after completion or failure.
 type Stream interface {
 	Next() (Event, error)
 	Close() error
 }
 
-type providerErrorStream struct {
+type validatedStream struct {
 	provider string
 	inner    Stream
+	state    *EventCollector
+	done     bool
 }
 
-func wrapProviderStreamErrors(provider string, stream Stream) Stream {
+func newValidatedStream(provider, model string, stream Stream) Stream {
 	if stream == nil {
 		return nil
 	}
-	return &providerErrorStream{provider: provider, inner: stream}
+	state := NewEventCollector()
+	state.provider, state.model = provider, model
+	return &validatedStream{provider: provider, inner: stream, state: state}
 }
 
-func (s *providerErrorStream) Next() (Event, error) {
-	event, err := s.inner.Next()
-	if err != nil && !errors.Is(err, io.EOF) {
-		return event, WrapError(err, s.provider)
+func (s *validatedStream) Next() (Event, error) {
+	if s.done {
+		return nil, io.EOF
 	}
-	return event, err
+	event, err := s.inner.Next()
+	if err != nil {
+		s.done = true
+		if errors.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
+		}
+		return nil, WrapError(err, s.provider)
+	}
+	if event == nil {
+		s.done = true
+		return nil, NewProviderError(s.provider, ErrorTypeInternal, "stream returned nil event without error")
+	}
+	done, err := s.state.Apply(event)
+	if err == nil && done {
+		err = validateResponse(&Response{Blocks: s.state.blocks, Provider: s.state.provider, Model: s.state.model}, s.provider, s.state.model)
+	}
+	if err != nil {
+		s.done = true
+		return nil, WrapError(err, s.provider)
+	}
+	s.done = done
+	return event, nil
 }
 
-func (s *providerErrorStream) Close() error {
+// Client streams share their validated accumulator with Handle, avoiding a
+// second full copy of streamed content. External streams are collected locally.
+func (s *validatedStream) eventCollector() *EventCollector { return s.state }
+
+func streamCollector(stream Stream) *EventCollector {
+	if source, ok := stream.(interface{ eventCollector() *EventCollector }); ok {
+		return source.eventCollector()
+	}
+	return nil
+}
+
+func (s *validatedStream) Close() error {
+	s.done = true
 	err := s.inner.Close()
 	if err != nil {
 		return WrapError(err, s.provider)
@@ -199,45 +266,56 @@ func (s *warningPrefixStream) Close() error {
 	return s.inner.Close()
 }
 
-// Collect consumes the stream and returns the aggregated Response. It errors if
-// the stream ends before a DoneEvent.
+// Collect consumes the stream and returns the aggregated Response. On failure it
+// returns the partial response together with the error. EOF before DoneEvent is
+// io.ErrUnexpectedEOF; partial responses must not be treated as completed output.
 func Collect(stream Stream) (*Response, error) {
 	return Handle(stream, nil)
 }
 
 // Handle consumes the stream, invoking fn for each event as it arrives, and
 // returns the aggregated Response. It is the real-time counterpart to Collect;
-// a nil fn behaves exactly like Collect. If fn returns an error, Handle stops
-// and returns it. The caller still owns Close.
+// a nil fn behaves exactly like Collect. Events are aggregated before fn runs.
+// On any failure Handle returns the partial response and the error. The caller
+// still owns Close.
 func Handle(stream Stream, fn func(Event) error) (*Response, error) {
 	if stream == nil {
 		return nil, fmt.Errorf("stream cannot be nil")
 	}
-	collector := NewEventCollector()
+	collector := streamCollector(stream)
+	validated := collector != nil
+	if !validated {
+		collector = NewEventCollector()
+	}
 	for {
 		event, err := stream.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil, fmt.Errorf("stream ended before Done event: %w", err)
+				return collector.Response(), fmt.Errorf("stream ended before Done event: %w", io.ErrUnexpectedEOF)
 			}
-			return nil, err
+			return collector.Response(), err
 		}
 		if event == nil {
-			return nil, fmt.Errorf("stream returned nil event without error")
+			return collector.Response(), fmt.Errorf("stream returned nil event without error")
+		}
+		_, done := event.(DoneEvent)
+		if !validated {
+			done, err = collector.Apply(event)
+			if err != nil {
+				return collector.Response(), err
+			}
 		}
 		if fn != nil {
 			if err := fn(event); err != nil {
-				return nil, err
+				return collector.Response(), err
 			}
-		}
-		done, err := collector.Apply(event)
-		if err != nil {
-			return nil, err
 		}
 		if done {
 			resp := collector.Response()
-			if err := validateResponse(resp, resp.Provider, resp.Model); err != nil {
-				return nil, err
+			if !validated {
+				if err := validateResponse(resp, resp.Provider, resp.Model); err != nil {
+					return resp, err
+				}
 			}
 			return resp, nil
 		}
@@ -249,12 +327,7 @@ func Handle(stream Stream, fn func(Event) error) (*Response, error) {
 // text; reasoning and tool events are still aggregated into the Response but are
 // not passed to fn.
 func HandleText(stream Stream, fn func(string) error) (*Response, error) {
-	return Handle(stream, func(event Event) error {
-		if delta, ok := event.(ContentDelta); ok && delta.Text != "" && fn != nil {
-			return fn(delta.Text)
-		}
-		return nil
-	})
+	return HandleWith(stream, StreamHandler{Content: fn})
 }
 
 // StreamHandler routes streamed deltas to per-category callbacks. Unset
@@ -271,6 +344,17 @@ type StreamHandler struct {
 func HandleWith(stream Stream, handler StreamHandler) (*Response, error) {
 	return Handle(stream, func(event Event) error {
 		switch e := event.(type) {
+		case ContentStart:
+			switch block := e.Block.(type) {
+			case TextBlock:
+				if handler.Content != nil && block.Text != "" {
+					return handler.Content(block.Text)
+				}
+			case ReasoningBlock:
+				if handler.Reasoning != nil && block.Text != "" {
+					return handler.Reasoning(block.Text)
+				}
+			}
 		case ContentDelta:
 			if handler.Content != nil && e.Text != "" {
 				return handler.Content(e.Text)
@@ -289,35 +373,60 @@ func HandleWith(stream Stream, handler StreamHandler) (*Response, error) {
 // read Response after Apply reports completion.
 type EventCollector struct {
 	blocks []Block
-	// blockText incrementally builds the final text-bearing block and is
-	// materialized before another block is appended or a Response is returned.
-	blockText   *strings.Builder
-	toolIndexes map[string]int
-	usage       Usage
-	finish      FinishReason
-	finishRaw   string
-	refusal     strings.Builder
-	provider    string
-	model       string
-	warnings    []Warning
-	tools       *ToolUseAccumulator
+	// Each block has its own builder so interleaved deltas retain identity.
+	textBuilders    map[int]*strings.Builder
+	contentIndexes  map[contentAddress]int
+	contentStates   map[contentAddress]contentState
+	anonymousIndex  int
+	anonymousOutput int
+	done            bool
+	toolIndexes     map[string]int
+	usage           Usage
+	finish          FinishReason
+	finishRaw       string
+	refusal         strings.Builder
+	provider        string
+	model           string
+	warnings        []Warning
+	tools           *ToolUseAccumulator
 }
 
 // NewEventCollector returns an initialized stream event collector.
 func NewEventCollector() *EventCollector {
 	return &EventCollector{
-		toolIndexes: make(map[string]int),
-		tools:       NewToolUseAccumulator(),
+		textBuilders:   make(map[int]*strings.Builder),
+		contentIndexes: make(map[contentAddress]int),
+		contentStates:  make(map[contentAddress]contentState),
+		anonymousIndex: -1,
+		toolIndexes:    make(map[string]int),
+		tools:          NewToolUseAccumulator(),
 	}
 }
 
 func (c *EventCollector) Apply(event Event) (bool, error) {
+	if c.done {
+		return false, fmt.Errorf("stream event received after Done event")
+	}
 	switch e := event.(type) {
+	case ContentStart:
+		return false, c.startContent(e)
+	case ContentEnd:
+		return false, c.endContent(e)
 	case ContentDelta:
-		c.appendContent(e.Text)
+		if err := c.checkContentDelta(e.OutputIndex, e.ContentIndex, "text", false); err != nil {
+			return false, err
+		}
+		c.appendContent(e.Text, e.OutputIndex, e.ContentIndex)
 	case RefusalDelta:
-		c.appendRefusal(e.Text)
+		if err := c.checkContentDelta(e.OutputIndex, e.ContentIndex, "text", false); err != nil {
+			return false, err
+		}
+		c.refusal.WriteString(e.Text)
+		c.appendContent(e.Text, e.OutputIndex, e.ContentIndex)
 	case ReasoningDelta:
+		if err := c.checkContentDelta(e.OutputIndex, e.ContentIndex, "reasoning", e.Summary); err != nil {
+			return false, err
+		}
 		c.appendReasoning(e)
 	case ToolUseStart:
 		key, tool, err := c.tools.Start(e)
@@ -350,15 +459,16 @@ func (c *EventCollector) Apply(event Event) (bool, error) {
 		}
 	case WarningEvent:
 		c.appendWarning(e.Warning)
-	case ErrorEvent:
-		if e.Err == nil {
-			return false, fmt.Errorf("stream error event missing error")
-		}
-		return false, e.Err
 	case ProviderEvent:
 		// Provider-native events are observable by stream consumers. The core
 		// collector ignores them unless they are promoted to typed events.
 	case DoneEvent:
+		for _, state := range c.contentStates {
+			if !state.closed {
+				return false, fmt.Errorf("stream completed with an unclosed content block")
+			}
+		}
+		c.done = true
 		c.finish = e.FinishReason
 		c.finishRaw = e.FinishReasonRaw
 		if c.refusal.Len() > 0 {
@@ -429,97 +539,83 @@ func (c *EventCollector) Response() *Response {
 	return resp
 }
 
-func (c *EventCollector) appendRefusal(text string) {
-	if text == "" {
-		return
-	}
-	c.refusal.WriteString(text)
-	c.appendContent(text)
-}
-
-func (c *EventCollector) appendContent(text string) {
-	if text == "" {
-		return
-	}
-	if len(c.blocks) > 0 {
-		index := len(c.blocks) - 1
-		if block, ok := c.blocks[index].(TextBlock); ok {
-			if c.blockText == nil {
-				c.blockText = newBlockTextBuilder(block.Text, len(text))
-				block.Text = ""
-				c.blocks[index] = block
+// A content coordinate identifies a block; an output coordinate alone only
+// identifies its channel. Unaddressed channels are collected in contiguous runs.
+func (c *EventCollector) contentIndex(kind string, output, content *int, summary bool) int {
+	address := addressOf(output, content)
+	_, explicit := c.contentStates[address]
+	indexed := content != nil || explicit
+	if indexed {
+		c.anonymousIndex = -1
+		if index, ok := c.contentIndexes[address]; ok {
+			return index
+		}
+	} else if c.anonymousIndex >= 0 && c.anonymousIndex == len(c.blocks)-1 && c.anonymousOutput == address.output {
+		switch block := c.blocks[c.anonymousIndex].(type) {
+		case TextBlock:
+			if kind == "text" {
+				return c.anonymousIndex
 			}
-			c.blockText.WriteString(text)
-			return
+		case ReasoningBlock:
+			if kind == "reasoning" && len(block.Redacted) == 0 && block.Summary == summary {
+				return c.anonymousIndex
+			}
 		}
 	}
-	c.flushBlockText()
-	c.blockText = newBlockTextBuilder(text, 0)
-	c.blocks = append(c.blocks, TextBlock{})
+	index := len(c.blocks)
+	if kind == "text" {
+		c.blocks = append(c.blocks, TextBlock{})
+	} else {
+		c.blocks = append(c.blocks, ReasoningBlock{Summary: summary})
+	}
+	if indexed {
+		c.contentIndexes[address] = index
+		c.anonymousIndex = -1
+	} else {
+		c.anonymousIndex = index
+		c.anonymousOutput = address.output
+	}
+	return index
+}
+
+func (c *EventCollector) appendText(index int, text string) {
+	if text == "" {
+		return
+	}
+	builder := c.textBuilders[index]
+	if builder == nil {
+		builder = &strings.Builder{}
+		switch block := c.blocks[index].(type) {
+		case TextBlock:
+			builder.WriteString(block.Text)
+		case ReasoningBlock:
+			builder.WriteString(block.Text)
+		}
+		c.textBuilders[index] = builder
+	}
+	builder.WriteString(text)
+}
+
+func (c *EventCollector) appendContent(text string, output, content *int) {
+	if text == "" {
+		return
+	}
+	c.appendText(c.contentIndex("text", output, content, false), text)
 }
 
 func (c *EventCollector) appendReasoning(delta ReasoningDelta) {
 	if delta.Text == "" && delta.Signature == "" && len(delta.Redacted) == 0 && len(delta.Extra) == 0 {
 		return
 	}
-	if len(delta.Redacted) > 0 {
-		c.flushBlockText()
-		c.blocks = append(c.blocks, ReasoningBlock{
-			Signature: delta.Signature,
-			Redacted:  cloneBytes(delta.Redacted),
-		})
-		return
+	index := c.contentIndex("reasoning", delta.OutputIndex, delta.ContentIndex, delta.Summary)
+	block := c.blocks[index].(ReasoningBlock)
+	c.appendText(index, delta.Text)
+	if delta.Signature != "" {
+		block.Signature = delta.Signature
 	}
-	if len(c.blocks) > 0 {
-		index := len(c.blocks) - 1
-		if block, ok := c.blocks[index].(ReasoningBlock); ok && len(block.Redacted) == 0 && block.Summary == delta.Summary {
-			if delta.Text != "" {
-				if c.blockText == nil {
-					c.blockText = newBlockTextBuilder(block.Text, len(delta.Text))
-					block.Text = ""
-				}
-				c.blockText.WriteString(delta.Text)
-			}
-			if delta.Signature != "" {
-				block.Signature = delta.Signature
-			}
-			block.Extra = mergeReasoningExtra(block.Extra, delta)
-			c.blocks[index] = block
-			return
-		}
-	}
-	c.flushBlockText()
-	block := ReasoningBlock{Summary: delta.Summary, Signature: delta.Signature, Extra: cloneBytes(delta.Extra)}
-	if delta.Text != "" {
-		c.blockText = newBlockTextBuilder(delta.Text, 0)
-	}
-	c.blocks = append(c.blocks, block)
-}
-
-func newBlockTextBuilder(text string, additional int) *strings.Builder {
-	builder := &strings.Builder{}
-	builder.Grow(len(text) + additional)
-	builder.WriteString(text)
-	return builder
-}
-
-func (c *EventCollector) flushBlockText() {
-	if c.blockText == nil {
-		return
-	}
-	index := len(c.blocks) - 1
-	text := c.blockText.String()
-	switch block := c.blocks[index].(type) {
-	case TextBlock:
-		block.Text = text
-		c.blocks[index] = block
-	case ReasoningBlock:
-		block.Text = text
-		c.blocks[index] = block
-	default:
-		panic(fmt.Sprintf("litellm: block text builder has unsupported block %T", block))
-	}
-	c.blockText = nil
+	block.Redacted = append(block.Redacted, delta.Redacted...)
+	block.Extra = mergeReasoningExtra(block.Extra, delta)
+	c.blocks[index] = block
 }
 
 func mergeReasoningExtra(current json.RawMessage, delta ReasoningDelta) json.RawMessage {
@@ -552,27 +648,20 @@ func (c *EventCollector) appendTool(key string, tool *ToolUseBlock) {
 		c.blocks[index] = cloneToolUseBlock(*tool)
 		return
 	}
-	c.flushBlockText()
 	c.toolIndexes[key] = len(c.blocks)
 	c.blocks = append(c.blocks, cloneToolUseBlock(*tool))
 }
 
 func (c *EventCollector) cloneBlocks() []Block {
-	c.flushBlockText()
-	if len(c.blocks) == 0 {
-		return nil
-	}
-	out := make([]Block, len(c.blocks))
-	for i, block := range c.blocks {
-		switch b := block.(type) {
+	out := cloneBlocks(c.blocks)
+	for index, builder := range c.textBuilders {
+		switch block := out[index].(type) {
 		case TextBlock:
-			out[i] = b
+			block.Text = builder.String()
+			out[index] = block
 		case ReasoningBlock:
-			out[i] = b
-		case ToolUseBlock:
-			out[i] = cloneToolUseBlock(b)
-		default:
-			out[i] = block
+			block.Text = builder.String()
+			out[index] = block
 		}
 	}
 	return out

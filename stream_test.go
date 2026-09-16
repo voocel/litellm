@@ -159,8 +159,8 @@ func TestCollectRejectsNilEventWithoutError(t *testing.T) {
 
 func TestCollectRequiresDoneOrError(t *testing.T) {
 	_, err := Collect(&eventSliceStream{events: []Event{ContentDelta{Text: "partial"}}})
-	if !errors.Is(err, io.EOF) {
-		t.Fatalf("expected EOF when stream ends without Done or error, got %v", err)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("expected unexpected EOF when stream ends without Done or error, got %v", err)
 	}
 }
 
@@ -399,4 +399,103 @@ func (s *eventSliceStream) Next() (Event, error) {
 
 func (s *eventSliceStream) Close() error {
 	return nil
+}
+
+func TestCollectPreservesInterleavedContentIdentity(t *testing.T) {
+	stream := &eventSliceStream{events: []Event{
+		ContentDelta{Text: "a", OutputIndex: IntPtr(0), ContentIndex: IntPtr(0)},
+		ContentDelta{Text: "b", OutputIndex: IntPtr(0), ContentIndex: IntPtr(1)},
+		ReasoningDelta{Text: "think", OutputIndex: IntPtr(1), ContentIndex: IntPtr(0)},
+		ContentDelta{Text: "c", OutputIndex: IntPtr(0), ContentIndex: IntPtr(0)},
+		ReasoningDelta{Signature: "sig", OutputIndex: IntPtr(1), ContentIndex: IntPtr(0)},
+		ContentDelta{Text: "d", OutputIndex: IntPtr(2), ContentIndex: IntPtr(0)},
+		DoneEvent{Provider: "test", Model: "m", FinishReason: FinishReasonStop},
+	}}
+	resp, err := Collect(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Blocks) != 4 {
+		t.Fatalf("blocks = %#v", resp.Blocks)
+	}
+	if resp.Blocks[0].(TextBlock).Text != "ac" || resp.Blocks[1].(TextBlock).Text != "b" || resp.Blocks[3].(TextBlock).Text != "d" {
+		t.Fatalf("text blocks lost identity: %#v", resp.Blocks)
+	}
+	if block := resp.Blocks[2].(ReasoningBlock); block.Text != "think" || block.Signature != "sig" {
+		t.Fatalf("reasoning lost identity: %#v", block)
+	}
+}
+
+func TestCollectorSnapshotOwnsReasoningData(t *testing.T) {
+	collector := NewEventCollector()
+	_, err := collector.Apply(ReasoningDelta{Text: "a", ContentIndex: IntPtr(0), Extra: []byte(`{"id":1}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := collector.Response()
+	first.Blocks[0].(ReasoningBlock).Extra[0] = '!'
+	_, err = collector.Apply(ReasoningDelta{Text: "b", ContentIndex: IntPtr(0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := collector.Response().Blocks[0].(ReasoningBlock)
+	if first.Reasoning() != "a" || second.Text != "ab" || string(second.Extra) != `{"id":1}` {
+		t.Fatalf("snapshot aliases collector: first=%#v second=%#v", first.Blocks, second)
+	}
+}
+
+func TestHandleReturnsPartialResponse(t *testing.T) {
+	boom := errors.New("interrupted")
+	for _, tc := range []struct {
+		name     string
+		stream   Stream
+		callback func(Event) error
+		want     error
+	}{
+		{"truncated", &eventSliceStream{events: []Event{ContentDelta{Text: "partial"}}}, nil, io.ErrUnexpectedEOF},
+		{"provider", &testStreamWithError{events: []Event{ContentDelta{Text: "partial"}}, err: boom}, nil, boom},
+		{"callback", &eventSliceStream{events: []Event{ContentDelta{Text: "partial"}}}, func(Event) error { return boom }, boom},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := Handle(tc.stream, tc.callback)
+			if !errors.Is(err, tc.want) || resp == nil || resp.Text() != "partial" || resp.FinishReason != "" {
+				t.Fatalf("response=%#v error=%v", resp, err)
+			}
+		})
+	}
+}
+
+func TestCollectorRejectsEventsAfterCompletion(t *testing.T) {
+	collector := NewEventCollector()
+	if done, err := collector.Apply(DoneEvent{}); !done || err != nil {
+		t.Fatalf("done=%v err=%v", done, err)
+	}
+	if _, err := collector.Apply(ContentDelta{Text: "late"}); err == nil {
+		t.Fatal("accepted event after completion")
+	}
+	if collector.Response().Text() != "" {
+		t.Fatal("late event changed completed response")
+	}
+}
+
+func TestProviderStreamStopsAtTerminalEvent(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		events []Event
+		want   error
+	}{
+		{"done", []Event{DoneEvent{}, ContentDelta{Text: "late"}}, nil},
+		{"truncated", nil, io.ErrUnexpectedEOF},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := newValidatedStream("test", "m", &eventSliceStream{events: tc.events})
+			_, err := stream.Next()
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("first error=%v want=%v", err, tc.want)
+			}
+			if event, err := stream.Next(); event != nil || err != io.EOF {
+				t.Fatalf("after terminal: event=%#v err=%v", event, err)
+			}
+		})
+	}
 }

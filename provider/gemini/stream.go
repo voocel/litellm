@@ -51,7 +51,12 @@ func newStream(resp *http.Response, req *litellm.Request) *stream {
 	}
 }
 
-func (s *stream) Next() (litellm.Event, error) {
+func (s *stream) Next() (event litellm.Event, err error) {
+	defer func() {
+		if err != nil {
+			s.done = true
+		}
+	}()
 	if len(s.pending) > 0 {
 		event := s.pending[0]
 		s.pending = s.pending[1:]
@@ -104,6 +109,8 @@ func (s *stream) Next() (litellm.Event, error) {
 }
 
 func (s *stream) Close() error {
+	s.done = true
+	s.pending = nil
 	return s.resp.Body.Close()
 }
 

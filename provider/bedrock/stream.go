@@ -30,7 +30,12 @@ func newStream(resp *http.Response, model string) *stream {
 	}
 }
 
-func (s *stream) Next() (litellm.Event, error) {
+func (s *stream) Next() (event litellm.Event, err error) {
+	defer func() {
+		if err != nil {
+			s.done = true
+		}
+	}()
 	if len(s.pending) > 0 {
 		event := s.pending[0]
 		s.pending = s.pending[1:]
@@ -68,6 +73,8 @@ func (s *stream) Next() (litellm.Event, error) {
 }
 
 func (s *stream) Close() error {
+	s.done = true
+	s.pending = nil
 	return s.response.Body.Close()
 }
 
@@ -171,10 +178,10 @@ func (s *stream) contentBlockDelta(data json.RawMessage) ([]litellm.Event, error
 	}
 	if delta.Delta.ReasoningContent != nil {
 		return []litellm.Event{litellm.ReasoningDelta{
-			Text:      delta.Delta.ReasoningContent.Text,
-			Signature: delta.Delta.ReasoningContent.Signature,
-			Redacted:  append([]byte(nil), delta.Delta.ReasoningContent.RedactedContent...),
-			Index:     litellm.IntPtr(delta.ContentBlockIndex),
+			Text:         delta.Delta.ReasoningContent.Text,
+			Signature:    delta.Delta.ReasoningContent.Signature,
+			Redacted:     append([]byte(nil), delta.Delta.ReasoningContent.RedactedContent...),
+			ContentIndex: litellm.IntPtr(delta.ContentBlockIndex),
 		}}, nil
 	}
 	if delta.Delta.ToolUse != nil && delta.Delta.ToolUse.Input != "" {

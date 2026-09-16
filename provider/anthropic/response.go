@@ -26,9 +26,10 @@ func convertResponse(resp *anthropicResponse, fallbackModel string) (*litellm.Re
 		return nil, fmt.Errorf("anthropic: response cannot be nil")
 	}
 	out := &litellm.Response{
-		Model:        resp.Model,
-		Provider:     "anthropic",
-		FinishReason: litellm.NormalizeFinishReason(resp.StopReason),
+		Model:           resp.Model,
+		Provider:        "anthropic",
+		FinishReason:    litellm.NormalizeFinishReason(resp.StopReason),
+		FinishReasonRaw: resp.StopReason,
 		Usage: litellm.Usage{
 			InputTokens:      resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens,
 			OutputTokens:     resp.Usage.OutputTokens,

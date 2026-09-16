@@ -1082,9 +1082,15 @@ func TestResponsesStreamErrorEventSurfaces(t *testing.T) {
 		`data: {"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}`,
 		``,
 	}, "\n")), "gpt-5.1")
-	_, err := litellm.Collect(stream)
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("failure returned as event: %#v", event)
+	}
 	if err == nil || !strings.Contains(err.Error(), "bad request") || !litellm.IsProviderError(err) {
 		t.Fatalf("expected stream error, got %v", err)
+	}
+	if event, err := stream.Next(); event != nil || err != io.EOF {
+		t.Fatalf("failed stream continued: event=%#v error=%v", event, err)
 	}
 }
 
@@ -1094,9 +1100,15 @@ func TestResponsesStreamFailedEventSurfacesStructuredError(t *testing.T) {
 		`data: {"type":"response.failed","response":{"error":{"code":"server_error","message":"failed"}}}`,
 		``,
 	}, "\n")), "gpt-5.1")
-	_, err := litellm.Collect(stream)
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("failure returned as event: %#v", event)
+	}
 	if err == nil || !strings.Contains(err.Error(), "failed") || !litellm.IsProviderError(err) {
 		t.Fatalf("expected structured failed event error, got %v", err)
+	}
+	if event, err := stream.Next(); event != nil || err != io.EOF {
+		t.Fatalf("failed stream continued: event=%#v error=%v", event, err)
 	}
 }
 
@@ -1195,4 +1207,33 @@ func (b *contextBlockingBody) Read(p []byte) (int, error) {
 
 func (b *contextBlockingBody) Close() error {
 	return nil
+}
+
+func TestResponsesStreamPreservesContentCoordinates(t *testing.T) {
+	stream := newResponsesStream(streamResponse(strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"a","output_index":0,"content_index":0,"sequence_number":1}`,
+		`data: {"type":"response.output_text.delta","delta":"b","output_index":0,"content_index":1,"sequence_number":2}`,
+		`data: {"type":"response.reasoning_summary_text.delta","delta":"first","output_index":1,"summary_index":0,"sequence_number":3}`,
+		`data: {"type":"response.reasoning_summary_text.delta","delta":"second","output_index":1,"summary_index":1,"sequence_number":4}`,
+		`data: {"type":"response.output_text.delta","delta":"c","output_index":0,"content_index":0,"sequence_number":5}`,
+		`data: {"type":"response.reasoning_summary_text.delta","delta":" summary","output_index":1,"summary_index":0,"sequence_number":6}`,
+		`data: {"type":"response.completed","response":{"model":"m","status":"completed","usage":{}},"sequence_number":7}`,
+		``,
+	}, "\n")), "m")
+	defer stream.Close()
+	resp, err := litellm.Collect(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Blocks) != 4 {
+		t.Fatalf("blocks = %#v", resp.Blocks)
+	}
+	if resp.Blocks[0].(litellm.TextBlock).Text != "ac" || resp.Blocks[1].(litellm.TextBlock).Text != "b" {
+		t.Fatalf("text coordinates lost: %#v", resp.Blocks)
+	}
+	first := resp.Blocks[2].(litellm.ReasoningBlock)
+	second := resp.Blocks[3].(litellm.ReasoningBlock)
+	if first.Text != "first summary" || second.Text != "second" || !first.Summary || !second.Summary {
+		t.Fatalf("summary coordinates lost: %#v", resp.Blocks)
+	}
 }

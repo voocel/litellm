@@ -106,6 +106,7 @@ client, err := openai.NewClient(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY"
 ## 流式
 
 流式返回 typed `Event`。
+支持显式内容块边界的 Provider 会发出 `ContentStart` / `ContentEnd`：前者包含初始内容，后者可携带最终完整快照（含元数据），不能当作增量重复拼接；快照文本必须与已输出文本一致，否则返回错误和部分响应。`Collect` 自动处理；`StreamText` / `StreamWith` 会交付初始文本和后续增量。
 `Stream` 设计为单 goroutine 消费；不要并发调用 `Next`。
 如果需要每个事件之间的空闲超时，用 `WithStreamIdleTimeout` 显式开启；默认关闭。
 `WithStreamIdleTimeout` 只覆盖通用 `Client.Stream`；OpenAI Responses 原生流用 `openai.Config.StreamIdleTimeout`。
@@ -131,6 +132,13 @@ for {
 		log.Fatal(err)
 	}
 	switch e := event.(type) {
+	case litellm.ContentStart:
+		switch block := e.Block.(type) {
+		case litellm.TextBlock:
+			fmt.Print(block.Text)
+		case litellm.ReasoningBlock:
+			fmt.Print(block.Text)
+		}
 	case litellm.ContentDelta:
 		fmt.Print(e.Text)
 	case litellm.ReasoningDelta:
@@ -143,7 +151,7 @@ for {
 }
 ```
 
-聚合流式响应：
+聚合流式响应（出错时同时返回部分响应和错误，必须先检查错误）：
 
 ```go
 resp, err := litellm.Collect(stream)

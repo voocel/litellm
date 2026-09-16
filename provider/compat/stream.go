@@ -62,7 +62,12 @@ type toolKey struct {
 	call   int
 }
 
-func (s *stream) Next() (litellm.Event, error) {
+func (s *stream) Next() (event litellm.Event, err error) {
+	defer func() {
+		if err != nil {
+			s.done = true
+		}
+	}()
 	if len(s.pending) > 0 {
 		event := s.pending[0]
 		s.pending = s.pending[1:]
@@ -112,6 +117,8 @@ func (s *stream) Next() (litellm.Event, error) {
 }
 
 func (s *stream) Close() error {
+	s.done = true
+	s.pending = nil
 	return s.resp.Body.Close()
 }
 
@@ -165,7 +172,7 @@ func (s *stream) events(chunk streamChunk) ([]litellm.Event, error) {
 						reasoning = next
 					}
 					if reasoning != "" || len(extra) > 0 {
-						events = append(events, litellm.ReasoningDelta{Text: reasoning, Extra: extra, ExtraFull: extraFull, Index: litellm.IntPtr(choice.Index)})
+						events = append(events, litellm.ReasoningDelta{Text: reasoning, Extra: extra, ExtraFull: extraFull, OutputIndex: litellm.IntPtr(choice.Index)})
 					}
 				}
 			}

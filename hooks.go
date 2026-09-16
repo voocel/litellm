@@ -151,3 +151,5 @@ func (s *hookedStream) finish(err error) {
 		hook.OnStreamEnd(s.ctx, s.meta, err)
 	}
 }
+
+func (s *hookedStream) eventCollector() *EventCollector { return streamCollector(s.inner) }

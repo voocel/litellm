@@ -406,3 +406,22 @@ func streamResponse(body string) *http.Response {
 	resp.Header.Set("Content-Type", "text/event-stream")
 	return resp
 }
+
+func TestStreamPreservesAlternatingContentWithinOneChoice(t *testing.T) {
+	stream := streamFromSSE(t, strings.Join([]string{
+		`data: {"choices":[{"index":0,"delta":{"content":"before"}}]}`,
+		`data: {"choices":[{"index":0,"delta":{"reasoning_content":"thinking"}}]}`,
+		`data: {"choices":[{"index":0,"delta":{"content":"after"}}]}`,
+		`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+		``,
+	}, "\n"), Spec{Name: "compat", Stream: StreamSpec{ReasoningFields: []string{"reasoning_content"}}}, &litellm.Request{Model: "m"})
+	defer stream.Close()
+	resp, err := litellm.Collect(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Blocks) != 3 || resp.Blocks[0].(litellm.TextBlock).Text != "before" || resp.Blocks[1].(litellm.ReasoningBlock).Text != "thinking" || resp.Blocks[2].(litellm.TextBlock).Text != "after" {
+		t.Fatalf("lost content order: %#v", resp.Blocks)
+	}
+}

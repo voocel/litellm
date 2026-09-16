@@ -107,3 +107,5 @@ func (w *streamIdleWatchdog) idleError() error {
 		Cause:     ErrStreamIdle,
 	}
 }
+
+func (s *streamIdleWatchdog) eventCollector() *EventCollector { return streamCollector(s.inner) }

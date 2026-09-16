@@ -20,6 +20,8 @@ type stream struct {
 	model            string
 	usage            litellm.Usage
 	finish           litellm.FinishReason
+	contentBlocks    map[int]bool
+	finishRaw        string
 	toolIDs          map[int]string
 	toolNames        map[int]string
 }
@@ -37,6 +39,7 @@ type streamChunk struct {
 		Name      string         `json:"name,omitempty"`
 		Input     map[string]any `json:"input,omitempty"`
 		Thinking  string         `json:"thinking,omitempty"`
+		Text      string         `json:"text,omitempty"`
 		Signature string         `json:"signature,omitempty"`
 		Data      string         `json:"data,omitempty"`
 	} `json:"content_block,omitempty"`
@@ -71,6 +74,7 @@ func newStream(resp *http.Response, req *litellm.Request, warnings []litellm.War
 		scanner:          scanner,
 		includeReasoning: req == nil || req.Thinking == nil || req.Thinking.Mode != litellm.ThinkingDisabled,
 		model:            req.Model,
+		contentBlocks:    make(map[int]bool),
 		toolIDs:          make(map[int]string),
 		toolNames:        make(map[int]string),
 	}
@@ -80,7 +84,12 @@ func newStream(resp *http.Response, req *litellm.Request, warnings []litellm.War
 	return s
 }
 
-func (s *stream) Next() (litellm.Event, error) {
+func (s *stream) Next() (event litellm.Event, err error) {
+	defer func() {
+		if err != nil {
+			s.done = true
+		}
+	}()
 	if len(s.pending) > 0 {
 		event := s.pending[0]
 		s.pending = s.pending[1:]
@@ -126,6 +135,8 @@ func (s *stream) Next() (litellm.Event, error) {
 }
 
 func (s *stream) Close() error {
+	s.done = true
+	s.pending = nil
 	return s.resp.Body.Close()
 }
 
@@ -147,13 +158,14 @@ func (s *stream) events(chunk streamChunk, raw json.RawMessage) ([]litellm.Event
 		}
 		if chunk.Delta != nil && chunk.Delta.StopReason != "" {
 			s.finish = litellm.NormalizeFinishReason(chunk.Delta.StopReason)
+			s.finishRaw = chunk.Delta.StopReason
 		}
 		if s.usage.HasTokens() {
 			return []litellm.Event{litellm.UsageEvent{Usage: s.usage}}, nil
 		}
 	case "message_stop":
 		s.done = true
-		return []litellm.Event{litellm.DoneEvent{FinishReason: s.finish, Provider: "anthropic", Model: s.model}}, nil
+		return []litellm.Event{litellm.DoneEvent{FinishReason: s.finish, FinishReasonRaw: s.finishRaw, Provider: "anthropic", Model: s.model}}, nil
 	case "content_block_start":
 		if chunk.ContentBlock == nil {
 			return nil, nil
@@ -168,31 +180,21 @@ func (s *stream) events(chunk streamChunk, raw json.RawMessage) ([]litellm.Event
 				Index:     litellm.IntPtr(chunk.Index),
 				Signature: chunk.ContentBlock.Signature,
 			}}, nil
-		case "thinking":
-			if !s.includeReasoning {
+		case "thinking", "redacted_thinking", "text":
+			if chunk.ContentBlock.Type != "text" && !s.includeReasoning {
 				return nil, nil
 			}
-			if chunk.ContentBlock.Thinking == "" && chunk.ContentBlock.Signature == "" {
-				return nil, nil
+			var block litellm.Block
+			switch chunk.ContentBlock.Type {
+			case "text":
+				block = litellm.TextBlock{Text: chunk.ContentBlock.Text}
+			case "thinking":
+				block = litellm.ReasoningBlock{Text: chunk.ContentBlock.Thinking, Signature: chunk.ContentBlock.Signature}
+			case "redacted_thinking":
+				block = litellm.ReasoningBlock{Redacted: []byte(chunk.ContentBlock.Data)}
 			}
-			return []litellm.Event{litellm.ReasoningDelta{
-				Text:      chunk.ContentBlock.Thinking,
-				Signature: chunk.ContentBlock.Signature,
-				Index:     litellm.IntPtr(chunk.Index),
-			}}, nil
-		case "redacted_thinking":
-			if !s.includeReasoning {
-				return nil, nil
-			}
-			if chunk.ContentBlock.Data == "" {
-				return nil, nil
-			}
-			return []litellm.Event{litellm.ReasoningDelta{
-				Redacted: []byte(chunk.ContentBlock.Data),
-				Index:    litellm.IntPtr(chunk.Index),
-			}}, nil
-		case "text":
-			return nil, nil
+			s.contentBlocks[chunk.Index] = true
+			return []litellm.Event{litellm.ContentStart{Block: block, ContentIndex: litellm.IntPtr(chunk.Index)}}, nil
 		default:
 			return []litellm.Event{litellm.ProviderEvent{Name: chunk.Type + "." + chunk.ContentBlock.Type, Raw: raw}}, nil
 		}
@@ -207,12 +209,12 @@ func (s *stream) events(chunk streamChunk, raw json.RawMessage) ([]litellm.Event
 			if !s.includeReasoning {
 				return nil, nil
 			}
-			return []litellm.Event{litellm.ReasoningDelta{Text: chunk.Delta.Thinking, Index: litellm.IntPtr(chunk.Index)}}, nil
+			return []litellm.Event{litellm.ReasoningDelta{Text: chunk.Delta.Thinking, ContentIndex: litellm.IntPtr(chunk.Index)}}, nil
 		case "signature_delta":
 			if !s.includeReasoning {
 				return nil, nil
 			}
-			return []litellm.Event{litellm.ReasoningDelta{Signature: chunk.Delta.Signature, Index: litellm.IntPtr(chunk.Index)}}, nil
+			return []litellm.Event{litellm.ReasoningDelta{Signature: chunk.Delta.Signature, ContentIndex: litellm.IntPtr(chunk.Index)}}, nil
 		case "input_json_delta":
 			return []litellm.Event{litellm.ToolUseDelta{
 				ID:             s.toolIDs[chunk.Index],
@@ -223,6 +225,9 @@ func (s *stream) events(chunk streamChunk, raw json.RawMessage) ([]litellm.Event
 			return []litellm.Event{litellm.ProviderEvent{Name: chunk.Type + "." + chunk.Delta.Type, Raw: raw}}, nil
 		}
 	case "content_block_stop":
+		if s.contentBlocks[chunk.Index] {
+			return []litellm.Event{litellm.ContentEnd{ContentIndex: litellm.IntPtr(chunk.Index)}}, nil
+		}
 		if id := s.toolIDs[chunk.Index]; id != "" {
 			return []litellm.Event{litellm.ToolUseDone{ID: id, Index: litellm.IntPtr(chunk.Index)}}, nil
 		}
