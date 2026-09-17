@@ -499,3 +499,80 @@ func TestProviderStreamStopsAtTerminalEvent(t *testing.T) {
 		})
 	}
 }
+
+// A generated source avoids retaining the test input itself, so this exercises
+// the same ownership boundary as a provider decoding successive network frames.
+type repeatedTextStream struct {
+	remaining int
+	chunk     string
+}
+
+func (s *repeatedTextStream) Next() (Event, error) {
+	if s.remaining == 0 {
+		return DoneEvent{Provider: "test", Model: "m"}, nil
+	}
+	s.remaining--
+	return ContentDelta{Text: s.chunk}, nil
+}
+func (s *repeatedTextStream) Close() error { return nil }
+
+func TestNextDoesNotRetainStreamedText(t *testing.T) {
+	stream := newValidatedStream("test", "m", &repeatedTextStream{remaining: 2048, chunk: strings.Repeat("x", 16*1024)})
+	defer stream.Close()
+	for {
+		event, err := stream.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, done := event.(DoneEvent); done {
+			break
+		}
+	}
+	state := streamCollector(stream)
+	if len(state.textBuilders) != 0 || state.Response().Text() != "" {
+		t.Fatal("Next retained 32 MiB of streamed text")
+	}
+	for _, block := range state.blocks {
+		if contentText(block) != "" {
+			t.Fatal("validator retained text in a block")
+		}
+	}
+}
+
+func TestValidationOnlySnapshotAndToolWarnings(t *testing.T) {
+	for _, final := range []string{"hello", "different"} {
+		stream := newValidatedStream("test", "m", &eventSliceStream{events: []Event{
+			ContentStart{ContentIndex: IntPtr(0), Block: Text("hel")},
+			ContentDelta{ContentIndex: IntPtr(0), Text: "lo"},
+			ContentEnd{ContentIndex: IntPtr(0), Block: Text(final)},
+			DoneEvent{Provider: "test", Model: "m"},
+		}})
+		_, err := Collect(stream)
+		_ = stream.Close()
+		if (err == nil) != (final == "hello") {
+			t.Fatalf("snapshot %q: %v", final, err)
+		}
+	}
+	stream := newValidatedStream("test", "m", &eventSliceStream{events: []Event{
+		ToolUseStart{ID: "call", Name: "tool"}, ToolUseDelta{ID: "call", ArgumentsDelta: []byte(`{"bad":`)}, ToolUseDone{ID: "call"}, DoneEvent{Provider: "test", Model: "m"},
+	}})
+	defer stream.Close()
+	for {
+		event, err := stream.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, done := event.(DoneEvent); done {
+			break
+		}
+	}
+	state := streamCollector(stream)
+	if len(state.Response().Warnings) != 1 {
+		t.Fatalf("warnings=%+v", state.Response().Warnings)
+	}
+	for _, tool := range state.tools.byKey {
+		if len(tool.Arguments) > 0 {
+			t.Fatal("completed tool arguments retained")
+		}
+	}
+}

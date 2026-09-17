@@ -318,7 +318,7 @@ func (o ProviderOptions) Set(key string, value any) error {
 	}
 	data, err := json.Marshal(value)
 	if err != nil {
-		return NewError(ErrorTypeValidation, fmt.Sprintf("provider option %q: %v", key, err))
+		return NewErrorWithCause(ErrorTypeValidation, fmt.Sprintf("provider option %q: %v", key, err), err)
 	}
 	o[key] = data
 	return nil
@@ -353,7 +353,7 @@ func (o ProviderOptions) Decode() (map[string]any, error) {
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.UseNumber()
 		if err := decoder.Decode(&value); err != nil {
-			return nil, NewError(ErrorTypeValidation, fmt.Sprintf("provider option %q: %v", key, err))
+			return nil, NewErrorWithCause(ErrorTypeValidation, fmt.Sprintf("provider option %q: %v", key, err), err)
 		}
 		values[key] = value
 	}

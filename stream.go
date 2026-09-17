@@ -1,9 +1,12 @@
 package litellm
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"strings"
 )
@@ -188,6 +191,8 @@ func newValidatedStream(provider, model string, stream Stream) Stream {
 		return nil
 	}
 	state := NewEventCollector()
+	state.discardContent = true
+	state.textDigests = make(map[int]hash.Hash)
 	state.provider, state.model = provider, model
 	return &validatedStream{provider: provider, inner: stream, state: state}
 }
@@ -198,6 +203,7 @@ func (s *validatedStream) Next() (Event, error) {
 	}
 	event, err := s.inner.Next()
 	if err != nil {
+		s.state.releaseValidationPayloads()
 		s.done = true
 		if errors.Is(err, io.EOF) {
 			err = io.ErrUnexpectedEOF
@@ -213,6 +219,7 @@ func (s *validatedStream) Next() (Event, error) {
 		err = validateResponse(&Response{Blocks: s.state.blocks, Provider: s.state.provider, Model: s.state.model}, s.provider, s.state.model)
 	}
 	if err != nil {
+		s.state.releaseValidationPayloads()
 		s.done = true
 		return nil, WrapError(err, s.provider)
 	}
@@ -220,8 +227,8 @@ func (s *validatedStream) Next() (Event, error) {
 	return cloneEvent(event), nil
 }
 
-// Client streams share their validated accumulator with Handle, avoiding a
-// second full copy of streamed content. External streams are collected locally.
+// Content-capturing Client streams share their accumulator with Handle.
+// Other streams aggregate only when a consumer explicitly calls Handle/Collect.
 func (s *validatedStream) eventCollector() *EventCollector { return s.state }
 
 func streamCollector(stream Stream) *EventCollector {
@@ -232,6 +239,7 @@ func streamCollector(stream Stream) *EventCollector {
 }
 
 func (s *validatedStream) Close() error {
+	s.state.releaseValidationPayloads()
 	s.done = true
 	err := s.inner.Close()
 	if err != nil {
@@ -257,9 +265,13 @@ func Handle(stream Stream, fn func(Event) error) (*Response, error) {
 		return nil, fmt.Errorf("stream cannot be nil")
 	}
 	collector := streamCollector(stream)
-	validated := collector != nil
+	validated := collector != nil && !collector.discardContent
 	if !validated {
+		source := collector
 		collector = NewEventCollector()
+		if source != nil {
+			collector.provider, collector.model = source.provider, source.model
+		}
 	}
 	for {
 		event, err := stream.Next()
@@ -346,7 +358,11 @@ func HandleWith(stream Stream, handler StreamHandler) (*Response, error) {
 // Create one with NewEventCollector, call Apply for each event in order, then
 // read Response after Apply reports completion.
 type EventCollector struct {
-	blocks []Block
+	// Validation-only streams retain identities and fingerprints, not response bodies.
+	discardContent bool
+	textDigests    map[int]hash.Hash
+	hasRefusal     bool
+	blocks         []Block
 	// Each block has its own builder so interleaved deltas retain identity.
 	textBuilders    map[int]*strings.Builder
 	contentIndexes  map[contentAddress]int
@@ -395,7 +411,10 @@ func (c *EventCollector) Apply(event Event) (bool, error) {
 		if err := c.checkContentDelta(e.OutputIndex, e.ContentIndex, "text", false); err != nil {
 			return false, err
 		}
-		c.refusal.WriteString(e.Text)
+		c.hasRefusal = c.hasRefusal || e.Text != ""
+		if !c.discardContent {
+			c.refusal.WriteString(e.Text)
+		}
 		c.appendContent(e.Text, e.OutputIndex, e.ContentIndex)
 	case ReasoningDelta:
 		if err := c.checkContentDelta(e.OutputIndex, e.ContentIndex, "reasoning", e.Summary); err != nil {
@@ -423,6 +442,9 @@ func (c *EventCollector) Apply(event Event) (bool, error) {
 			c.appendWarning(*warning)
 		}
 		c.appendTool(key, tool)
+		if c.discardContent {
+			tool.Arguments = nil
+		}
 	case UsageEvent:
 		c.usage = e.Usage.Clone()
 		if e.Usage.Provider != "" {
@@ -445,7 +467,7 @@ func (c *EventCollector) Apply(event Event) (bool, error) {
 		c.done = true
 		c.finish = e.FinishReason
 		c.finishRaw = e.FinishReasonRaw
-		if c.refusal.Len() > 0 {
+		if c.hasRefusal {
 			c.finish = FinishReasonSafety
 		}
 		if e.Provider != "" {
@@ -470,6 +492,16 @@ func (c *EventCollector) appendWarning(w Warning) {
 }
 
 func (c *EventCollector) normalizeToolArguments() {
+	if c.discardContent {
+		for _, key := range c.tools.order {
+			tool := c.tools.byKey[key]
+			if warning := normalizeInvalidToolArguments(tool); warning != nil {
+				c.appendWarning(*warning)
+			}
+			tool.Arguments = nil
+		}
+		return
+	}
 	for i, block := range c.blocks {
 		tool, ok := block.(ToolUseBlock)
 		if !ok {
@@ -508,6 +540,9 @@ func (c *EventCollector) Response() *Response {
 		FinishReasonRaw: c.finishRaw,
 		Refusal:         c.refusal.String(),
 		Warnings:        append([]Warning(nil), c.warnings...),
+	}
+	if c.discardContent {
+		resp.Blocks = nil
 	}
 	resp.Usage.StampModel(resp.Provider, resp.Model)
 	return resp
@@ -556,6 +591,15 @@ func (c *EventCollector) appendText(index int, text string) {
 	if text == "" {
 		return
 	}
+	if c.discardContent {
+		digest := c.textDigests[index]
+		if digest == nil {
+			digest = sha256.New()
+			c.textDigests[index] = digest
+		}
+		_, _ = digest.Write([]byte(text))
+		return
+	}
 	builder := c.textBuilders[index]
 	if builder == nil {
 		builder = &strings.Builder{}
@@ -584,6 +628,9 @@ func (c *EventCollector) appendReasoning(delta ReasoningDelta) {
 	index := c.contentIndex("reasoning", delta.OutputIndex, delta.ContentIndex, delta.Summary)
 	block := c.blocks[index].(ReasoningBlock)
 	c.appendText(index, delta.Text)
+	if c.discardContent {
+		return
+	}
 	if delta.Signature != "" {
 		block.Signature = delta.Signature
 	}
@@ -619,10 +666,18 @@ func (c *EventCollector) appendTool(key string, tool *ToolUseBlock) {
 		return
 	}
 	if index, ok := c.toolIndexes[key]; ok {
+		if c.discardContent {
+			c.blocks[index] = ToolUseBlock{ID: tool.ID, Name: tool.Name}
+			return
+		}
 		c.blocks[index] = cloneToolUseBlock(*tool)
 		return
 	}
 	c.toolIndexes[key] = len(c.blocks)
+	if c.discardContent {
+		c.blocks = append(c.blocks, ToolUseBlock{ID: tool.ID, Name: tool.Name})
+		return
+	}
 	c.blocks = append(c.blocks, cloneToolUseBlock(*tool))
 }
 
@@ -841,7 +896,11 @@ func (c *EventCollector) startContent(event ContentStart) error {
 	// unlike an output-only delta from a protocol with no block coordinates.
 	c.contentStates[address] = contentState{}
 	index := c.contentIndex(kind, event.OutputIndex, event.ContentIndex, summary)
-	c.blocks[index] = cloneBlock(event.Block)
+	if c.discardContent {
+		c.appendText(index, contentText(event.Block))
+	} else {
+		c.blocks[index] = cloneBlock(event.Block)
+	}
 	c.contentStates[address] = contentState{index: index}
 	return nil
 }
@@ -870,12 +929,25 @@ func (c *EventCollector) endContent(event ContentEnd) error {
 		if builder := c.textBuilders[state.index]; builder != nil {
 			currentText = builder.String()
 		}
-		if currentText != contentText(event.Block) {
+		matches := currentText == contentText(event.Block)
+		if c.discardContent {
+			expected := sha256.Sum256([]byte(contentText(event.Block)))
+			actual := sha256.Sum256(nil)
+			if digest := c.textDigests[state.index]; digest != nil {
+				matches = bytes.Equal(digest.Sum(nil), expected[:])
+			} else {
+				matches = actual == expected
+			}
+		}
+		if !matches {
 			return fmt.Errorf("final content snapshot differs from streamed text")
 		}
-		c.blocks[state.index] = cloneBlock(event.Block)
+		if !c.discardContent {
+			c.blocks[state.index] = cloneBlock(event.Block)
+		}
 		delete(c.textBuilders, state.index)
 	}
+	delete(c.textDigests, state.index)
 	state.closed = true
 	c.contentStates[address] = state
 	return nil
@@ -912,4 +984,14 @@ func (c *EventCollector) checkContentDelta(output, content *int, kind string, su
 		return fmt.Errorf("content delta type does not match its block")
 	}
 	return nil
+}
+
+func (c *EventCollector) releaseValidationPayloads() {
+	if !c.discardContent {
+		return
+	}
+	for _, tool := range c.tools.byKey {
+		tool.Arguments = nil
+	}
+	clear(c.textDigests)
 }

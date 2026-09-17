@@ -112,6 +112,8 @@ client, err := openai.NewClient(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY"
 
 ## Streaming
 
+`Client.Stream` does not retain complete output by default. The core keeps block identities, text fingerprints, usage and unfinished tool arguments (released after JSON checks). Memory still depends on block count, active tool arguments and provider protocol buffers; it is not constant-memory. `Collect` / `Handle` / `StreamText` / `StreamWith` explicitly aggregate complete or partial responses. Start aggregation at the beginning of the stream; consumed events are not cached for replay.
+
 Streams emit typed `Event` values.
 Providers with explicit content boundaries emit `ContentStart` / `ContentEnd`. The start carries initial content; the end may carry a complete final snapshot with metadata, not another delta. Snapshot text must match streamed text; mismatches return an error and the partial response. `Collect` handles both; `StreamText` / `StreamWith` deliver initial text and subsequent deltas.
 `Stream` is intended for single-goroutine consumption; do not call `Next` concurrently.
@@ -376,7 +378,7 @@ resp, err := client.Chat(ctx, litellm.Request{
 
 An `Observer` starts a separate `CallObserver` for every Chat/Stream invocation, including local validation failures. `Start` receives an isolated snapshot of the caller's request before defaults and validation. Its returned context reaches later observers, the Provider and HTTP requests. Observer factories may run concurrently; each call owns its state.
 
-`OnEvent` observes validated stream events and warnings (including Chat warnings). `End` runs once, in reverse observer registration order, with status `completed`, `failed`, `canceled` or `closed`, duration, error and the final/partial response. Opening a stream does not end the call. Consume streams to termination or Close them; cancellation without Next/Close does not run callbacks in the background.
+`OnEvent` observes validated stream events and warnings (including Chat warnings). `End` runs once, in reverse observer registration order, with status `completed`, `failed`, `canceled` or `closed`, duration, error and response metadata. Streaming results omit Blocks and Refusal unless explicitly requested through `CallObserverFuncs{CaptureContent: true}` or `StreamContentObserver.CaptureStreamContent()`. Observers that do not opt in receive metadata even when another observer captures content. Opening a stream does not end the call. Consume streams to termination or Close them; cancellation without Next/Close does not run callbacks in the background.
 
 Inputs, events and results are isolated copies. Callbacks run synchronously; the core does not recover panics. Application consumer callback errors belong to the consumer, not the model execution; closing that unfinished stream reports `closed`. A cleanup error after completion is returned by Close without revising the completed result. Deadlines and idle timeouts report `failed`; explicit context cancellation reports `canceled`.
 
@@ -413,7 +415,7 @@ if resp.Usage.InputTokens != nil {
 }
 ```
 
-Pricing requires known input and output counts. A distinct cache rate requires its corresponding cache count; missing data returns an error. Cache reads and writes are billed once, and negative counts or cache counts exceeding input are rejected. Unconfigured cache rates use the ordinary input rate.
+Pricing requires known input and output counts. A distinct cache rate requires its corresponding cache count; missing data returns an error. Cache reads and writes are billed once, and negative counts or cache counts exceeding input are rejected. Cache rates are `*float64`: `nil` inherits the input rate; `litellm.Float64Ptr(0)` means free. Registry Set/Get copy rate pointers.
 
 ## Pricing
 

@@ -28,7 +28,9 @@ const (
 )
 
 // CallResult describes SDK execution, not errors in application consumer callbacks.
-// Response may be partial on failure or early Close. A later resource cleanup
+// Streaming Response contains metadata by default; blocks and refusal text are
+// included only for StreamContentObserver opt-in. Captured content may be partial
+// on failure or early Close. A later resource cleanup
 // error does not revise an already completed invocation; Close returns that error.
 type CallResult struct {
 	Status   CallStatus
@@ -62,10 +64,20 @@ type CallObserver interface {
 	End(CallResult)
 }
 
-type CallObserverFuncs struct {
-	OnEventFunc func(Event)
-	EndFunc     func(CallResult)
+// StreamContentObserver explicitly requests complete or partial streamed content
+// in End. Otherwise streaming results contain only response metadata.
+type StreamContentObserver interface {
+	CallObserver
+	CaptureStreamContent() bool
 }
+
+type CallObserverFuncs struct {
+	CaptureContent bool
+	OnEventFunc    func(Event)
+	EndFunc        func(CallResult)
+}
+
+func (o CallObserverFuncs) CaptureStreamContent() bool { return o.CaptureContent }
 
 func (o CallObserverFuncs) OnEvent(e Event) {
 	if o.OnEventFunc != nil {
@@ -90,13 +102,15 @@ func WithObservers(observers ...Observer) ClientOption {
 }
 
 type callObservation struct {
-	started   time.Time
-	observers []CallObserver
-	ended     bool
+	started        time.Time
+	observers      []CallObserver
+	ended          bool
+	captureContent bool
+	streaming      bool
 }
 
 func (c *Client) startCall(ctx context.Context, req Request, streaming bool) (context.Context, *callObservation) {
-	call := &callObservation{started: time.Now()}
+	call := &callObservation{started: time.Now(), streaming: streaming}
 	operation := "chat"
 	if streaming {
 		operation = "stream"
@@ -109,6 +123,9 @@ func (c *Client) startCall(ctx context.Context, req Request, streaming bool) (co
 		})
 		if active != nil {
 			call.observers = append(call.observers, active)
+			if content, ok := active.(StreamContentObserver); ok && content.CaptureStreamContent() {
+				call.captureContent = true
+			}
 		}
 	}
 	return ctx, call
@@ -125,7 +142,15 @@ func (c *callObservation) end(status CallStatus, resp *Response, err error) {
 	c.ended = true
 	duration := time.Since(c.started)
 	for i := len(c.observers) - 1; i >= 0; i-- {
-		c.observers[i].End(CallResult{Status: status, Response: cloneResponse(resp), Err: err, Duration: duration})
+		source := resp
+		content, captures := c.observers[i].(StreamContentObserver)
+		if c.streaming && source != nil && (!captures || !content.CaptureStreamContent()) {
+			metadata := *source
+			metadata.Blocks, metadata.Refusal = nil, ""
+			source = &metadata
+		}
+		snapshot := cloneResponse(source)
+		c.observers[i].End(CallResult{Status: status, Response: snapshot, Err: err, Duration: duration})
 	}
 }
 func callStatus(err error) CallStatus {

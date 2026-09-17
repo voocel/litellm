@@ -16,8 +16,8 @@ func TestRegistryCalculate(t *testing.T) {
 	if err := reg.Set("model-a", ModelPricing{
 		InputCostPerToken:      0.001,
 		OutputCostPerToken:     0.002,
-		CacheReadCostPerToken:  0.0005,
-		CacheWriteCostPerToken: 0.0015,
+		CacheReadCostPerToken:  litellm.Float64Ptr(0.0005),
+		CacheWriteCostPerToken: litellm.Float64Ptr(0.0015),
 	}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestRegistryLoadFromURL(t *testing.T) {
 }
 
 func TestCalculateUnknownAndInvalidUsage(t *testing.T) {
-	table := map[string]ModelPricing{"m": {InputCostPerToken: 1, OutputCostPerToken: 2, CacheReadCostPerToken: 0.5}}
+	table := map[string]ModelPricing{"m": {InputCostPerToken: 1, OutputCostPerToken: 2, CacheReadCostPerToken: litellm.Float64Ptr(0.5)}}
 	for _, usage := range []litellm.Usage{
 		{},
 		{InputTokens: litellm.IntPtr(10), OutputTokens: litellm.IntPtr(1)},
@@ -116,5 +116,38 @@ func TestCalculateUnknownAndInvalidUsage(t *testing.T) {
 	table["m"] = ModelPricing{InputCostPerToken: 1, OutputCostPerToken: 2}
 	if cost, err := Calculate("m", litellm.Usage{InputTokens: litellm.IntPtr(10), OutputTokens: litellm.IntPtr(2)}, table); err != nil || cost.Total != 14 {
 		t.Fatalf("equal cache rates: %+v %v", cost, err)
+	}
+}
+
+func TestFreeCacheRatesAndRegistryOwnership(t *testing.T) {
+	r := NewRegistry()
+	zero := 0.0
+	price := ModelPricing{InputCostPerToken: 1, OutputCostPerToken: 2, CacheReadCostPerToken: &zero, CacheWriteCostPerToken: &zero}
+	if err := r.Set("free-cache", price); err != nil {
+		t.Fatal(err)
+	}
+	zero = 99
+	got, ok := r.Get("free-cache")
+	if !ok || got.CacheReadCostPerToken == nil || *got.CacheReadCostPerToken != 0 {
+		t.Fatalf("price = %+v", got)
+	}
+	*got.CacheReadCostPerToken = 100
+	usage := litellm.Usage{InputTokens: litellm.IntPtr(10), OutputTokens: litellm.IntPtr(2), CacheReadTokens: litellm.IntPtr(6), CacheWriteTokens: litellm.IntPtr(4)}
+	if cost, err := r.Calculate("free-cache", usage); err != nil || cost.Total != 4 || cost.CacheRead != 0 || cost.CacheWrite != 0 {
+		t.Fatalf("free cache cost = %+v, %v", cost, err)
+	}
+	if err := r.LoadFromReader(strings.NewReader(`{"free":{"input_cost_per_token":1,"output_cost_per_token":2,"cache_read_input_token_cost":0,"cache_creation_input_token_cost":0},"inherited":{"input_cost_per_token":1,"output_cost_per_token":2}}`)); err != nil {
+		t.Fatal(err)
+	}
+	for model, want := range map[string]float64{"free": 4, "inherited": 14} {
+		cost, err := r.Calculate(model, usage)
+		if err != nil || cost.Total != want {
+			t.Fatalf("%s: %+v %v", model, cost, err)
+		}
+	}
+	for _, value := range []float64{-1, math.NaN(), math.Inf(1)} {
+		if err := r.Set("bad", ModelPricing{CacheReadCostPerToken: &value}); err == nil {
+			t.Fatal("accepted invalid rate")
+		}
 	}
 }

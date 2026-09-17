@@ -12,6 +12,7 @@ import (
 
 // Observer is immutable after construction and may observe concurrent calls.
 // Each Start owns its span; no global call registry or content collector is used.
+// WithCaptureContent explicitly requests stream aggregation from the core.
 type Observer struct {
 	tracer         trace.Tracer
 	captureContent bool
@@ -63,6 +64,8 @@ type observation struct {
 	span           trace.Span
 	captureContent bool
 }
+
+func (o *observation) CaptureStreamContent() bool { return o.captureContent }
 
 func (o *observation) OnEvent(litellm.Event) {}
 func (o *observation) End(result litellm.CallResult) {

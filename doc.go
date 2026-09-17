@@ -47,7 +47,9 @@ provider signatures across multi-turn agent workflows.
 
 # Streaming
 
-Providers stream typed Event values. Use a type switch for real-time handling
+Providers stream typed Event values. Client streams retain validation state by
+default; complete content is retained only by explicit aggregation or observer
+content capture. Use a type switch for real-time handling
 or Collect to aggregate a stream into a Response:
 Stream is intended for single-goroutine consumption; do not call Next
 concurrently.

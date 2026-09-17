@@ -115,6 +115,9 @@ client, err := openai.NewClient(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY"
 流式返回 typed `Event`。
 支持显式内容块边界的 Provider 会发出 `ContentStart` / `ContentEnd`：前者包含初始内容，后者可携带最终完整快照（含元数据），不能当作增量重复拼接；快照文本必须与已输出文本一致，否则返回错误和部分响应。`Collect` 自动处理；`StreamText` / `StreamWith` 会交付初始文本和后续增量。
 `Stream` 设计为单 goroutine 消费；不要并发调用 `Next`。
+
+`Client.Stream` 默认不保存完整输出：核心只保留块身份、文本摘要、用量及尚未结束的工具参数（用于 JSON 检查，结束后释放）。内存仍取决于块数量、活跃工具参数和 Provider 的协议缓冲，不承诺固定内存。`Collect` / `Handle` / `StreamText` / `StreamWith` 才显式聚合完整或部分响应；从流开始处调用聚合接口，已消费的内容不会被默认缓存以供回放。
+
 如果需要每个事件之间的空闲超时，用 `WithStreamIdleTimeout` 显式开启；默认关闭。
 `WithStreamIdleTimeout` 只覆盖通用 `Client.Stream`；OpenAI Responses 原生流用 `openai.Config.StreamIdleTimeout`。
 例如：
@@ -376,7 +379,7 @@ resp, err := client.Chat(ctx, litellm.Request{
 
 `Observer.Start` 为每次 Chat/Stream 调用创建独立的 `CallObserver`，包括本地校验失败的调用。Start 收到的是应用传入请求的隔离副本，时机在默认值和校验之前；返回的 context 会依次传给后续 Observer、Provider 和 HTTP 请求。Observer 工厂可并发执行，每次调用独立持有状态。
 
-`OnEvent` 接收已校验的流事件和 WarningEvent（也包含 Chat 的 warning）。`End` 恰好调用一次，并按注册顺序逆序结束；结果包含状态、完整调用耗时、错误以及最终/部分响应。状态分别为 `completed`、`failed`、`canceled`、`closed`。建流成功不代表调用结束；需要持续 Next 到终止或显式 Close，仅取消 context 不会在后台执行回调。
+`OnEvent` 接收已校验的流事件和 WarningEvent（也包含 Chat 的 warning）。`End` 恰好调用一次，并按注册顺序逆序结束；结果包含状态、完整调用耗时、错误以及响应元数据。流式结果默认不带 Blocks 或 Refusal；需要完整或部分内容时，用 `CallObserverFuncs{CaptureContent: true}`，或实现 `StreamContentObserver` 并让 `CaptureStreamContent()` 返回 true。未开启捕获的 Observer 始终只收到元数据，即使其他 Observer 开启捕获。状态分别为 `completed`、`failed`、`canceled`、`closed`。建流成功不代表调用结束；需要持续 Next 到终止或显式 Close，仅取消 context 不会在后台执行回调。
 
 请求、事件和结果均为隔离副本。回调同步执行，核心不 recover panic。应用消费回调的错误由消费函数返回，不改写模型执行结果；关闭尚未完成的流记录为 closed。完成后发生的资源清理错误由 Close 返回，不改写已完成结果。deadline 和 idle timeout 为 failed，主动 context cancellation 为 canceled。
 
@@ -414,7 +417,7 @@ if resp.Usage.InputTokens != nil {
 }
 ```
 
-Pricing 要求已知输入和输出计数；缓存采用不同费率时，对应缓存计数也必须已知，否则返回错误。缓存读写只计费一次；不一致的负数或超出输入总量的缓存计数会报错。未配置缓存费率时沿用普通输入费率。
+Pricing 要求已知输入和输出计数；缓存采用不同费率时，对应缓存计数也必须已知，否则返回错误。缓存读写只计费一次；不一致的负数或超出输入总量的缓存计数会报错。缓存费率改为 `*float64`：`nil` 沿用普通输入费率，`litellm.Float64Ptr(0)` 表示免费；Registry 在 Set/Get 时隔离指针。
 
 ## Pricing
 

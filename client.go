@@ -118,6 +118,9 @@ func (c *Client) Stream(ctx context.Context, req Request) (Stream, error) {
 		return nil, err
 	}
 	stream = newValidatedStream(c.provider.Name(), prepared.Model, stream)
+	if call.captureContent {
+		streamCollector(stream).discardContent = false
+	}
 	stream = newStreamIdleWatchdog(stream, cancel, c.streamIdleTimeout, c.provider.Name())
 	return &observedStream{ctx: streamCtx, cancel: cancel, call: call, inner: stream}, nil
 }

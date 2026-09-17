@@ -1241,3 +1241,12 @@ func TestValidateHistoryRejectsDuplicateResults(t *testing.T) {
 		t.Fatalf("duplicate result = %v", err)
 	}
 }
+
+func TestProviderOptionEncodingPreservesCause(t *testing.T) {
+	var unsupported *json.UnsupportedTypeError
+	options := make(ProviderOptions)
+	err := options.Set("callback", func() {})
+	if !IsValidationError(err) || !errors.As(err, &unsupported) {
+		t.Fatalf("lost encoding cause: %v", err)
+	}
+}

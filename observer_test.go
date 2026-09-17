@@ -3,6 +3,7 @@ package litellm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"testing"
@@ -114,7 +115,7 @@ func TestObserverStreamingTerminalStates(t *testing.T) {
 				}
 			}}
 			c, _ := New(p, WithObservers(ObserverFunc(func(ctx context.Context, _ CallInfo) (context.Context, CallObserver) {
-				return ctx, CallObserverFuncs{EndFunc: func(r CallResult) { ends++; result = r }}
+				return ctx, CallObserverFuncs{CaptureContent: true, EndFunc: func(r CallResult) { ends++; result = r }}
 			})))
 			s, err := c.Stream(ctx, Request{Model: "m", Messages: []Message{UserText("hello")}})
 			if tc.name == "setup" {
@@ -165,7 +166,7 @@ func TestObserverProtocolFailureDoesNotPublishDone(t *testing.T) {
 	c, _ := New(&testProvider{name: "test", streamFunc: func(context.Context, *Request) (Stream, error) {
 		return &testStream{events: []Event{ContentStart{Block: TextBlock{Text: "partial"}, ContentIndex: IntPtr(0)}, DoneEvent{Provider: "test", Model: "m"}}}, nil
 	}}, WithObservers(ObserverFunc(func(ctx context.Context, _ CallInfo) (context.Context, CallObserver) {
-		return ctx, CallObserverFuncs{
+		return ctx, CallObserverFuncs{CaptureContent: true,
 			OnEventFunc: func(e Event) {
 				if _, ok := e.(DoneEvent); ok {
 					done = true
@@ -199,5 +200,42 @@ func TestObserverIdleTimeoutOnClose(t *testing.T) {
 		if err = s.Close(); !IsStreamIdleError(err) || result.Status != CallFailed || !IsStreamIdleError(result.Err) {
 			t.Fatalf("close=%v result=%+v", err, result)
 		}
+	}
+}
+
+func TestStreamContentCaptureIsPerObserver(t *testing.T) {
+	for _, capture := range []bool{false, true} {
+		t.Run(fmt.Sprint(capture), func(t *testing.T) {
+			var results [2]CallResult
+			observer := func(index int, enabled bool) Observer {
+				return ObserverFunc(func(ctx context.Context, _ CallInfo) (context.Context, CallObserver) {
+					return ctx, CallObserverFuncs{CaptureContent: enabled, EndFunc: func(r CallResult) { results[index] = r }}
+				})
+			}
+			client, _ := New(&testProvider{name: "test", streamFunc: func(context.Context, *Request) (Stream, error) {
+				return &testStream{events: []Event{ContentDelta{Text: "hello"}, UsageEvent{Usage: Usage{InputTokens: IntPtr(0)}}, DoneEvent{Provider: "test", Model: "m", FinishReason: FinishReasonStop}}}, nil
+			}}, WithObservers(observer(0, capture), observer(1, false)))
+			s, err := client.Stream(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			response, err := Collect(s)
+			if err != nil || response.Text() != "hello" {
+				t.Fatalf("collect = %+v %v", response, err)
+			}
+			want := ""
+			if capture {
+				want = "hello"
+			}
+			if results[0].Response.Text() != want || results[1].Response.Text() != "" {
+				t.Fatal("observer content isolation failed")
+			}
+			for _, result := range results {
+				if result.Status != CallCompleted || result.Response.Usage.InputTokens == nil || *result.Response.Usage.InputTokens != 0 {
+					t.Fatalf("metadata = %+v", result)
+				}
+			}
+		})
 	}
 }

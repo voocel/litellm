@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -15,11 +16,13 @@ import (
 
 const DefaultURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 
+// ModelPricing uses nil cache rates to inherit the ordinary input rate.
+// A non-nil zero rate means free cache usage.
 type ModelPricing struct {
-	InputCostPerToken      float64 `json:"input_cost_per_token"`
-	OutputCostPerToken     float64 `json:"output_cost_per_token"`
-	CacheReadCostPerToken  float64 `json:"cache_read_input_token_cost,omitempty"`
-	CacheWriteCostPerToken float64 `json:"cache_creation_input_token_cost,omitempty"`
+	InputCostPerToken      float64  `json:"input_cost_per_token"`
+	OutputCostPerToken     float64  `json:"output_cost_per_token"`
+	CacheReadCostPerToken  *float64 `json:"cache_read_input_token_cost,omitempty"`
+	CacheWriteCostPerToken *float64 `json:"cache_creation_input_token_cost,omitempty"`
 }
 
 type ModelCapabilities struct {
@@ -48,8 +51,8 @@ type Registry struct {
 type entry struct {
 	inputCostPerToken      float64
 	outputCostPerToken     float64
-	cacheReadCostPerToken  float64
-	cacheWriteCostPerToken float64
+	cacheReadCostPerToken  *float64
+	cacheWriteCostPerToken *float64
 	hasInputPricing        bool
 	hasOutputPricing       bool
 	provider               string
@@ -79,8 +82,8 @@ func (r *Registry) Set(model string, price ModelPricing) error {
 	e := r.entries[model]
 	e.inputCostPerToken = price.InputCostPerToken
 	e.outputCostPerToken = price.OutputCostPerToken
-	e.cacheReadCostPerToken = price.CacheReadCostPerToken
-	e.cacheWriteCostPerToken = price.CacheWriteCostPerToken
+	e.cacheReadCostPerToken = copyRate(price.CacheReadCostPerToken)
+	e.cacheWriteCostPerToken = copyRate(price.CacheWriteCostPerToken)
 	e.hasInputPricing = true
 	e.hasOutputPricing = true
 	r.entries[model] = e
@@ -97,8 +100,8 @@ func (r *Registry) Get(model string) (ModelPricing, bool) {
 	return ModelPricing{
 		InputCostPerToken:      e.inputCostPerToken,
 		OutputCostPerToken:     e.outputCostPerToken,
-		CacheReadCostPerToken:  e.cacheReadCostPerToken,
-		CacheWriteCostPerToken: e.cacheWriteCostPerToken,
+		CacheReadCostPerToken:  copyRate(e.cacheReadCostPerToken),
+		CacheWriteCostPerToken: copyRate(e.cacheWriteCostPerToken),
 	}, true
 }
 
@@ -169,13 +172,12 @@ func Calculate(model string, usage litellm.Usage, table map[string]ModelPricing)
 	if usage.InputTokens == nil || usage.OutputTokens == nil {
 		return Cost{}, fmt.Errorf("pricing: input and output token counts must be known")
 	}
-	cacheReadRate := price.CacheReadCostPerToken
-	if cacheReadRate == 0 {
-		cacheReadRate = price.InputCostPerToken
+	cacheReadRate, cacheWriteRate := price.InputCostPerToken, price.InputCostPerToken
+	if price.CacheReadCostPerToken != nil {
+		cacheReadRate = *price.CacheReadCostPerToken
 	}
-	cacheWriteRate := price.CacheWriteCostPerToken
-	if cacheWriteRate == 0 {
-		cacheWriteRate = price.InputCostPerToken
+	if price.CacheWriteCostPerToken != nil {
+		cacheWriteRate = *price.CacheWriteCostPerToken
 	}
 	cacheRead, cacheWrite := 0, 0
 	if usage.CacheReadTokens != nil {
@@ -251,10 +253,10 @@ func parseRegistry(reader io.Reader) (map[string]entry, error) {
 			e.hasOutputPricing = true
 		}
 		if parsed.CacheReadCostPerToken != nil {
-			e.cacheReadCostPerToken = *parsed.CacheReadCostPerToken
+			e.cacheReadCostPerToken = parsed.CacheReadCostPerToken
 		}
 		if parsed.CacheWriteCostPerToken != nil {
-			e.cacheWriteCostPerToken = *parsed.CacheWriteCostPerToken
+			e.cacheWriteCostPerToken = parsed.CacheWriteCostPerToken
 		}
 		entries[model] = e
 	}
@@ -275,18 +277,26 @@ func (r *Registry) lookup(model string) (entry, bool) {
 	return entry{}, false
 }
 
+// Optional cache rates distinguish an inherited rate (nil) from free usage (zero).
+func copyRate(rate *float64) *float64 {
+	if rate == nil {
+		return nil
+	}
+	value := *rate
+	return &value
+}
+
 func validatePricing(price ModelPricing) error {
-	if price.InputCostPerToken < 0 {
-		return fmt.Errorf("pricing: input cost per token must be non-negative")
-	}
-	if price.OutputCostPerToken < 0 {
-		return fmt.Errorf("pricing: output cost per token must be non-negative")
-	}
-	if price.CacheReadCostPerToken < 0 {
-		return fmt.Errorf("pricing: cache read cost per token must be non-negative")
-	}
-	if price.CacheWriteCostPerToken < 0 {
-		return fmt.Errorf("pricing: cache write cost per token must be non-negative")
+	for _, rate := range []struct {
+		name  string
+		value *float64
+	}{
+		{"input", &price.InputCostPerToken}, {"output", &price.OutputCostPerToken},
+		{"cache read", price.CacheReadCostPerToken}, {"cache write", price.CacheWriteCostPerToken},
+	} {
+		if rate.value != nil && (*rate.value < 0 || math.IsNaN(*rate.value) || math.IsInf(*rate.value, 0)) {
+			return fmt.Errorf("pricing: %s cost per token must be finite and non-negative", rate.name)
+		}
 	}
 	return nil
 }
