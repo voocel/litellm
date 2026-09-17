@@ -102,11 +102,11 @@ type candidate struct {
 }
 
 type usageMetadata struct {
-	PromptTokenCount        int `json:"promptTokenCount"`
-	CandidatesTokenCount    int `json:"candidatesTokenCount"`
-	ThoughtsTokenCount      int `json:"thoughtsTokenCount,omitempty"`
-	TotalTokenCount         int `json:"totalTokenCount"`
-	CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
+	PromptTokenCount        *int `json:"promptTokenCount"`
+	CandidatesTokenCount    *int `json:"candidatesTokenCount"`
+	ThoughtsTokenCount      *int `json:"thoughtsTokenCount,omitempty"`
+	TotalTokenCount         *int `json:"totalTokenCount"`
+	CachedContentTokenCount *int `json:"cachedContentTokenCount,omitempty"`
 }
 
 type safetyRating struct {

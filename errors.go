@@ -33,7 +33,10 @@ type LiteLLMError struct {
 	Provider   string
 	Model      string
 	StatusCode int
-	Retryable  bool
+	// Temporary describes a potentially transient failure, not permission to replay
+	// a request. The provider may already have processed or billed the operation.
+	Temporary bool
+	// RetryAfter is the server-suggested delay in seconds; zero means unspecified.
 	RetryAfter int
 	Cause      error
 }
@@ -82,19 +85,19 @@ func (e *LiteLLMError) Unwrap() error {
 }
 
 func NewError(errorType ErrorType, message string) *LiteLLMError {
-	return &LiteLLMError{Type: errorType, Message: message, Retryable: isRetryableByType(errorType)}
+	return &LiteLLMError{Type: errorType, Message: message, Temporary: isTemporaryByType(errorType)}
 }
 
 func NewErrorWithCause(errorType ErrorType, message string, cause error) *LiteLLMError {
-	return &LiteLLMError{Type: errorType, Message: message, Cause: cause, Retryable: isRetryableByType(errorType)}
+	return &LiteLLMError{Type: errorType, Message: message, Cause: cause, Temporary: isTemporaryByType(errorType)}
 }
 
 func NewProviderError(provider string, errorType ErrorType, message string) *LiteLLMError {
-	return &LiteLLMError{Type: errorType, Provider: provider, Message: message, Retryable: isRetryableByType(errorType)}
+	return &LiteLLMError{Type: errorType, Provider: provider, Message: message, Temporary: isTemporaryByType(errorType)}
 }
 
 func NewProviderErrorWithCause(provider string, errorType ErrorType, message string, cause error) *LiteLLMError {
-	return &LiteLLMError{Type: errorType, Provider: provider, Message: message, Cause: cause, Retryable: isRetryableByType(errorType)}
+	return &LiteLLMError{Type: errorType, Provider: provider, Message: message, Cause: cause, Temporary: isTemporaryByType(errorType)}
 }
 
 func NewHTTPError(provider string, statusCode int, message string) *LiteLLMError {
@@ -113,7 +116,7 @@ func NewHTTPError(provider string, statusCode int, message string) *LiteLLMError
 		Provider:   provider,
 		Message:    message,
 		StatusCode: statusCode,
-		Retryable:  isRetryableByType(errorType),
+		Temporary:  isTemporaryHTTPError(statusCode, errorType),
 	}
 }
 
@@ -199,7 +202,7 @@ func NewRateLimitError(provider, message string, retryAfter int) *LiteLLMError {
 		Type:       ErrorTypeRateLimit,
 		Provider:   provider,
 		Message:    message,
-		Retryable:  true,
+		Temporary:  true,
 		RetryAfter: retryAfter,
 	}
 }
@@ -210,16 +213,16 @@ func NewModelError(provider, model, message string) *LiteLLMError {
 
 func NewNetworkError(provider, message string, cause error) *LiteLLMError {
 	if errors.Is(cause, context.Canceled) {
-		return &LiteLLMError{Type: ErrorTypeNetwork, Provider: provider, Message: message, Cause: cause, Retryable: false}
+		return &LiteLLMError{Type: ErrorTypeNetwork, Provider: provider, Message: message, Cause: cause, Temporary: false}
 	}
 	if errors.Is(cause, context.DeadlineExceeded) {
-		return &LiteLLMError{Type: ErrorTypeTimeout, Provider: provider, Message: message, Cause: cause, Retryable: false}
+		return &LiteLLMError{Type: ErrorTypeTimeout, Provider: provider, Message: message, Cause: cause, Temporary: false}
 	}
-	return &LiteLLMError{Type: ErrorTypeNetwork, Provider: provider, Message: message, Cause: cause, Retryable: true}
+	return &LiteLLMError{Type: ErrorTypeNetwork, Provider: provider, Message: message, Cause: cause, Temporary: true}
 }
 
 func NewTimeoutError(provider, message string) *LiteLLMError {
-	return &LiteLLMError{Type: ErrorTypeTimeout, Provider: provider, Message: message, Retryable: true}
+	return &LiteLLMError{Type: ErrorTypeTimeout, Provider: provider, Message: message, Temporary: true}
 }
 
 func IsAuthError(err error) bool            { return isErrorType(err, ErrorTypeAuth) }
@@ -233,9 +236,11 @@ func IsContextOverflowError(err error) bool { return isErrorType(err, ErrorTypeC
 func IsOverloadedError(err error) bool      { return isErrorType(err, ErrorTypeOverloaded) }
 func IsContentFilterError(err error) bool   { return isErrorType(err, ErrorTypeContentFilter) }
 
-func IsRetryableError(err error) bool {
+// IsTemporaryError reports whether the failure may resolve over time. It does
+// not establish that repeating the operation is safe, even before any output.
+func IsTemporaryError(err error) bool {
 	var e *LiteLLMError
-	return errors.As(err, &e) && e.Retryable
+	return errors.As(err, &e) && e.Temporary
 }
 
 func GetRetryAfter(err error) int {
@@ -326,9 +331,24 @@ func classifyHTTPError(statusCode int) ErrorType {
 	}
 }
 
-func isRetryableByType(errorType ErrorType) bool {
+func isTemporaryByType(errorType ErrorType) bool {
 	switch errorType {
-	case ErrorTypeNetwork, ErrorTypeTimeout, ErrorTypeRateLimit, ErrorTypeOverloaded, ErrorTypeProvider:
+	case ErrorTypeNetwork, ErrorTypeTimeout, ErrorTypeRateLimit, ErrorTypeOverloaded:
+		return true
+	default:
+		return false
+	}
+}
+
+// A provider error without an HTTP status has no known recovery semantics.
+func isTemporaryHTTPError(status int, kind ErrorType) bool {
+	if kind == ErrorTypeContentFilter {
+		return false
+	}
+	switch status {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests,
+		http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout, 529:
 		return true
 	default:
 		return false

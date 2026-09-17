@@ -61,7 +61,7 @@ type ResponsesRequest struct {
 
 	CaptureRawResponse bool
 
-	providerOptions   map[string]any
+	providerOptions   litellm.ProviderOptions
 	unsupportedFields []string
 }
 
@@ -96,7 +96,10 @@ func responsesRequestFromChat(req *litellm.Request) *ResponsesRequest {
 		CaptureRawResponse: req.CaptureRawResponse(),
 	}
 	if len(req.ProviderOptions) > 0 {
-		out.providerOptions = cloneMapAny(map[string]any(req.ProviderOptions))
+		out.providerOptions = make(litellm.ProviderOptions, len(req.ProviderOptions))
+		for key, raw := range req.ProviderOptions {
+			out.providerOptions[key] = append(json.RawMessage(nil), raw...)
+		}
 	}
 	if len(req.Stop) > 0 {
 		out.unsupportedFields = append(out.unsupportedFields, "stop")
@@ -303,20 +306,20 @@ type responsesSummaryItem struct {
 }
 
 type responsesUsage struct {
-	InputTokens         int                           `json:"input_tokens"`
-	OutputTokens        int                           `json:"output_tokens"`
-	TotalTokens         int                           `json:"total_tokens"`
+	InputTokens         *int                          `json:"input_tokens"`
+	OutputTokens        *int                          `json:"output_tokens"`
+	TotalTokens         *int                          `json:"total_tokens"`
 	InputTokensDetails  *responsesInputTokensDetails  `json:"input_tokens_details,omitempty"`
 	OutputTokensDetails *responsesOutputTokensDetails `json:"output_tokens_details,omitempty"`
 }
 
 type responsesInputTokensDetails struct {
-	CachedTokens     int `json:"cached_tokens,omitempty"`
-	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	CachedTokens     *int `json:"cached_tokens,omitempty"`
+	CacheWriteTokens *int `json:"cache_write_tokens,omitempty"`
 }
 
 type responsesOutputTokensDetails struct {
-	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+	ReasoningTokens *int `json:"reasoning_tokens,omitempty"`
 }
 
 func (p *Provider) Responses(ctx context.Context, req *ResponsesRequest) (*litellm.Response, error) {
@@ -451,6 +454,18 @@ func (p *Provider) buildResponsesRequest(req *ResponsesRequest, stream bool) (*r
 	if stream {
 		out.Stream = litellm.Bool(true)
 	}
+	if choice, ok := effective.ToolChoice.(*litellm.ToolChoice); ok {
+		if err := choice.Validate(); err != nil {
+			return nil, err
+		}
+		if choice == nil {
+			out.ToolChoice = nil
+		} else if choice.Name != "" {
+			out.ToolChoice = map[string]any{"type": "function", "name": choice.Name}
+		} else {
+			out.ToolChoice = string(choice.Mode)
+		}
+	}
 	out.Input = cloneAny(effective.Input)
 	if len(effective.Messages) > 0 {
 		instructions, messages, err := responsesInstructions(effective.Messages)
@@ -551,12 +566,16 @@ func applyResponsesProviderOptions(req *ResponsesRequest, stream bool) error {
 	if req == nil {
 		return nil
 	}
-	for key := range req.providerOptions {
+	options, err := req.providerOptions.Decode()
+	if err != nil {
+		return err
+	}
+	for key := range options {
 		if _, ok := providerOptionKeys[key]; !ok {
 			return fmt.Errorf("openai: unsupported provider option %q", key)
 		}
 	}
-	for key, value := range req.providerOptions {
+	for key, value := range options {
 		switch key {
 		case ProviderOptionStore:
 			v, err := optionBool(key, value)

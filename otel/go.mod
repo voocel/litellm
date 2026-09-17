@@ -18,3 +18,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 )
+
+// Develop the observer API against the sibling core; update the required
+// core version and remove this replacement when publishing the new modules.
+replace github.com/voocel/litellm => ..

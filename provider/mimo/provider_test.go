@@ -47,13 +47,13 @@ func TestProviderOptionsAndStrictTools(t *testing.T) {
 		Tools: []litellm.Tool{
 			mustTool(t, "lookup", litellm.StrictEnabled),
 		},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			ProviderOptionAudio: map[string]any{
 				"format": "mp3",
 			},
 			ProviderOptionFrequencyPenalty: 0.3,
 			ProviderOptionPresencePenalty:  0.2,
-		},
+		}),
 	})
 	if body["frequency_penalty"] != 0.3 || body["presence_penalty"] != 0.2 {
 		t.Fatalf("penalties = %#v", body)
@@ -76,7 +76,7 @@ func TestToolChoiceCapabilities(t *testing.T) {
 	if got := p.Capabilities("mimo-v2.5-pro").Tools.Choice; got != litellm.SupportPartial {
 		t.Fatalf("tool choice support = %v, want partial", got)
 	}
-	if err := validateToolChoice("required"); err == nil || !strings.Contains(err.Error(), `only supports "auto"`) {
+	if err := validateToolChoice(&litellm.ToolChoice{Mode: "required"}); err == nil || !strings.Contains(err.Error(), `only supports "auto"`) {
 		t.Fatalf("expected tool_choice error, got %v", err)
 	}
 }
@@ -96,7 +96,7 @@ func TestRejectsUnknownProviderOptions(t *testing.T) {
 	_, err = p.Chat(context.Background(), &litellm.Request{
 		Model:           "mimo-v2-flash",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{"unknown": true},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"unknown": true}),
 	})
 	if err == nil || !strings.Contains(err.Error(), `unsupported provider option "unknown"`) {
 		t.Fatalf("err = %v", err)
@@ -278,7 +278,7 @@ func TestResponseReasoningContent(t *testing.T) {
 	if resp.Text() != "ok" || resp.Reasoning() != "think" {
 		t.Fatalf("text/reasoning = %q/%q", resp.Text(), resp.Reasoning())
 	}
-	if resp.Usage.ReasoningTokens != 1 || resp.Usage.CacheReadTokens != 1 || resp.Model != "mimo-v2.5-pro" {
+	if *resp.Usage.ReasoningTokens != 1 || *resp.Usage.CacheReadTokens != 1 || resp.Model != "mimo-v2.5-pro" {
 		t.Fatalf("usage/model = %+v/%q", resp.Usage, resp.Model)
 	}
 }
@@ -342,7 +342,7 @@ func TestStreamReasoningContent(t *testing.T) {
 	if _, ok := body["stream_options"]; ok {
 		t.Fatalf("stream_options should be omitted for mimo: %#v", body)
 	}
-	if resp.Usage.ReasoningTokens != 1 || resp.Usage.CacheReadTokens != 1 {
+	if *resp.Usage.ReasoningTokens != 1 || *resp.Usage.CacheReadTokens != 1 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
 }
@@ -387,4 +387,13 @@ func mustTool(t *testing.T, name string, strict litellm.StrictMode) litellm.Tool
 	}
 	tool.Strict = strict
 	return tool
+}
+
+func mustProviderOptions(t *testing.T, values map[string]any) litellm.ProviderOptions {
+	t.Helper()
+	o, err := litellm.NewProviderOptions(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
 }

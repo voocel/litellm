@@ -24,13 +24,6 @@ jobs:
       - name: Test root module
         run: go test -race -v ./...
 
-      - name: Test otel module
+      - name: Test otel module against current root (local replace)
         working-directory: otel
         run: go test -race -v ./...
-
-      - name: Test otel module against current root module
-        env:
-          GOWORK: ${{ runner.temp }}/litellm.go.work
-        run: |
-          go work init . ./otel
-          go test -race -v ./otel/...

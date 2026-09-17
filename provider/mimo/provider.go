@@ -1,6 +1,7 @@
 package mimo
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -95,7 +96,7 @@ func mapThinking(thinking *litellm.Thinking, model string) (map[string]any, erro
 	return map[string]any{"thinking": map[string]any{"type": thinkingType}}, nil
 }
 
-func mapProviderOptions(options litellm.ProviderOptions, body map[string]any, req *litellm.Request) error {
+func mapProviderOptions(options map[string]any, body map[string]any, req *litellm.Request) error {
 	if effectiveThinkingEnabled(req.Thinking, req.Model) && thinkingOverridesSampling(req.Model) {
 		if req.Temperature != nil {
 			return fmt.Errorf("mimo: temperature cannot be customized when thinking is enabled for %s", req.Model)
@@ -116,7 +117,7 @@ func mapProviderOptions(options litellm.ProviderOptions, body map[string]any, re
 			body[key] = value
 		case ProviderOptionFrequencyPenalty, ProviderOptionPresencePenalty:
 			switch value.(type) {
-			case float64, float32, int, int64, int32, nil:
+			case json.Number, float64, float32, int, int64, int32, nil:
 				body[key] = value
 			default:
 				return fmt.Errorf("mimo: provider option %q must be number or null", key)
@@ -128,12 +129,11 @@ func mapProviderOptions(options litellm.ProviderOptions, body map[string]any, re
 	return nil
 }
 
-func validateToolChoice(choice litellm.ToolChoice) error {
+func validateToolChoice(choice *litellm.ToolChoice) error {
 	if choice == nil {
 		return nil
 	}
-	value, ok := choice.(string)
-	if !ok || strings.ToLower(strings.TrimSpace(value)) != "auto" {
+	if choice.Name != "" || choice.Mode != litellm.ToolChoiceAuto {
 		return fmt.Errorf(`mimo: tool_choice only supports "auto"`)
 	}
 	return nil
@@ -175,4 +175,15 @@ func usesCurrentThinkingContract(model string) bool {
 		return false
 	}
 	return major > 2 || major == 2 && minor >= 5
+}
+
+// NewClient builds the provider from cfg and wraps it in a ready *litellm.Client.
+// It is a convenience for the common single-provider case. It calls New(cfg)
+// and then litellm.New(provider, opts...).
+func NewClient(cfg Config, opts ...litellm.ClientOption) (*litellm.Client, error) {
+	p, err := New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return litellm.New(p, opts...)
 }

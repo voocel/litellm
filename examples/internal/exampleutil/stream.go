@@ -48,12 +48,19 @@ func PrintUsage(usage litellm.Usage) {
 	if !usage.HasTokens() {
 		return
 	}
-	fmt.Printf("usage: input=%d output=%d total=%d reasoning=%d cache_read=%d cache_write=%d\n",
-		usage.InputTokens,
-		usage.OutputTokens,
-		usage.TotalTokens,
-		usage.ReasoningTokens,
-		usage.CacheReadTokens,
-		usage.CacheWriteTokens,
+	fmt.Printf("usage: input=%s output=%s total=%s reasoning=%s cache_read=%s cache_write=%s\n",
+		tokenCount(usage.InputTokens),
+		tokenCount(usage.OutputTokens),
+		tokenCount(usage.TotalTokens),
+		tokenCount(usage.ReasoningTokens),
+		tokenCount(usage.CacheReadTokens),
+		tokenCount(usage.CacheWriteTokens),
 	)
+}
+
+func tokenCount(count *int) string {
+	if count == nil {
+		return "unknown"
+	}
+	return fmt.Sprint(*count)
 }

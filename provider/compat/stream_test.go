@@ -50,7 +50,7 @@ func TestStreamCumulativeReasoningAndToolDeltas(t *testing.T) {
 	if len(calls) != 1 || calls[0].ID != "call_1" || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
 		t.Fatalf("tool calls = %+v", calls)
 	}
-	if resp.Usage.InputTokens != 1 || resp.Usage.OutputTokens != 2 || resp.FinishReason != litellm.FinishReasonToolCall {
+	if *resp.Usage.InputTokens != 1 || *resp.Usage.OutputTokens != 2 || resp.FinishReason != litellm.FinishReasonToolCall {
 		t.Fatalf("usage/finish = %+v/%q", resp.Usage, resp.FinishReason)
 	}
 }
@@ -109,7 +109,7 @@ func TestStreamConvertsRefusalAndCachedTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect returned error: %v", err)
 	}
-	if resp.Text() != "no" || resp.Usage.CacheReadTokens != 6 || resp.FinishReason != litellm.FinishReasonSafety {
+	if resp.Text() != "no" || *resp.Usage.CacheReadTokens != 6 || resp.FinishReason != litellm.FinishReasonSafety {
 		t.Fatalf("response = text %q usage %+v finish %q", resp.Text(), resp.Usage, resp.FinishReason)
 	}
 }

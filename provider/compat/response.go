@@ -68,7 +68,7 @@ func convertUsage(u usage, spec Spec, provider, model string) litellm.Usage {
 		out.CacheReadTokens = u.PromptTokensDetails.CachedTokens
 		out.CacheWriteTokens = u.PromptTokensDetails.CacheWriteTokens
 	}
-	if out.CacheReadTokens == 0 && spec.Response.HasCacheTokens {
+	if out.CacheReadTokens == nil && spec.Response.HasCacheTokens {
 		out.CacheReadTokens = u.PromptCacheHitTokens
 	}
 	return out

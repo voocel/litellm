@@ -63,8 +63,13 @@ func (w *streamIdleWatchdog) Next() (Event, error) {
 }
 
 func (w *streamIdleWatchdog) Close() error {
+	aborted := w.aborted.Load()
 	w.stop()
-	return w.inner.Close()
+	err := w.inner.Close()
+	if aborted {
+		return errors.Join(w.idleError(), err)
+	}
+	return err
 }
 
 func (w *streamIdleWatchdog) fire() {
@@ -103,7 +108,7 @@ func (w *streamIdleWatchdog) idleError() error {
 		Type:      ErrorTypeTimeout,
 		Provider:  w.provider,
 		Message:   fmt.Sprintf("stream idle timeout: no event received for %s", w.timeout),
-		Retryable: true,
+		Temporary: true,
 		Cause:     ErrStreamIdle,
 	}
 }

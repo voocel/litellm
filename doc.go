@@ -2,8 +2,7 @@
 Package litellm provides a small, explicit multi-provider LLM SDK core.
 
 The root package owns the provider-agnostic domain model: Request, Response,
-Message, Block, Stream, Event, structured errors, warnings, hooks, and pricing
-helpers. Concrete providers live in provider-specific subpackages.
+Message, Block, Stream, Event, structured errors, warnings, and observers. Pricing lives in its optional subpackage. Concrete providers live in provider-specific subpackages.
 
 # Quick Start
 
@@ -80,6 +79,8 @@ concurrently.
 
 The SDK is intentionally not a gateway, router, agent runtime, account system,
 or request scheduler. It binds one Client to one Provider and exposes explicit
-configuration and local validation.
+configuration and structural validation. Message-history validation and repair
+are explicit utilities; the Client never rewrites conversation history. Provider
+options are JSON data, and optional usage counters distinguish unknown from zero.
 */
 package litellm

@@ -41,22 +41,22 @@ type toolFunction struct {
 }
 
 type usage struct {
-	PromptTokens            int                      `json:"prompt_tokens"`
-	CompletionTokens        int                      `json:"completion_tokens"`
-	TotalTokens             int                      `json:"total_tokens"`
+	PromptTokens            *int                     `json:"prompt_tokens"`
+	CompletionTokens        *int                     `json:"completion_tokens"`
+	TotalTokens             *int                     `json:"total_tokens"`
 	PromptTokensDetails     *promptTokensDetails     `json:"prompt_tokens_details,omitempty"`
-	PromptCacheHitTokens    int                      `json:"prompt_cache_hit_tokens,omitempty"`
-	PromptCacheMissTokens   int                      `json:"prompt_cache_miss_tokens,omitempty"`
+	PromptCacheHitTokens    *int                     `json:"prompt_cache_hit_tokens,omitempty"`
+	PromptCacheMissTokens   *int                     `json:"prompt_cache_miss_tokens,omitempty"`
 	CompletionTokensDetails *completionTokensDetails `json:"completion_tokens_details,omitempty"`
 }
 
 type promptTokensDetails struct {
-	CachedTokens     int `json:"cached_tokens,omitempty"`
-	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	CachedTokens     *int `json:"cached_tokens,omitempty"`
+	CacheWriteTokens *int `json:"cache_write_tokens,omitempty"`
 }
 
 type completionTokensDetails struct {
-	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+	ReasoningTokens *int `json:"reasoning_tokens,omitempty"`
 }
 
 type streamChunk struct {

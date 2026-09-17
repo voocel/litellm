@@ -43,3 +43,27 @@ func TestStreamContentMatchesCompleteResponse(t *testing.T) {
 		t.Fatalf("stream=%#v\ncomplete=%#v\nstream blocks=%#v\ncomplete blocks=%#v", got, want, got.Blocks, want.Blocks)
 	}
 }
+
+func TestUsagePresenceAndStreamUpdates(t *testing.T) {
+	s := &stream{model: "m"}
+	for _, raw := range []string{`{"input_tokens":5,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":4}`, `{"output_tokens":0}`} {
+		var wire anthropicUsage
+		if err := json.Unmarshal([]byte(raw), &wire); err != nil {
+			t.Fatal(err)
+		}
+		s.mergeUsage(&wire)
+	}
+	if *s.usage.InputTokens != 12 || *s.usage.OutputTokens != 0 || *s.usage.TotalTokens != 12 {
+		t.Fatalf("usage = %+v", s.usage)
+	}
+	if s.usage.ReasoningTokens != nil {
+		t.Fatal("unknown reasoning became zero")
+	}
+	if convertStreamUsage(&anthropicUsage{}, "m").HasTokens() {
+		t.Fatal("omitted usage became known")
+	}
+	zero := convertStreamUsage(&anthropicUsage{InputTokens: litellm.IntPtr(0)}, "m")
+	if zero.InputTokens == nil || *zero.InputTokens != 0 || zero.OutputTokens != nil || zero.TotalTokens != nil {
+		t.Fatalf("zero usage = %+v", zero)
+	}
+}

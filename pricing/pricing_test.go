@@ -23,18 +23,18 @@ func TestRegistryCalculate(t *testing.T) {
 	}
 
 	cost, err := reg.Calculate("model-a", litellm.Usage{
-		InputTokens:      100,
-		OutputTokens:     20,
-		CacheReadTokens:  40,
-		CacheWriteTokens: 10,
+		InputTokens:      litellm.IntPtr(100),
+		OutputTokens:     litellm.IntPtr(20),
+		CacheReadTokens:  litellm.IntPtr(40),
+		CacheWriteTokens: litellm.IntPtr(10),
 	})
 	if err != nil {
 		t.Fatalf("Calculate: %v", err)
 	}
-	if !close(cost.Input, 0.06) || !close(cost.Output, 0.04) || !close(cost.CacheRead, 0.02) || !close(cost.CacheWrite, 0.015) {
+	if !close(cost.Input, 0.05) || !close(cost.Output, 0.04) || !close(cost.CacheRead, 0.02) || !close(cost.CacheWrite, 0.015) {
 		t.Fatalf("cost = %+v", cost)
 	}
-	if !close(cost.Total, 0.135) {
+	if !close(cost.Total, 0.125) {
 		t.Fatalf("total = %v", cost.Total)
 	}
 }
@@ -44,7 +44,7 @@ func close(a, b float64) bool {
 }
 
 func TestCalculateDoesNotLoadImplicitly(t *testing.T) {
-	_, err := Calculate("model-a", litellm.Usage{InputTokens: 1}, nil)
+	_, err := Calculate("model-a", litellm.Usage{InputTokens: litellm.IntPtr(1)}, nil)
 	if err == nil || !strings.Contains(err.Error(), "not in table") {
 		t.Fatalf("expected missing table error, got %v", err)
 	}
@@ -94,5 +94,27 @@ func TestRegistryLoadFromURL(t *testing.T) {
 	}
 	if _, ok := reg.Get("model-a"); !ok {
 		t.Fatalf("model-a pricing not loaded")
+	}
+}
+
+func TestCalculateUnknownAndInvalidUsage(t *testing.T) {
+	table := map[string]ModelPricing{"m": {InputCostPerToken: 1, OutputCostPerToken: 2, CacheReadCostPerToken: 0.5}}
+	for _, usage := range []litellm.Usage{
+		{},
+		{InputTokens: litellm.IntPtr(10), OutputTokens: litellm.IntPtr(1)},
+		{InputTokens: litellm.IntPtr(10), OutputTokens: litellm.IntPtr(1), CacheReadTokens: litellm.IntPtr(8), CacheWriteTokens: litellm.IntPtr(3)},
+		{InputTokens: litellm.IntPtr(-1), OutputTokens: litellm.IntPtr(1), CacheReadTokens: litellm.IntPtr(0)},
+	} {
+		if _, err := Calculate("m", usage, table); err == nil {
+			t.Fatalf("expected error for %+v", usage)
+		}
+	}
+	zero := litellm.Usage{InputTokens: litellm.IntPtr(0), OutputTokens: litellm.IntPtr(0), CacheReadTokens: litellm.IntPtr(0)}
+	if cost, err := Calculate("m", zero, table); err != nil || cost.Total != 0 {
+		t.Fatalf("known zero: %+v %v", cost, err)
+	}
+	table["m"] = ModelPricing{InputCostPerToken: 1, OutputCostPerToken: 2}
+	if cost, err := Calculate("m", litellm.Usage{InputTokens: litellm.IntPtr(10), OutputTokens: litellm.IntPtr(2)}, table); err != nil || cost.Total != 14 {
+		t.Fatalf("equal cache rates: %+v %v", cost, err)
 	}
 }

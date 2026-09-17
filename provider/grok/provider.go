@@ -47,7 +47,7 @@ func Factory(cfg Config) (litellm.Provider, error) {
 	return New(cfg)
 }
 
-func mapProviderOptions(options litellm.ProviderOptions, body map[string]any, req *litellm.Request) error {
+func mapProviderOptions(options map[string]any, body map[string]any, req *litellm.Request) error {
 	reasoningEnabled := req.Thinking != nil && req.Thinking.Mode == litellm.ThinkingEnabled
 	if reasoningEnabled && len(req.Stop) > 0 {
 		return fmt.Errorf("grok: stop is not supported for reasoning models")
@@ -101,4 +101,15 @@ func reasoningEffort(effort string) (string, error) {
 	default:
 		return "", fmt.Errorf("grok: unsupported reasoning_effort %q; use low, medium, high, or xhigh", effort)
 	}
+}
+
+// NewClient builds the provider from cfg and wraps it in a ready *litellm.Client.
+// It is a convenience for the common single-provider case. It calls New(cfg)
+// and then litellm.New(provider, opts...).
+func NewClient(cfg Config, opts ...litellm.ClientOption) (*litellm.Client, error) {
+	p, err := New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return litellm.New(p, opts...)
 }

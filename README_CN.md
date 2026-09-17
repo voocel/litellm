@@ -89,13 +89,20 @@ msgs = append(msgs,
 
 `JSONRaw` 会返回 marshal 错误，不会静默生成非法工具参数。`MustJSONRaw` 只建议用于测试数据或允许 panic 的静态示例。
 
-SDK 默认严格校验消息历史。脏的工具调用历史、非法 tool ID、缺失 tool result、不支持的 Provider 选项都会直接返回错误。如果需要导入历史数据，必须显式开启 repair：
+Client 只校验公共模型结构，Provider 负责各自协议约束。历史是否闭合由应用显式检查；导入历史的修复也是独立步骤，不再提供 `WithMessageRepair`：
 
 ```go
-client, err := openai.NewClient(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")}, litellm.WithMessageRepair(litellm.RepairAll))
+if err := litellm.ValidateHistory(msgs); err != nil {
+    log.Fatal(err)
+}
+
+// 仅在应用明确选择修复时调用；原始 msgs 不会被修改。
+repaired, warnings := litellm.RepairMessages(msgs, litellm.RepairAll)
+_ = repaired
+_ = warnings
 ```
 
-任何会改变可观察数据的修复或 Provider 规范化都会通过 `Response.Warnings`、`WarningEvent` 和 `Hook.OnWarning` 暴露。
+修复返回的 warnings 由应用自行处理。Provider 规范化的 warning 仍通过 `Response.Warnings`、`WarningEvent` 和 `CallObserver.OnEvent` 暴露。修复产生的工具结果只用于标记中断，不代表工具实际执行过。
 
 默认不会保存 Provider 原始响应体。调试时需要显式开启：
 
@@ -159,7 +166,7 @@ resp, err := litellm.Collect(stream)
 
 ## Retry
 
-默认不重试。需要时在具体 Provider 上显式开启：
+默认不重试。`LiteLLMError.Temporary` / `IsTemporaryError` 仅描述故障可能是暂时的，不承诺请求可安全重放。启用重试意味着应用接受重复请求及重复计费的可能；传输层只按配置重试指定 HTTP 状态，不重试网络错误或已开始的响应流。需要时在具体 Provider 上显式开启：
 
 ```go
 import "github.com/voocel/litellm/retry"
@@ -203,7 +210,7 @@ resp, err := client.Chat(ctx, litellm.Request{
 	Model:      "gpt-5.6",
 	Messages:   []litellm.Message{litellm.UserText("巴黎天气？")},
 	Tools:      []litellm.Tool{tool},
-	ToolChoice: "auto",
+	ToolChoice: &litellm.ToolChoice{Mode: litellm.ToolChoiceAuto},
 })
 ```
 
@@ -347,46 +354,67 @@ models, err := client.ListModels(ctx)
 
 ## Provider Options
 
-Provider 特定请求选项放在 `Request.ProviderOptions`。未知 key 默认报错。
+`Request.ProviderOptions` 是 `map[string]json.RawMessage`，只承载 JSON 数据。通过 `NewProviderOptions` 或 `Set` 在设置时编码，错误直接返回；Client 为执行和 Observer 分别复制 JSON 字节。Provider 在自己的边界解码并校验支持的 key，未知 key 默认报错。
 
 ```go
+options, err := litellm.NewProviderOptions(map[string]any{
+    openai.ProviderOptionPromptCacheOptions: openai.PromptCacheOptions{Mode: "implicit", TTL: "30m"},
+})
+if err != nil {
+    log.Fatal(err)
+}
 resp, err := client.Chat(ctx, litellm.Request{
-	Model:    "gpt-5.6",
-	Messages: []litellm.Message{litellm.UserText("Hello")},
-	ProviderOptions: litellm.ProviderOptions{
-		openai.ProviderOptionPromptCacheOptions: openai.PromptCacheOptions{Mode: "implicit", TTL: "30m"},
-	},
+    Model: "gpt-5.6",
+    Messages: []litellm.Message{litellm.UserText("Hello")},
+    ProviderOptions: options,
 })
 ```
 
-## Hooks 与 OTel
+`ToolChoice` 也不再接受字符串或协议对象：使用 `&litellm.ToolChoice{Mode: litellm.ToolChoiceAuto}`（也支持 `None` / `Required`），或 `&litellm.ToolChoice{Name: "lookup"}` 指定工具；`nil` 保留 Provider 默认行为。不要在调用期间并发修改传入请求。
 
-Hooks 只观察请求、响应、warning 和 stream event。Hook 收到的是副本；修改它们不会影响 Provider 调用、最终返回的 response，也不会影响调用方看到的 event。核心 hooks 不 recover panic。
+## Observer 与 OTel
 
-自定义请求选项结构体的导出字段会递归复制；未导出状态按值保留，其中的引用数据须视为只读。
+`Observer.Start` 为每次 Chat/Stream 调用创建独立的 `CallObserver`，包括本地校验失败的调用。Start 收到的是应用传入请求的隔离副本，时机在默认值和校验之前；返回的 context 会依次传给后续 Observer、Provider 和 HTTP 请求。Observer 工厂可并发执行，每次调用独立持有状态。
+
+`OnEvent` 接收已校验的流事件和 WarningEvent（也包含 Chat 的 warning）。`End` 恰好调用一次，并按注册顺序逆序结束；结果包含状态、完整调用耗时、错误以及最终/部分响应。状态分别为 `completed`、`failed`、`canceled`、`closed`。建流成功不代表调用结束；需要持续 Next 到终止或显式 Close，仅取消 context 不会在后台执行回调。
+
+请求、事件和结果均为隔离副本。回调同步执行，核心不 recover panic。应用消费回调的错误由消费函数返回，不改写模型执行结果；关闭尚未完成的流记录为 closed。完成后发生的资源清理错误由 Close 返回，不改写已完成结果。deadline 和 idle timeout 为 failed，主动 context cancellation 为 canceled。
 
 ```go
-client, err := litellm.New(provider, litellm.WithHook(litellm.HookFuncs{
-	OnStreamEventFunc: func(ctx context.Context, meta litellm.CallMeta, event litellm.Event) {
-		if delta, ok := event.(litellm.ContentDelta); ok {
-			fmt.Print(delta.Text)
-		}
-	},
-}))
+observer := litellm.ObserverFunc(func(ctx context.Context, info litellm.CallInfo) (context.Context, litellm.CallObserver) {
+    return ctx, litellm.CallObserverFuncs{
+        EndFunc: func(result litellm.CallResult) {
+            fmt.Printf("%s/%s: %s (%s), err=%v\n",
+                info.Provider, info.Model, result.Status, result.Duration, result.Err)
+        },
+    }
+})
+client, err := litellm.New(provider, litellm.WithObservers(observer))
 ```
 
-可选的 `github.com/voocel/litellm/otel` 模块会按照当前 GenAI 语义约定把 hooks 适配成
-OpenTelemetry span。该模块默认只记录 `gen_ai.provider.name`、模型、耗时和 token usage
-等元数据，不记录提示词或回答内容。内容可能包含用户数据、工具参数和工具结果；只有在明确
-接受相应隐私与存储风险时才应显式开启。开启后，消息会以符合官方 JSON Schema 的格式写入
-`gen_ai.input.messages` 和 `gen_ai.output.messages`；模块不会继续输出 `gen_ai.system`、
-`gen_ai.prompt`、`gen_ai.completion` 等已废弃字段：
+可选的 `github.com/voocel/litellm/otel` 模块为每次调用创建 span，并将其 context 传到传输层。它直接读取最终或部分响应，不再维护全局调用 map、锁或重复的流聚合器。默认只记录模型、用量等元数据；显式开启内容捕获后才记录可能包含用户数据和工具参数的消息：
 
 ```go
 import litellmotel "github.com/voocel/litellm/otel"
 
-hook := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
+observer := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
+client, err := litellm.New(provider, litellm.WithObservers(observer))
 ```
+
+迁移：删除 `Hook`、`HookFuncs`、`CallMeta` 与 `WithHook(s)`，改用 `ObserverFunc`、`CallObserverFuncs`、`CallInfo`/`CallResult` 和 `WithObservers`，不提供兼容层。开发期间 `otel/go.mod` 通过本地 replace 指向 `..`；发布时应先发布新核心 API，再更新 OTel 的核心依赖版本并移除本地 replace。
+
+
+## Usage
+
+所有 token 字段均为 `*int`：`nil` 表示未知，`litellm.IntPtr(0)` 表示已知零值。输入用量包含缓存读取和写入，输出用量包含 reasoning；明细是子集，不能再次加到总量上。Anthropic / Bedrock 的适配层会把独立缓存计数并入输入，Gemini 会把 thoughts 并入输出。未上报的明细仍保留 `nil`，OTel 不会把它们记作零。
+
+```go
+if resp.Usage.InputTokens != nil {
+    fmt.Println(*resp.Usage.InputTokens)
+}
+```
+
+Pricing 要求已知输入和输出计数；缓存采用不同费率时，对应缓存计数也必须已知，否则返回错误。缓存读写只计费一次；不一致的负数或超出输入总量的缓存计数会报错。未配置缓存费率时沿用普通输入费率。
 
 ## Pricing
 

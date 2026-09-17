@@ -2,6 +2,8 @@
 //
 // The default SDK behavior is no retry. Provider configs expose Retry for the
 // simple path; this package is also available for advanced transport composition.
+// Enabling retries authorizes repeated requests and possible duplicate charges.
+// A transient HTTP status does not establish that an operation was not processed.
 package retry
 
 import (
@@ -62,7 +64,9 @@ func NewHTTPClient(base *http.Client, policy *Policy) *http.Client {
 }
 
 // Transport retries complete 429/5xx/529 responses according to Policy.
-// It requires replayable request bodies for retries.
+// It requires replayable request bodies for retries. Replayable means the bytes
+// can be resent, not that the operation is idempotent. It never retries transport
+// failures or response-body errors (including interrupted successful streams).
 type Transport struct {
 	Base   http.RoundTripper
 	Policy Policy

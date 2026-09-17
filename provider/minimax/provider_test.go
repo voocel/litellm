@@ -152,9 +152,9 @@ func TestProviderOptions(t *testing.T) {
 	body := captureBody(t, &litellm.Request{
 		Model:    "MiniMax-M3",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			ProviderOptionServiceTier: "PRIORITY",
-		},
+		}),
 	})
 	if body["service_tier"] != "priority" {
 		t.Fatalf("service_tier = %#v", body["service_tier"])
@@ -169,17 +169,17 @@ func TestProviderOptionsValidation(t *testing.T) {
 	}{
 		{
 			name:    "unknown",
-			options: litellm.ProviderOptions{"unknown": true},
+			options: mustProviderOptions(t, map[string]any{"unknown": true}),
 			want:    `unsupported provider option "unknown"`,
 		},
 		{
 			name:    "service_tier_type",
-			options: litellm.ProviderOptions{ProviderOptionServiceTier: 1},
+			options: mustProviderOptions(t, map[string]any{ProviderOptionServiceTier: 1}),
 			want:    `provider option "service_tier" must be string`,
 		},
 		{
 			name:    "service_tier_value",
-			options: litellm.ProviderOptions{ProviderOptionServiceTier: "fast"},
+			options: mustProviderOptions(t, map[string]any{ProviderOptionServiceTier: "fast"}),
 			want:    `provider option "service_tier" must be standard or priority`,
 		},
 	}
@@ -261,12 +261,12 @@ func TestCapabilities(t *testing.T) {
 }
 
 func TestToolChoiceContract(t *testing.T) {
-	for _, choice := range []litellm.ToolChoice{"auto", "none"} {
+	for _, choice := range []*litellm.ToolChoice{{Mode: "auto"}, {Mode: "none"}} {
 		if err := validateToolChoice(choice); err != nil {
 			t.Fatalf("validateToolChoice(%q): %v", choice, err)
 		}
 	}
-	if err := validateToolChoice("required"); err == nil || !strings.Contains(err.Error(), `"auto" or "none"`) {
+	if err := validateToolChoice(&litellm.ToolChoice{Mode: "required"}); err == nil || !strings.Contains(err.Error(), `"auto" or "none"`) {
 		t.Fatalf("expected tool_choice error, got %v", err)
 	}
 }
@@ -291,4 +291,13 @@ func captureBody(t *testing.T, req *litellm.Request) map[string]any {
 		t.Fatalf("Chat: %v", err)
 	}
 	return body
+}
+
+func mustProviderOptions(t *testing.T, values map[string]any) litellm.ProviderOptions {
+	t.Helper()
+	o, err := litellm.NewProviderOptions(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
 }

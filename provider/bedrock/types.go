@@ -108,11 +108,11 @@ type jsonSchema struct {
 }
 
 type usage struct {
-	InputTokens           int `json:"inputTokens"`
-	OutputTokens          int `json:"outputTokens"`
-	TotalTokens           int `json:"totalTokens"`
-	CacheReadInputTokens  int `json:"cacheReadInputTokens,omitempty"`
-	CacheWriteInputTokens int `json:"cacheWriteInputTokens,omitempty"`
+	InputTokens           *int `json:"inputTokens"`
+	OutputTokens          *int `json:"outputTokens"`
+	TotalTokens           *int `json:"totalTokens"`
+	CacheReadInputTokens  *int `json:"cacheReadInputTokens,omitempty"`
+	CacheWriteInputTokens *int `json:"cacheWriteInputTokens,omitempty"`
 }
 
 type response struct {

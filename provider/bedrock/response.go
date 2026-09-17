@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/internal/tokenusage"
 )
 
 func convertResponse(resp *response, model string) (*litellm.Response, error) {
@@ -15,15 +16,7 @@ func convertResponse(resp *response, model string) (*litellm.Response, error) {
 		Model:        model,
 		Provider:     "bedrock",
 		FinishReason: litellm.NormalizeFinishReason(resp.StopReason),
-		Usage: litellm.Usage{
-			InputTokens:      resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens,
-			OutputTokens:     resp.Usage.OutputTokens,
-			TotalTokens:      resp.Usage.TotalTokens,
-			CacheReadTokens:  resp.Usage.CacheReadInputTokens,
-			CacheWriteTokens: resp.Usage.CacheWriteInputTokens,
-			Provider:         "bedrock",
-			Model:            model,
-		},
+		Usage:        convertUsage(resp.Usage, model),
 	}
 	for _, block := range resp.Output.Message.Content {
 		if block.Text != "" {
@@ -61,4 +54,14 @@ func convertReasoningBlock(block *reasoningContent) litellm.ReasoningBlock {
 		return litellm.ReasoningBlock{Redacted: append([]byte(nil), block.RedactedContent...)}
 	}
 	return litellm.ReasoningBlock{}
+}
+
+func convertUsage(u usage, model string) litellm.Usage {
+	input := tokenusage.AddDetails(u.InputTokens, u.CacheReadInputTokens, u.CacheWriteInputTokens)
+	return litellm.Usage{
+		InputTokens: input, OutputTokens: u.OutputTokens,
+		TotalTokens:     tokenusage.Sum(input, u.OutputTokens),
+		CacheReadTokens: u.CacheReadInputTokens, CacheWriteTokens: u.CacheWriteInputTokens,
+		Provider: "bedrock", Model: model,
+	}
 }

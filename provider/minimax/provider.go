@@ -107,7 +107,7 @@ func mapThinking(thinking *litellm.Thinking, model string) (map[string]any, erro
 	return body, nil
 }
 
-func mapProviderOptions(options litellm.ProviderOptions, body map[string]any, req *litellm.Request) error {
+func mapProviderOptions(options map[string]any, body map[string]any, req *litellm.Request) error {
 	if err := validateToolChoice(req.ToolChoice); err != nil {
 		return err
 	}
@@ -133,20 +133,14 @@ func mapProviderOptions(options litellm.ProviderOptions, body map[string]any, re
 	return nil
 }
 
-func validateToolChoice(choice litellm.ToolChoice) error {
+func validateToolChoice(choice *litellm.ToolChoice) error {
 	if choice == nil {
 		return nil
 	}
-	value, ok := choice.(string)
-	if !ok {
+	if choice.Name != "" || (choice.Mode != litellm.ToolChoiceAuto && choice.Mode != litellm.ToolChoiceNone) {
 		return fmt.Errorf(`minimax: tool_choice only supports "auto" or "none"`)
 	}
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "auto", "none":
-		return nil
-	default:
-		return fmt.Errorf(`minimax: tool_choice only supports "auto" or "none"`)
-	}
+	return nil
 }
 
 func effectiveThinkingEnabled(req *litellm.Request) bool {
@@ -162,4 +156,15 @@ func isM2(model string) bool {
 
 func isM3(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "minimax-m3")
+}
+
+// NewClient builds the provider from cfg and wraps it in a ready *litellm.Client.
+// It is a convenience for the common single-provider case. It calls New(cfg)
+// and then litellm.New(provider, opts...).
+func NewClient(cfg Config, opts ...litellm.ClientOption) (*litellm.Client, error) {
+	p, err := New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return litellm.New(p, opts...)
 }

@@ -120,3 +120,32 @@ func response(status int, body string) *http.Response {
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}
 }
+
+func TestTransportDoesNotReplayInterruptedSuccessfulResponse(t *testing.T) {
+	boom := errors.New("stream interrupted")
+	attempts := 0
+	transport := NewTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		attempts++
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: &failingBody{err: boom}}, nil
+	}), &Policy{MaxAttempts: 3, InitialDelay: time.Nanosecond})
+	req, err := http.NewRequest(http.MethodPost, "https://example.test", strings.NewReader("request"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if _, err := io.ReadAll(resp.Body); !errors.Is(err, boom) {
+		t.Fatalf("read error = %v", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+}
+
+type failingBody struct{ err error }
+
+func (b *failingBody) Read([]byte) (int, error) { return 0, b.err }
+func (b *failingBody) Close() error             { return nil }

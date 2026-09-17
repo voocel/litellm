@@ -352,7 +352,7 @@ func TestBuildRequestAllowsForcedToolChoiceWithAdaptiveThinking(t *testing.T) {
 		MaxTokens:  &maxTokens,
 		Messages:   []litellm.Message{litellm.UserText("hi")},
 		Thinking:   &litellm.Thinking{Mode: litellm.ThinkingEnabled},
-		ToolChoice: map[string]any{"type": "tool", "name": "lookup"},
+		ToolChoice: &litellm.ToolChoice{Name: "lookup"},
 	}, false)
 	if err != nil {
 		t.Fatalf("buildRequest returned error: %v", err)
@@ -366,14 +366,13 @@ func TestBuildRequestAllowsForcedToolChoiceWithAdaptiveThinking(t *testing.T) {
 func TestConvertToolChoice(t *testing.T) {
 	for _, test := range []struct {
 		name   string
-		choice litellm.ToolChoice
+		choice *litellm.ToolChoice
 		want   string
 	}{
-		{name: "auto", choice: "auto", want: `{"type":"auto"}`},
-		{name: "required", choice: "required", want: `{"type":"any"}`},
-		{name: "none", choice: "none", want: `{"type":"none"}`},
-		{name: "named function", choice: map[string]any{"type": "function", "function": map[string]any{"name": "lookup"}}, want: `{"name":"lookup","type":"tool"}`},
-		{name: "named tool without parallel use", choice: map[string]any{"type": "tool", "name": "lookup", "disable_parallel_tool_use": true}, want: `{"disable_parallel_tool_use":true,"name":"lookup","type":"tool"}`},
+		{name: "auto", choice: &litellm.ToolChoice{Mode: "auto"}, want: `{"type":"auto"}`},
+		{name: "required", choice: &litellm.ToolChoice{Mode: "required"}, want: `{"type":"any"}`},
+		{name: "none", choice: &litellm.ToolChoice{Mode: "none"}, want: `{"type":"none"}`},
+		{name: "named function", choice: &litellm.ToolChoice{Name: "lookup"}, want: `{"name":"lookup","type":"tool"}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := convertToolChoice(test.choice)
@@ -390,11 +389,8 @@ func TestConvertToolChoice(t *testing.T) {
 		})
 	}
 
-	if _, err := convertToolChoice("invalid"); err == nil || !strings.Contains(err.Error(), "unsupported tool_choice") {
+	if _, err := convertToolChoice(&litellm.ToolChoice{Mode: "invalid"}); err == nil || !strings.Contains(err.Error(), "unsupported tool choice") {
 		t.Fatalf("expected invalid tool_choice error, got %v", err)
-	}
-	if _, err := convertToolChoice(map[string]any{"type": "auto", "disable_parallel_tool_use": "yes"}); err == nil || !strings.Contains(err.Error(), "must be boolean") {
-		t.Fatalf("expected invalid disable_parallel_tool_use error, got %v", err)
 	}
 }
 
@@ -477,9 +473,9 @@ func TestBuildRequestProviderOptions(t *testing.T) {
 		Model:     "claude",
 		MaxTokens: &maxTokens,
 		Messages:  []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			"metadata_user_id": "user-123",
-		},
+		}),
 	}, false)
 	if err != nil {
 		t.Fatalf("buildRequest: %v", err)
@@ -492,7 +488,7 @@ func TestBuildRequestProviderOptions(t *testing.T) {
 		Model:           "claude",
 		MaxTokens:       &maxTokens,
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{"unknown": true},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"unknown": true}),
 	}, false)
 	if err == nil || !strings.Contains(err.Error(), "unsupported provider option") {
 		t.Fatalf("expected unsupported option error, got %v", err)
@@ -543,7 +539,7 @@ func TestStreamConvertsSSEToTypedEvents(t *testing.T) {
 	if len(calls) != 1 || calls[0].ID != "toolu_1" || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
 		t.Fatalf("tool calls = %+v", calls)
 	}
-	if resp.Usage.InputTokens != 7 || resp.Usage.OutputTokens != 7 || resp.Usage.CacheReadTokens != 2 {
+	if *resp.Usage.InputTokens != 7 || *resp.Usage.OutputTokens != 7 || *resp.Usage.CacheReadTokens != 2 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
 	if resp.FinishReason != litellm.FinishReasonToolCall {
@@ -614,16 +610,16 @@ func TestConvertResponseMapsUsage(t *testing.T) {
 	resp, err := convertResponse(&anthropicResponse{
 		Model: "claude",
 		Usage: anthropicUsage{
-			InputTokens:          5,
-			OutputTokens:         9,
-			CacheReadInputTokens: 2,
+			InputTokens:          litellm.IntPtr(5),
+			OutputTokens:         litellm.IntPtr(9),
+			CacheReadInputTokens: litellm.IntPtr(2),
 		},
 		Content: []anthropicContent{{Type: "text", Text: "ok"}},
 	}, "fallback")
 	if err != nil {
 		t.Fatalf("convertResponse returned error: %v", err)
 	}
-	if resp.Usage.InputTokens != 7 || resp.Usage.OutputTokens != 9 || resp.Usage.TotalTokens != 16 || resp.Usage.CacheReadTokens != 2 {
+	if *resp.Usage.InputTokens != 7 || *resp.Usage.OutputTokens != 9 || *resp.Usage.TotalTokens != 16 || *resp.Usage.CacheReadTokens != 2 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
 }
@@ -746,7 +742,7 @@ func TestStreamMergesUsageFromMessageDelta(t *testing.T) {
 	if resp.Text() != "ok" {
 		t.Fatalf("text = %q", resp.Text())
 	}
-	if resp.Usage.OutputTokens != 9 || resp.Usage.TotalTokens != 14 {
+	if *resp.Usage.OutputTokens != 9 || *resp.Usage.TotalTokens != 14 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
 }
@@ -1108,4 +1104,13 @@ func mustTool(t *testing.T, name, description string, schema any) litellm.Tool {
 		t.Fatalf("NewTool: %v", err)
 	}
 	return tool
+}
+
+func mustProviderOptions(t *testing.T, values map[string]any) litellm.ProviderOptions {
+	t.Helper()
+	o, err := litellm.NewProviderOptions(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
 }

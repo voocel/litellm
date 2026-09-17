@@ -166,12 +166,9 @@ func Calculate(model string, usage litellm.Usage, table map[string]ModelPricing)
 	if err := validatePricing(price); err != nil {
 		return Cost{}, err
 	}
-	nonCachedInput := usage.InputTokens - usage.CacheReadTokens
-	if nonCachedInput < 0 {
-		nonCachedInput = usage.InputTokens
+	if usage.InputTokens == nil || usage.OutputTokens == nil {
+		return Cost{}, fmt.Errorf("pricing: input and output token counts must be known")
 	}
-	inputCost := float64(nonCachedInput) * price.InputCostPerToken
-	outputCost := float64(usage.OutputTokens) * price.OutputCostPerToken
 	cacheReadRate := price.CacheReadCostPerToken
 	if cacheReadRate == 0 {
 		cacheReadRate = price.InputCostPerToken
@@ -180,8 +177,28 @@ func Calculate(model string, usage litellm.Usage, table map[string]ModelPricing)
 	if cacheWriteRate == 0 {
 		cacheWriteRate = price.InputCostPerToken
 	}
-	cacheReadCost := float64(usage.CacheReadTokens) * cacheReadRate
-	cacheWriteCost := float64(usage.CacheWriteTokens) * cacheWriteRate
+	cacheRead, cacheWrite := 0, 0
+	if usage.CacheReadTokens != nil {
+		cacheRead = *usage.CacheReadTokens
+	} else if cacheReadRate != price.InputCostPerToken {
+		return Cost{}, fmt.Errorf("pricing: cache read token count is unknown for a distinct cache rate")
+	}
+	if usage.CacheWriteTokens != nil {
+		cacheWrite = *usage.CacheWriteTokens
+	} else if cacheWriteRate != price.InputCostPerToken {
+		return Cost{}, fmt.Errorf("pricing: cache write token count is unknown for a distinct cache rate")
+	}
+	if *usage.InputTokens < 0 || *usage.OutputTokens < 0 || cacheRead < 0 || cacheWrite < 0 ||
+		cacheRead > *usage.InputTokens || cacheWrite > *usage.InputTokens-cacheRead {
+		return Cost{}, fmt.Errorf("pricing: invalid token counts: cache reads and writes must fit within input tokens")
+	}
+	// Unknown cache details stay in Input when all applicable rates are equal.
+	nonCachedInput := *usage.InputTokens - cacheRead - cacheWrite
+	inputCost := float64(nonCachedInput) * price.InputCostPerToken
+	outputCost := float64(*usage.OutputTokens) * price.OutputCostPerToken
+	cacheReadCost := float64(cacheRead) * cacheReadRate
+	cacheWriteCost := float64(cacheWrite) * cacheWriteRate
+
 	return Cost{
 		Input:      inputCost,
 		Output:     outputCost,

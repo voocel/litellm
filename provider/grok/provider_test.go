@@ -147,7 +147,7 @@ func TestRejectsUnsupportedReasoningProviderOptions(t *testing.T) {
 		Model:           "grok-4.3",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
 		Thinking:        &litellm.Thinking{Mode: litellm.ThinkingEnabled},
-		ProviderOptions: litellm.ProviderOptions{"presence_penalty": 0.2},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"presence_penalty": 0.2}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "presence_penalty") {
 		t.Fatalf("expected provider option error, got %v", err)
@@ -204,4 +204,13 @@ func captureBody(t *testing.T, req *litellm.Request) map[string]any {
 		t.Fatalf("Chat: %v", err)
 	}
 	return body
+}
+
+func mustProviderOptions(t *testing.T, values map[string]any) litellm.ProviderOptions {
+	t.Helper()
+	o, err := litellm.NewProviderOptions(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
 }

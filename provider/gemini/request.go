@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -19,6 +20,9 @@ const (
 )
 
 func (p *Provider) buildRequest(req *litellm.Request) (*request, error) {
+	if err := validateSampling(req.Temperature, req.TopP); err != nil {
+		return nil, err
+	}
 	out := &request{}
 	contents, system, err := convertMessages(req.Model, req.Messages)
 	if err != nil {
@@ -50,7 +54,12 @@ func (p *Provider) buildRequest(req *litellm.Request) (*request, error) {
 	return out, nil
 }
 
-func applyProviderOptions(out *request, options litellm.ProviderOptions) error {
+func applyProviderOptions(out *request, rawOptions litellm.ProviderOptions) error {
+	options, err := rawOptions.Decode()
+	if err != nil {
+		return err
+	}
+
 	for key, value := range options {
 		switch key {
 		case ProviderOptionSafetySettings:
@@ -372,42 +381,22 @@ func convertTools(tools []litellm.Tool) ([]tool, bool, error) {
 	return []tool{out}, strict, nil
 }
 
-func convertToolChoice(choice any, strict bool) (*toolConfig, error) {
+func convertToolChoice(choice *litellm.ToolChoice, strict bool) (*toolConfig, error) {
+	if err := choice.Validate(); err != nil {
+		return nil, err
+	}
 	var mode string
 	var allowed []string
-	switch v := choice.(type) {
-	case nil:
-	case string:
-		mode = strings.ToUpper(strings.TrimSpace(v))
-		if mode == "REQUIRED" {
+	if choice != nil {
+		if choice.Name != "" {
 			mode = "ANY"
-		}
-		if mode != "AUTO" && mode != "ANY" && mode != "NONE" && mode != "VALIDATED" {
-			return nil, fmt.Errorf("gemini: unsupported tool choice %q", v)
-		}
-	case map[string]any:
-		rawType, _ := v["type"].(string)
-		switch strings.ToLower(strings.TrimSpace(rawType)) {
-		case "auto":
-			mode = "AUTO"
-		case "any", "required":
-			mode = "ANY"
-		case "none":
-			mode = "NONE"
-		case "validated":
-			mode = "VALIDATED"
-		case "function", "tool":
-			name, _ := v["name"].(string)
-			if name == "" {
-				return nil, fmt.Errorf("gemini: tool choice %q requires name", rawType)
+			allowed = []string{choice.Name}
+		} else {
+			mode = strings.ToUpper(string(choice.Mode))
+			if choice.Mode == litellm.ToolChoiceRequired {
+				mode = "ANY"
 			}
-			mode = "ANY"
-			allowed = []string{name}
-		default:
-			return nil, fmt.Errorf("gemini: unsupported tool choice type %q", rawType)
 		}
-	default:
-		return nil, fmt.Errorf("gemini: unsupported tool choice %T", choice)
 	}
 	if strict && (mode == "" || mode == "AUTO") {
 		mode = "VALIDATED"
@@ -498,4 +487,14 @@ func inferMimeType(url string) string {
 	default:
 		return ""
 	}
+}
+
+func validateSampling(temperature, topP *float64) error {
+	if temperature != nil && (math.IsNaN(*temperature) || *temperature < 0 || *temperature > 2) {
+		return fmt.Errorf("gemini: temperature must be between 0 and 2")
+	}
+	if topP != nil && (math.IsNaN(*topP) || *topP < 0 || *topP > 1) {
+		return fmt.Errorf("gemini: top_p must be between 0 and 1")
+	}
+	return nil
 }

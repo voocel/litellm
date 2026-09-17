@@ -1,6 +1,7 @@
 package litellm
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"unicode/utf8"
@@ -155,7 +156,41 @@ func NewTool(name, description string, parameters any) (Tool, error) {
 	return Tool{Name: name, Description: description, Parameters: schema}, nil
 }
 
-type ToolChoice any
+// ToolChoice selects a policy, or a named tool when Name is set. A nil choice
+// leaves selection to the provider. Mode and Name are mutually exclusive.
+type ToolChoice struct {
+	Mode ToolChoiceMode
+	Name string
+}
+
+type ToolChoiceMode string
+
+const (
+	ToolChoiceAuto     ToolChoiceMode = "auto"
+	ToolChoiceNone     ToolChoiceMode = "none"
+	ToolChoiceRequired ToolChoiceMode = "required"
+)
+
+func (c *ToolChoice) Validate() error {
+	if c == nil {
+		return nil
+	}
+	if c.Name != "" {
+		if c.Mode != "" {
+			return NewError(ErrorTypeValidation, "tool choice mode and name are mutually exclusive")
+		}
+		if !utf8.ValidString(c.Name) {
+			return NewError(ErrorTypeValidation, "tool choice name must be valid UTF-8")
+		}
+		return nil
+	}
+	switch c.Mode {
+	case ToolChoiceAuto, ToolChoiceNone, ToolChoiceRequired:
+		return nil
+	default:
+		return NewError(ErrorTypeValidation, fmt.Sprintf("unsupported tool choice mode %q", c.Mode))
+	}
+}
 
 type ResponseFormat struct {
 	Type       ResponseFormatType
@@ -223,9 +258,9 @@ const (
 	CachePlacementPrefix CachePlacement = "prefix"
 )
 
-// ProviderOptions holds provider-specific request values. Exported struct fields
-// are copied recursively; unexported state must be treated as immutable.
-type ProviderOptions map[string]any
+// ProviderOptions contains JSON values owned by the request. Use NewProviderOptions
+// or Set to encode Go values; the client copies each value before observation or execution.
+type ProviderOptions map[string]json.RawMessage
 
 type Request struct {
 	Model    string
@@ -237,7 +272,7 @@ type Request struct {
 	Stop        []string
 
 	Tools      []Tool
-	ToolChoice ToolChoice
+	ToolChoice *ToolChoice
 
 	ResponseFormat *ResponseFormat
 	Thinking       *Thinking
@@ -259,4 +294,68 @@ func cloneBytes(b []byte) []byte {
 	out := make([]byte, len(b))
 	copy(out, b)
 	return out
+}
+
+// NewProviderOptions serializes values immediately, so subsequent mutations of
+// the supplied Go objects cannot change the request. Encoding errors are returned.
+func NewProviderOptions(values map[string]any) (ProviderOptions, error) {
+	options := make(ProviderOptions, len(values))
+	for key, value := range values {
+		if err := options.Set(key, value); err != nil {
+			return nil, err
+		}
+	}
+	return options, nil
+}
+
+// Set encodes a value into an initialized options map.
+func (o ProviderOptions) Set(key string, value any) error {
+	if o == nil {
+		return NewError(ErrorTypeValidation, "provider options map is nil")
+	}
+	if !utf8.ValidString(key) {
+		return NewError(ErrorTypeValidation, "provider option key must be valid UTF-8")
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return NewError(ErrorTypeValidation, fmt.Sprintf("provider option %q: %v", key, err))
+	}
+	o[key] = data
+	return nil
+}
+
+// Validate checks raw JSON at the request boundary, including values inserted
+// directly rather than through Set.
+func (o ProviderOptions) Validate() error {
+	for key, value := range o {
+		if !utf8.ValidString(key) {
+			return NewError(ErrorTypeValidation, "provider option key must be valid UTF-8")
+		}
+		if !utf8.Valid(value) || !json.Valid(value) {
+			return NewError(ErrorTypeValidation, fmt.Sprintf("provider option %q must be valid UTF-8 JSON", key))
+		}
+	}
+	return nil
+}
+
+// Decode gives a provider an independent JSON tree. Numbers remain json.Number
+// to preserve integer precision until the provider validates its wire type.
+func (o ProviderOptions) Decode() (map[string]any, error) {
+	if err := o.Validate(); err != nil {
+		return nil, err
+	}
+	if o == nil {
+		return nil, nil
+	}
+	values := make(map[string]any, len(o))
+	for key, raw := range o {
+		var value any
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&value); err != nil {
+			return nil, NewError(ErrorTypeValidation, fmt.Sprintf("provider option %q: %v", key, err))
+		}
+		values[key] = value
+	}
+	return values, nil
 }

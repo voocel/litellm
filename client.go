@@ -3,15 +3,13 @@ package litellm
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"time"
 )
 
 type Client struct {
 	provider           Provider
-	hooks              []Hook
+	observers          []Observer
 	defaults           *RequestDefaults
-	repair             MessageRepairPolicy
 	captureRawResponse bool
 	streamIdleTimeout  time.Duration
 }
@@ -39,18 +37,7 @@ func New(provider Provider, opts ...ClientOption) (*Client, error) {
 
 func WithDefaults(defaults RequestDefaults) ClientOption {
 	return func(c *Client) error {
-		c.defaults = &defaults
-		return nil
-	}
-}
-
-func WithMessageRepair(policies ...MessageRepairPolicy) ClientOption {
-	return func(c *Client) error {
-		var policy MessageRepairPolicy
-		for _, p := range policies {
-			policy |= p
-		}
-		c.repair = policy
+		c.defaults = &RequestDefaults{MaxTokens: cloneIntPtr(defaults.MaxTokens), Temperature: cloneFloat64Ptr(defaults.Temperature), TopP: cloneFloat64Ptr(defaults.TopP)}
 		return nil
 	}
 }
@@ -87,14 +74,12 @@ func (c *Client) Capabilities(model string) Capabilities {
 }
 
 func (c *Client) Chat(ctx context.Context, req Request) (*Response, error) {
-	prepared, warnings, err := c.prepareRequest(req)
+	ctx, call := c.startCall(ctx, req, false)
+	prepared, err := c.prepareRequest(req)
 	if err != nil {
+		call.end(callStatus(err), nil, err)
 		return nil, err
 	}
-	stampWarnings(warnings, c.ProviderName())
-	meta := c.newCallMeta("chat", prepared.Model, false)
-	c.notifyBeforeRequest(ctx, meta, prepared)
-	start := meta.StartedAt
 	resp, err := c.provider.Chat(ctx, prepared)
 	if err != nil {
 		err = WrapError(err, c.provider.Name())
@@ -103,46 +88,38 @@ func (c *Client) Chat(ctx context.Context, req Request) (*Response, error) {
 		err = validateResponse(resp, c.provider.Name(), prepared.Model)
 	}
 	if resp != nil {
-		resp.Warnings = append(warnings, resp.Warnings...)
 		finalizeResponse(resp, c.provider.Name(), prepared.Model)
+		for _, warning := range resp.Warnings {
+			call.event(WarningEvent{Warning: warning})
+		}
 	}
-	meta.Duration = time.Since(start)
-	c.notifyAfterResponse(ctx, meta, resp, err)
+	call.end(callStatus(err), resp, err)
 	return resp, err
 }
 
 func (c *Client) Stream(ctx context.Context, req Request) (Stream, error) {
-	prepared, warnings, err := c.prepareRequest(req)
+	streamCtx, cancel := context.WithCancel(ctx)
+	streamCtx, call := c.startCall(streamCtx, req, true)
+	prepared, err := c.prepareRequest(req)
 	if err != nil {
+		call.end(callStatus(err), nil, err)
+		cancel()
 		return nil, err
 	}
-	streamCtx := ctx
-	var cancel context.CancelFunc
-	if c.streamIdleTimeout > 0 {
-		streamCtx, cancel = context.WithCancel(ctx)
-	}
-	stampWarnings(warnings, c.ProviderName())
-	meta := c.newCallMeta("stream", prepared.Model, true)
-	c.notifyBeforeRequest(streamCtx, meta, prepared)
-	start := meta.StartedAt
 	stream, err := c.provider.Stream(streamCtx, prepared)
 	if err != nil {
 		err = WrapError(err, c.provider.Name())
 	} else if stream == nil {
 		err = NewProviderError(c.provider.Name(), ErrorTypeInternal, "provider returned nil stream without error")
 	}
-	meta.Duration = time.Since(start)
-	c.notifyAfterResponse(streamCtx, meta, nil, err)
 	if err != nil {
-		if cancel != nil {
-			cancel()
-		}
+		call.end(callStatus(err), nil, err)
+		cancel()
 		return nil, err
 	}
-	stream = prependWarningEvents(stream, warnings)
 	stream = newValidatedStream(c.provider.Name(), prepared.Model, stream)
 	stream = newStreamIdleWatchdog(stream, cancel, c.streamIdleTimeout, c.provider.Name())
-	return newHookedStream(streamCtx, meta, c.hooks, stream), nil
+	return &observedStream{ctx: streamCtx, cancel: cancel, call: call, inner: stream}, nil
 }
 
 // StreamText opens a stream for req and invokes fn for each text content delta,
@@ -194,34 +171,17 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	return models, nil
 }
 
-func (c *Client) prepareRequest(req Request) (*Request, []Warning, error) {
+func (c *Client) prepareRequest(req Request) (*Request, error) {
 	prepared := cloneRequest(req)
 	if c.defaults != nil {
 		applyDefaults(prepared, *c.defaults)
 	}
 	prepared.captureRawResponse = c.captureRawResponse
-	warnings, err := repairRequest(prepared, c.repair)
-	if err != nil {
-		return nil, nil, err
-	}
 	if err := validateRequest(prepared); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return prepared, warnings, nil
+	return prepared, nil
 }
-
-func (c *Client) newCallMeta(operation, model string, streaming bool) CallMeta {
-	return CallMeta{
-		CallID:    fmt.Sprintf("call_%d", callIDSeq.Add(1)),
-		Provider:  c.ProviderName(),
-		Operation: operation,
-		Model:     model,
-		Streaming: streaming,
-		StartedAt: time.Now(),
-	}
-}
-
-var callIDSeq atomic.Uint64
 
 func applyDefaults(req *Request, defaults RequestDefaults) {
 	if req.MaxTokens == nil && defaults.MaxTokens != nil {

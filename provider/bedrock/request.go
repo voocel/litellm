@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/voocel/litellm"
@@ -12,6 +13,9 @@ import (
 const ProviderOptionCacheRetention = "cache_retention"
 
 func (p *Provider) buildRequest(req *litellm.Request) (*request, error) {
+	if err := validateSampling(req.Temperature, req.TopP); err != nil {
+		return nil, err
+	}
 	if len(req.ProviderOptions) > 0 {
 		if err := validateProviderOptions(req.ProviderOptions); err != nil {
 			return nil, err
@@ -54,66 +58,32 @@ func (p *Provider) buildRequest(req *litellm.Request) (*request, error) {
 	return out, nil
 }
 
-func convertToolChoice(choice litellm.ToolChoice) (any, bool, error) {
+func convertToolChoice(choice *litellm.ToolChoice) (any, bool, error) {
+	if err := choice.Validate(); err != nil {
+		return nil, false, err
+	}
 	if choice == nil {
 		return nil, false, nil
 	}
-	if value, ok := choice.(string); ok {
-		switch strings.ToLower(strings.TrimSpace(value)) {
-		case "auto":
-			return map[string]any{"auto": map[string]any{}}, false, nil
-		case "required", "any":
-			return map[string]any{"any": map[string]any{}}, false, nil
-		case "none":
-			return nil, true, nil
-		default:
-			return nil, false, fmt.Errorf("bedrock: unsupported tool_choice %q", value)
-		}
+	if choice.Name != "" {
+		return map[string]any{"tool": map[string]any{"name": choice.Name}}, false, nil
 	}
-	data, err := json.Marshal(choice)
-	if err != nil {
-		return nil, false, fmt.Errorf("bedrock: tool_choice must be an object: %w", err)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal(data, &decoded); err != nil || decoded == nil {
-		return nil, false, fmt.Errorf("bedrock: tool_choice must be an object")
-	}
-	if _, ok := decoded["auto"]; ok {
-		return map[string]any{"auto": map[string]any{}}, false, nil
-	}
-	if _, ok := decoded["any"]; ok {
-		return map[string]any{"any": map[string]any{}}, false, nil
-	}
-	if selected, ok := decoded["tool"].(map[string]any); ok {
-		name, _ := selected["name"].(string)
-		if strings.TrimSpace(name) == "" {
-			return nil, false, fmt.Errorf("bedrock: named tool_choice requires a tool name")
-		}
-		return map[string]any{"tool": map[string]any{"name": name}}, false, nil
-	}
-	typ, _ := decoded["type"].(string)
-	switch strings.ToLower(strings.TrimSpace(typ)) {
-	case "auto":
-		return map[string]any{"auto": map[string]any{}}, false, nil
-	case "required", "any":
-		return map[string]any{"any": map[string]any{}}, false, nil
-	case "none":
+	switch choice.Mode {
+	case litellm.ToolChoiceNone:
 		return nil, true, nil
-	case "tool", "function":
-		name, _ := decoded["name"].(string)
-		if function, ok := decoded["function"].(map[string]any); ok && name == "" {
-			name, _ = function["name"].(string)
-		}
-		if strings.TrimSpace(name) == "" {
-			return nil, false, fmt.Errorf("bedrock: named tool_choice requires a tool name")
-		}
-		return map[string]any{"tool": map[string]any{"name": name}}, false, nil
+	case litellm.ToolChoiceRequired:
+		return map[string]any{"any": map[string]any{}}, false, nil
 	default:
-		return nil, false, fmt.Errorf("bedrock: unsupported tool_choice type %q", typ)
+		return map[string]any{"auto": map[string]any{}}, false, nil
 	}
 }
 
-func validateProviderOptions(options litellm.ProviderOptions) error {
+func validateProviderOptions(rawOptions litellm.ProviderOptions) error {
+	options, err := rawOptions.Decode()
+	if err != nil {
+		return err
+	}
+
 	for key, value := range options {
 		switch key {
 		case ProviderOptionCacheRetention:
@@ -421,8 +391,14 @@ func cachePointFromRequest(req *litellm.Request) (*cachePoint, error) {
 		}
 		retention = req.Cache.Retention
 	}
-	if raw, ok := req.ProviderOptions[ProviderOptionCacheRetention].(string); ok && raw != "" {
-		retention = raw
+	if raw, ok := req.ProviderOptions[ProviderOptionCacheRetention]; ok {
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return nil, fmt.Errorf("bedrock: cache_retention must be string: %w", err)
+		}
+		if value != "" {
+			retention = value
+		}
 	}
 	switch strings.ToLower(strings.TrimSpace(retention)) {
 	case "", "none":
@@ -465,4 +441,14 @@ func parseDataURL(url string) (mimeType, data string, ok bool) {
 		return mimeType, data, true
 	}
 	return "", "", false
+}
+
+func validateSampling(temperature, topP *float64) error {
+	if temperature != nil && (math.IsNaN(*temperature) || *temperature < 0 || *temperature > 1) {
+		return fmt.Errorf("bedrock: temperature must be between 0 and 1")
+	}
+	if topP != nil && (math.IsNaN(*topP) || *topP < 0 || *topP > 1) {
+		return fmt.Errorf("bedrock: top_p must be between 0 and 1")
+	}
+	return nil
 }

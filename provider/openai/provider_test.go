@@ -56,11 +56,11 @@ func TestBuildRequestTextImageToolsAndOptions(t *testing.T) {
 			litellm.ToolResultText("call_1", "result"),
 		},
 		Tools: []litellm.Tool{tool},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			"frequency_penalty": 0.4,
 			"metadata":          map[string]any{"tenant": "acme"},
 			"modalities":        []any{"text"},
-		},
+		}),
 	}, false)
 	if err != nil {
 		t.Fatalf("buildRequest returned error: %v", err)
@@ -108,7 +108,7 @@ func TestBuildRequestOpenAIProviderOptions(t *testing.T) {
 	wire, err := provider.buildRequest(&litellm.Request{
 		Model:    "gpt-4o-audio-preview",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			ProviderOptionAudio: map[string]any{
 				"format": "mp3",
 				"voice":  "alloy",
@@ -121,7 +121,7 @@ func TestBuildRequestOpenAIProviderOptions(t *testing.T) {
 			ProviderOptionWebSearchOptions: map[string]any{
 				"search_context_size": "low",
 			},
-		},
+		}),
 	}, false)
 	if err != nil {
 		t.Fatalf("buildRequest returned error: %v", err)
@@ -151,7 +151,7 @@ func TestBuildRequestRequiresSingleOutput(t *testing.T) {
 	req := &litellm.Request{
 		Model:           "gpt-4.1",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{ProviderOptionN: 1},
+		ProviderOptions: mustProviderOptions(t, map[string]any{ProviderOptionN: 1}),
 	}
 	wire, err := provider.buildRequest(req, false)
 	if err != nil {
@@ -161,7 +161,7 @@ func TestBuildRequestRequiresSingleOutput(t *testing.T) {
 		t.Fatalf("n = %v, want 1", wire.N)
 	}
 
-	req.ProviderOptions[ProviderOptionN] = 2
+	req.ProviderOptions[ProviderOptionN] = json.RawMessage(`2`)
 	_, err = provider.buildRequest(req, false)
 	if err == nil || !strings.Contains(err.Error(), `provider option "n" must be 1`) {
 		t.Fatalf("expected single-output error, got %v", err)
@@ -205,7 +205,7 @@ func TestBuildRequestRejectsUnknownProviderOption(t *testing.T) {
 	_, err := provider.buildRequest(&litellm.Request{
 		Model:           "gpt-4.1",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{"unknown": true},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"unknown": true}),
 	}, false)
 	if err == nil || !strings.Contains(err.Error(), "unsupported provider option") {
 		t.Fatalf("expected provider option error, got %v", err)
@@ -217,9 +217,9 @@ func TestBuildRequestRejectsInvalidPromptCacheRetention(t *testing.T) {
 	_, err := provider.buildRequest(&litellm.Request{
 		Model:    "gpt-4.1",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			"prompt_cache_retention": "forever",
-		},
+		}),
 	}, false)
 	if err == nil || !strings.Contains(err.Error(), "prompt_cache_retention") {
 		t.Fatalf("expected prompt cache retention error, got %v", err)
@@ -232,12 +232,12 @@ func TestBuildStreamRequestAcceptsStreamOptions(t *testing.T) {
 	wire, err := provider.buildRequest(&litellm.Request{
 		Model:    "gpt-4.1",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			ProviderOptionStreamOptions: map[string]any{
 				"include_usage":       true,
 				"include_obfuscation": includeObfuscation,
 			},
-		},
+		}),
 	}, true)
 	if err != nil {
 		t.Fatalf("buildRequest returned error: %v", err)
@@ -249,9 +249,9 @@ func TestBuildStreamRequestAcceptsStreamOptions(t *testing.T) {
 	_, err = provider.buildRequest(&litellm.Request{
 		Model:    "gpt-4.1",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			ProviderOptionStreamOptions: map[string]any{"include_obfuscation": false},
-		},
+		}),
 	}, false)
 	if err == nil || !strings.Contains(err.Error(), "requires stream request") {
 		t.Fatalf("expected non-stream stream_options error, got %v", err)
@@ -263,7 +263,7 @@ func TestChatReturnsStructuredValidationError(t *testing.T) {
 	_, err := provider.Chat(context.Background(), &litellm.Request{
 		Model:           "gpt-4.1",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{"unknown": true},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"unknown": true}),
 	})
 	if err == nil || !litellm.IsValidationError(err) {
 		t.Fatalf("expected structured validation error, got %v", err)
@@ -375,9 +375,9 @@ func TestBuildRequestMapsPromptCacheOptions(t *testing.T) {
 	wire, err := provider.buildRequest(&litellm.Request{
 		Model:    "gpt-5.6",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			ProviderOptionPromptCacheOptions: map[string]any{"mode": "explicit", "ttl": "30m"},
-		},
+		}),
 	}, false)
 	if err != nil {
 		t.Fatalf("buildRequest: %v", err)
@@ -389,9 +389,9 @@ func TestBuildRequestMapsPromptCacheOptions(t *testing.T) {
 	wire, err = provider.buildRequest(&litellm.Request{
 		Model:    "gpt-5.7",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			ProviderOptionPromptCacheOptions: map[string]any{"mode": "implicit"},
-		},
+		}),
 	}, false)
 	if err != nil || wire.PromptCacheOptions == nil || wire.PromptCacheOptions.Mode != "implicit" {
 		t.Fatalf("future model prompt_cache_options = %#v, err %v", wire.PromptCacheOptions, err)
@@ -608,7 +608,7 @@ func TestChatConvertsResponseBlocks(t *testing.T) {
 	if resp.FinishReason != litellm.FinishReasonToolCall {
 		t.Fatalf("finish reason = %q", resp.FinishReason)
 	}
-	if resp.Usage.InputTokens != 10 || resp.Usage.OutputTokens != 5 || resp.Usage.CacheReadTokens != 3 || resp.Usage.CacheWriteTokens != 4 || resp.Usage.ReasoningTokens != 2 {
+	if *resp.Usage.InputTokens != 10 || *resp.Usage.OutputTokens != 5 || *resp.Usage.CacheReadTokens != 3 || *resp.Usage.CacheWriteTokens != 4 || *resp.Usage.ReasoningTokens != 2 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
 }
@@ -751,7 +751,7 @@ func TestStreamEmitsTypedEvents(t *testing.T) {
 	if len(calls) != 1 || calls[0].ID != "call_1" || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
 		t.Fatalf("tool calls = %+v", calls)
 	}
-	if resp.Usage.InputTokens != 4 || resp.Usage.OutputTokens != 3 {
+	if *resp.Usage.InputTokens != 4 || *resp.Usage.OutputTokens != 3 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
 	if resp.FinishReason != litellm.FinishReasonToolCall {
@@ -813,4 +813,13 @@ func mustTool(t *testing.T, name, description string, schema any) litellm.Tool {
 		t.Fatalf("NewTool: %v", err)
 	}
 	return tool
+}
+
+func mustProviderOptions(t *testing.T, values map[string]any) litellm.ProviderOptions {
+	t.Helper()
+	o, err := litellm.NewProviderOptions(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
 }

@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/internal/tokenusage"
 )
 
 var generatedToolCallSeq atomic.Uint64
@@ -25,15 +26,7 @@ func convertResponse(resp *response, req *litellm.Request) (*litellm.Response, e
 		out.Model = req.Model
 	}
 	if resp.UsageMetadata != nil {
-		out.Usage = litellm.Usage{
-			InputTokens:     resp.UsageMetadata.PromptTokenCount,
-			OutputTokens:    resp.UsageMetadata.CandidatesTokenCount,
-			ReasoningTokens: resp.UsageMetadata.ThoughtsTokenCount,
-			TotalTokens:     resp.UsageMetadata.TotalTokenCount,
-			CacheReadTokens: resp.UsageMetadata.CachedContentTokenCount,
-			Provider:        "gemini",
-			Model:           out.Model,
-		}
+		out.Usage = convertUsage(resp.UsageMetadata, out.Model)
 	}
 	if len(resp.Candidates) == 0 {
 		return out, nil
@@ -112,4 +105,14 @@ func formatSafetyRatings(ratings []safetyRating) string {
 		parts = append(parts, item)
 	}
 	return strings.Join(parts, "; ")
+}
+
+func convertUsage(u *usageMetadata, model string) litellm.Usage {
+	return litellm.Usage{
+		InputTokens:     u.PromptTokenCount,
+		OutputTokens:    tokenusage.AddDetails(u.CandidatesTokenCount, u.ThoughtsTokenCount),
+		ReasoningTokens: u.ThoughtsTokenCount, TotalTokens: u.TotalTokenCount,
+		CacheReadTokens: u.CachedContentTokenCount,
+		Provider:        "gemini", Model: model,
+	}
 }

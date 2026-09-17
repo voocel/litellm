@@ -64,26 +64,35 @@ func (r *Response) Reasoning() string {
 	return out
 }
 
+// Usage contains reported token counts. A nil count is unknown; a pointer to
+// zero is a known zero. InputTokens includes cache reads and writes;
+// OutputTokens includes reasoning. Detail counts are subsets, not additions.
 type Usage struct {
-	InputTokens     int
-	OutputTokens    int
-	TotalTokens     int
-	ReasoningTokens int
-
-	CacheReadTokens  int
-	CacheWriteTokens int
-
-	Provider string
-	Model    string
+	InputTokens      *int
+	OutputTokens     *int
+	TotalTokens      *int
+	ReasoningTokens  *int
+	CacheReadTokens  *int
+	CacheWriteTokens *int
+	Provider         string
+	Model            string
 }
 
+// HasTokens reports whether any token count is known, including a known zero.
 func (u Usage) HasTokens() bool {
-	return u.InputTokens > 0 ||
-		u.OutputTokens > 0 ||
-		u.TotalTokens > 0 ||
-		u.ReasoningTokens > 0 ||
-		u.CacheReadTokens > 0 ||
-		u.CacheWriteTokens > 0
+	return u.InputTokens != nil || u.OutputTokens != nil || u.TotalTokens != nil ||
+		u.ReasoningTokens != nil || u.CacheReadTokens != nil || u.CacheWriteTokens != nil
+}
+
+// Clone returns an independent copy of the reported counts.
+func (u Usage) Clone() Usage {
+	u.InputTokens = cloneIntPtr(u.InputTokens)
+	u.OutputTokens = cloneIntPtr(u.OutputTokens)
+	u.TotalTokens = cloneIntPtr(u.TotalTokens)
+	u.ReasoningTokens = cloneIntPtr(u.ReasoningTokens)
+	u.CacheReadTokens = cloneIntPtr(u.CacheReadTokens)
+	u.CacheWriteTokens = cloneIntPtr(u.CacheWriteTokens)
+	return u
 }
 
 func (u *Usage) StampModel(provider, model string) {

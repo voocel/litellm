@@ -106,15 +106,7 @@ func (s *stream) events(event map[string]json.RawMessage) ([]litellm.Event, erro
 			return nil, litellm.NewProviderErrorWithCause("bedrock", litellm.ErrorTypeProvider, "bedrock: parse metadata", err)
 		}
 		s.done = true
-		usage := litellm.Usage{
-			InputTokens:      meta.Usage.InputTokens + meta.Usage.CacheReadInputTokens,
-			OutputTokens:     meta.Usage.OutputTokens,
-			TotalTokens:      meta.Usage.TotalTokens,
-			CacheReadTokens:  meta.Usage.CacheReadInputTokens,
-			CacheWriteTokens: meta.Usage.CacheWriteInputTokens,
-			Provider:         "bedrock",
-			Model:            s.model,
-		}
+		usage := convertUsage(meta.Usage, s.model)
 		return []litellm.Event{
 			litellm.UsageEvent{Usage: usage},
 			litellm.DoneEvent{FinishReason: s.finish, Provider: "bedrock", Model: s.model},

@@ -9,10 +9,14 @@ import (
 )
 
 func (p *Provider) buildRequest(req *litellm.Request, stream bool) ([]byte, []litellm.Warning, error) {
-	if err := p.validateProviderOptions(req.ProviderOptions); err != nil {
+	options, err := req.ProviderOptions.Decode()
+	if err != nil {
 		return nil, nil, err
 	}
-	if n, ok := req.ProviderOptions["n"]; ok && !isSingleOutput(n) {
+	if err := p.validateProviderOptions(options); err != nil {
+		return nil, nil, err
+	}
+	if n, ok := options["n"]; ok && !isSingleOutput(n) {
 		return nil, nil, fmt.Errorf("%s: provider option %q must be 1; litellm.Response supports a single output", p.Name(), "n")
 	}
 	body := map[string]any{"model": req.Model}
@@ -76,7 +80,11 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) ([]byte, []li
 		}
 	}
 	if req.ToolChoice != nil {
-		body["tool_choice"] = req.ToolChoice
+		choice, err := convertToolChoice(req.ToolChoice)
+		if err != nil {
+			return nil, nil, err
+		}
+		body["tool_choice"] = choice
 	}
 	if req.ResponseFormat != nil && (p.spec.Request.ResponseFormat != nil || !p.spec.Request.JSONSchemaToPrompt) {
 		if p.spec.Request.ResponseFormat != nil {
@@ -109,7 +117,7 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) ([]byte, []li
 		}
 	}
 	if p.spec.Request.ProviderOptions != nil {
-		mappedOptions, passthroughOptions := p.splitProviderOptions(req.ProviderOptions)
+		mappedOptions, passthroughOptions := p.splitProviderOptions(options)
 		if err := p.spec.Request.ProviderOptions(mappedOptions, body, req); err != nil {
 			return nil, nil, err
 		}
@@ -119,7 +127,7 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) ([]byte, []li
 			}
 		}
 	} else {
-		for key, value := range req.ProviderOptions {
+		for key, value := range options {
 			if err := p.putProviderOption(body, key, value); err != nil {
 				return nil, nil, err
 			}
@@ -131,6 +139,9 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) ([]byte, []li
 
 func isSingleOutput(value any) bool {
 	switch value := value.(type) {
+	case json.Number:
+		n, err := value.Float64()
+		return err == nil && n == 1
 	case int:
 		return value == 1
 	case int64:
@@ -149,7 +160,7 @@ func (p *Provider) putProviderOption(body map[string]any, key string, value any)
 	return nil
 }
 
-func (p *Provider) validateProviderOptions(options litellm.ProviderOptions) error {
+func (p *Provider) validateProviderOptions(options map[string]any) error {
 	if len(options) == 0 || p.cfg.AllowUnknownProviderOptions || p.spec.Request.AllowUnknownProviderOptions {
 		return nil
 	}
@@ -161,12 +172,12 @@ func (p *Provider) validateProviderOptions(options litellm.ProviderOptions) erro
 	return nil
 }
 
-func (p *Provider) splitProviderOptions(options litellm.ProviderOptions) (litellm.ProviderOptions, litellm.ProviderOptions) {
+func (p *Provider) splitProviderOptions(options map[string]any) (map[string]any, map[string]any) {
 	if len(options) == 0 || !p.cfg.AllowUnknownProviderOptions || len(p.spec.Request.AllowedProviderOptions) == 0 {
 		return options, nil
 	}
-	mapped := make(litellm.ProviderOptions)
-	passthrough := make(litellm.ProviderOptions)
+	mapped := make(map[string]any)
+	passthrough := make(map[string]any)
 	for key, value := range options {
 		if _, ok := p.spec.Request.AllowedProviderOptions[key]; ok {
 			mapped[key] = value
@@ -406,4 +417,17 @@ func injectJSONSchema(messages []litellm.Message, schema *litellm.JSONSchema) []
 		}
 	}
 	return append(out, litellm.UserText(strings.TrimSpace(text)))
+}
+
+func convertToolChoice(choice *litellm.ToolChoice) (any, error) {
+	if err := choice.Validate(); err != nil {
+		return nil, err
+	}
+	if choice == nil {
+		return nil, nil
+	}
+	if choice.Name != "" {
+		return map[string]any{"type": "function", "function": map[string]any{"name": choice.Name}}, nil
+	}
+	return string(choice.Mode), nil
 }

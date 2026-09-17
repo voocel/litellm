@@ -77,6 +77,6 @@ Portable `Thinking.Effort` values are `minimal`, `low`, `medium`, `high`, `xhigh
 
 Generic `Client.Chat` and `Client.Stream` use Chat Completions by default. Set `openai.Config.API = openai.APIResponses` to route them through Responses while keeping the shared request and response types. Use `provider/openai.Provider.Responses` and `ResponsesStream` when you need hosted tools, conversation IDs, `previous_response_id`, or other native Responses fields.
 
-Provider-specific request fields are exposed through typed constants in each provider package. Unknown provider options are rejected by default; compat providers can opt into pass-through with `AllowUnknownProviderOptions`.
+Provider-specific request keys are exposed through constants in each provider package; values use `litellm.ProviderOptions` JSON data. Use `litellm.NewProviderOptions` or `Set` to encode them. Unknown provider options are rejected by default; compat providers can opt into pass-through with `AllowUnknownProviderOptions`.
 
 Structured output support follows what the shared adapter can encode. Bedrock exposes JSON schema through `outputConfig.textFormat`; GLM injects the schema into the prompt and sends `json_object`.

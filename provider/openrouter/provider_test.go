@@ -28,7 +28,7 @@ func TestHeadersReasoningAndCache(t *testing.T) {
 			Cache: &litellm.CacheControl{Type: litellm.CacheTypeEphemeral, TTL: litellm.CacheTTL1h},
 		})},
 		Thinking:        &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
-		ProviderOptions: litellm.ProviderOptions{"cache_retention": "1h"},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"cache_retention": "1h"}),
 	})
 	if referer == "" || title != "litellm" {
 		t.Fatalf("headers referer=%q title=%q", referer, title)
@@ -94,7 +94,7 @@ func TestCacheRetentionValidation(t *testing.T) {
 	_, err = p.Chat(context.Background(), &litellm.Request{
 		Model:           "anthropic/claude-sonnet-4",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{"cache_retention": "forever"},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"cache_retention": "forever"}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "unsupported cache_retention") {
 		t.Fatalf("expected cache retention error, got %v", err)
@@ -103,7 +103,7 @@ func TestCacheRetentionValidation(t *testing.T) {
 	_, err = p.Chat(context.Background(), &litellm.Request{
 		Model:           "openai/gpt-4o-mini",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{"cache_retention": "1h"},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"cache_retention": "1h"}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "only supported for anthropic models") {
 		t.Fatalf("expected non-anthropic cache error, got %v", err)
@@ -114,7 +114,7 @@ func TestSessionIDProviderOption(t *testing.T) {
 	body := captureBody(t, nil, nil, &litellm.Request{
 		Model:           "anthropic/claude-sonnet-4",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{ProviderOptionSessionID: "agent-session"},
+		ProviderOptions: mustProviderOptions(t, map[string]any{ProviderOptionSessionID: "agent-session"}),
 	})
 	if body["session_id"] != "agent-session" {
 		t.Fatalf("body = %#v", body)
@@ -127,7 +127,7 @@ func TestSessionIDProviderOption(t *testing.T) {
 	_, err = p.Chat(context.Background(), &litellm.Request{
 		Model:           "anthropic/claude-sonnet-4",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{ProviderOptionSessionID: strings.Repeat("x", 257)},
+		ProviderOptions: mustProviderOptions(t, map[string]any{ProviderOptionSessionID: strings.Repeat("x", 257)}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "at most 256") {
 		t.Fatalf("expected session_id length error, got %v", err)
@@ -290,7 +290,7 @@ func TestUsageIncludesCacheWriteTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
-	if resp.Usage.CacheReadTokens != 6 || resp.Usage.CacheWriteTokens != 4 {
+	if *resp.Usage.CacheReadTokens != 6 || *resp.Usage.CacheWriteTokens != 4 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
 }
@@ -307,10 +307,10 @@ func TestJSONSchemaCleaned(t *testing.T) {
 		Model:          "openai/gpt-4o-mini",
 		Messages:       []litellm.Message{litellm.UserText("hi")},
 		ResponseFormat: format,
-		ProviderOptions: litellm.ProviderOptions{ProviderOptionRouting: map[string]any{
+		ProviderOptions: mustProviderOptions(t, map[string]any{ProviderOptionRouting: map[string]any{
 			"order":              []any{"OpenAI"},
 			"require_parameters": false,
-		}},
+		}}),
 	})
 	schema := body["response_format"].(map[string]any)["json_schema"].(map[string]any)["schema"].(map[string]any)
 	if schema["additionalProperties"] != false {
@@ -403,4 +403,13 @@ func captureBody(t *testing.T, referer, title *string, req *litellm.Request) map
 		t.Fatalf("Chat: %v", err)
 	}
 	return body
+}
+
+func mustProviderOptions(t *testing.T, values map[string]any) litellm.ProviderOptions {
+	t.Helper()
+	o, err := litellm.NewProviderOptions(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
 }

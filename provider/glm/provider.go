@@ -101,7 +101,7 @@ func mapThinking(thinking *litellm.Thinking, _ string) (map[string]any, error) {
 	}
 }
 
-func mapProviderOptions(options litellm.ProviderOptions, body map[string]any, req *litellm.Request) error {
+func mapProviderOptions(options map[string]any, body map[string]any, req *litellm.Request) error {
 	if err := validateToolChoice(req.ToolChoice); err != nil {
 		return err
 	}
@@ -130,12 +130,11 @@ func mapProviderOptions(options litellm.ProviderOptions, body map[string]any, re
 	return nil
 }
 
-func validateToolChoice(choice litellm.ToolChoice) error {
+func validateToolChoice(choice *litellm.ToolChoice) error {
 	if choice == nil {
 		return nil
 	}
-	value, ok := choice.(string)
-	if !ok || strings.ToLower(strings.TrimSpace(value)) != "auto" {
+	if choice.Name != "" || choice.Mode != litellm.ToolChoiceAuto {
 		return fmt.Errorf(`glm: tool_choice only supports "auto"`)
 	}
 	return nil
@@ -204,4 +203,15 @@ func reasoningEffort(thinking *litellm.Thinking) (string, error) {
 	default:
 		return "", fmt.Errorf("glm: unsupported reasoning_effort %q; use max, xhigh, high, medium, low, minimal, or none", effort)
 	}
+}
+
+// NewClient builds the provider from cfg and wraps it in a ready *litellm.Client.
+// It is a convenience for the common single-provider case. It calls New(cfg)
+// and then litellm.New(provider, opts...).
+func NewClient(cfg Config, opts ...litellm.ClientOption) (*litellm.Client, error) {
+	p, err := New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return litellm.New(p, opts...)
 }

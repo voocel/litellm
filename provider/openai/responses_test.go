@@ -584,12 +584,12 @@ func TestResponsesAPIChatRoutesToResponsesEndpoint(t *testing.T) {
 		},
 		Tools:    []litellm.Tool{mustTool(t, "lookup", "Lookup.", map[string]any{"type": "object"})},
 		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "medium"},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			ProviderOptionStore:             true,
 			ProviderOptionMetadata:          map[string]any{"tenant": "acme"},
 			ProviderOptionParallelToolCalls: parallelToolCalls,
 			ProviderOptionVerbosity:         "low",
-		},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("Chat returned error: %v", err)
@@ -646,9 +646,9 @@ func TestResponsesAPIStreamRoutesToResponsesEndpoint(t *testing.T) {
 	stream, err := provider.Stream(context.Background(), &litellm.Request{
 		Model:    "gpt-5.1",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			ProviderOptionStreamOptions: map[string]any{"include_obfuscation": includeObfuscation},
-		},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
@@ -677,9 +677,9 @@ func TestResponsesAPIRejectsChatOnlyProviderOption(t *testing.T) {
 	_, err = provider.Chat(context.Background(), &litellm.Request{
 		Model:    "gpt-5.1",
 		Messages: []litellm.Message{litellm.UserText("hello")},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			ProviderOptionFrequencyPenalty: 0.2,
-		},
+		}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "only supported with chat completions API") || !litellm.IsValidationError(err) {
 		t.Fatalf("expected chat-only provider option validation error, got %v", err)
@@ -753,11 +753,11 @@ func TestResponsesConvertsOutputBlocks(t *testing.T) {
 			{Type: "function_call", ID: "fc_1", CallID: "call_1", Name: "lookup", Arguments: `{"q":"x"}`},
 		},
 		Usage: responsesUsage{
-			InputTokens:         3,
-			OutputTokens:        4,
-			TotalTokens:         7,
-			InputTokensDetails:  &responsesInputTokensDetails{CachedTokens: 2, CacheWriteTokens: 5},
-			OutputTokensDetails: &responsesOutputTokensDetails{ReasoningTokens: 1},
+			InputTokens:         litellm.IntPtr(3),
+			OutputTokens:        litellm.IntPtr(4),
+			TotalTokens:         litellm.IntPtr(7),
+			InputTokensDetails:  &responsesInputTokensDetails{CachedTokens: litellm.IntPtr(2), CacheWriteTokens: litellm.IntPtr(5)},
+			OutputTokensDetails: &responsesOutputTokensDetails{ReasoningTokens: litellm.IntPtr(1)},
 		},
 	}, "")
 	if err != nil {
@@ -773,7 +773,7 @@ func TestResponsesConvertsOutputBlocks(t *testing.T) {
 	if resp.FinishReason != litellm.FinishReasonToolCall {
 		t.Fatalf("finish = %q", resp.FinishReason)
 	}
-	if resp.Usage.InputTokens != 3 || resp.Usage.OutputTokens != 4 || resp.Usage.CacheReadTokens != 2 || resp.Usage.CacheWriteTokens != 5 || resp.Usage.ReasoningTokens != 1 {
+	if *resp.Usage.InputTokens != 3 || *resp.Usage.OutputTokens != 4 || *resp.Usage.CacheReadTokens != 2 || *resp.Usage.CacheWriteTokens != 5 || *resp.Usage.ReasoningTokens != 1 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
 }
@@ -931,7 +931,7 @@ func TestResponsesSendsRequestToEndpoint(t *testing.T) {
 	if capturedBody["input"] != "hello" {
 		t.Fatalf("body = %#v", capturedBody)
 	}
-	if resp.Text() != "ok" || resp.Usage.TotalTokens != 3 {
+	if resp.Text() != "ok" || *resp.Usage.TotalTokens != 3 {
 		t.Fatalf("response = %+v", resp)
 	}
 	if len(resp.Raw) != 0 {
@@ -1023,7 +1023,7 @@ func TestResponsesStreamCollectsTypedEvents(t *testing.T) {
 	if len(calls) != 1 || calls[0].ID != "call_1" || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
 		t.Fatalf("tool calls = %+v", calls)
 	}
-	if resp.Usage.InputTokens != 2 || resp.Usage.OutputTokens != 3 || resp.Usage.CacheReadTokens != 1 || resp.Usage.CacheWriteTokens != 2 || resp.Usage.ReasoningTokens != 1 {
+	if *resp.Usage.InputTokens != 2 || *resp.Usage.OutputTokens != 3 || *resp.Usage.CacheReadTokens != 1 || *resp.Usage.CacheWriteTokens != 2 || *resp.Usage.ReasoningTokens != 1 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
 	if resp.FinishReason != litellm.FinishReasonStop {

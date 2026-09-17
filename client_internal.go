@@ -3,7 +3,7 @@ package litellm
 import (
 	"encoding/json"
 	"fmt"
-	"reflect"
+	"math"
 	"unicode/utf8"
 )
 
@@ -28,11 +28,11 @@ func validateRequest(req *Request) error {
 	if req.MaxTokens != nil && *req.MaxTokens <= 0 {
 		return NewError(ErrorTypeValidation, "max_tokens must be positive")
 	}
-	if req.Temperature != nil && (*req.Temperature < 0 || *req.Temperature > 2) {
-		return NewError(ErrorTypeValidation, "temperature must be between 0 and 2")
+	if req.Temperature != nil && (math.IsNaN(*req.Temperature) || math.IsInf(*req.Temperature, 0)) {
+		return NewError(ErrorTypeValidation, "temperature must be finite")
 	}
-	if req.TopP != nil && (*req.TopP < 0 || *req.TopP > 1) {
-		return NewError(ErrorTypeValidation, "top_p must be between 0 and 1")
+	if req.TopP != nil && (math.IsNaN(*req.TopP) || math.IsInf(*req.TopP, 0)) {
+		return NewError(ErrorTypeValidation, "top_p must be finite")
 	}
 	if err := validateCachePolicy(req.Cache); err != nil {
 		return err
@@ -74,18 +74,16 @@ func validateRequest(req *Request) error {
 	if err := validateThinking(req.Thinking); err != nil {
 		return err
 	}
-	if err := validateAnyUTF8(req.ToolChoice, "tool choice"); err != nil {
+	if err := req.ToolChoice.Validate(); err != nil {
 		return err
 	}
-	if err := validateProviderOptionsUTF8(req.ProviderOptions); err != nil {
+	if err := req.ProviderOptions.Validate(); err != nil {
 		return err
 	}
 	return nil
 }
 
 func validateMessages(messages []Message) error {
-	seenToolUses := make(map[string]bool)
-	openToolUses := make(map[string]bool)
 	for i, msg := range messages {
 		switch msg.Role {
 		case RoleSystem, RoleUser, RoleAssistant, RoleTool:
@@ -130,9 +128,6 @@ func validateMessages(messages []Message) error {
 				if b.ID == "" {
 					return NewError(ErrorTypeValidation, fmt.Sprintf("messages[%d]: tool use missing id", i))
 				}
-				if !validToolUseID(b.ID) {
-					return NewError(ErrorTypeValidation, fmt.Sprintf("messages[%d]: tool use id %q is invalid", i, b.ID))
-				}
 				if b.Name == "" {
 					return NewError(ErrorTypeValidation, fmt.Sprintf("messages[%d]: tool use %q missing name", i, b.ID))
 				}
@@ -151,20 +146,12 @@ func validateMessages(messages []Message) error {
 				if len(b.Arguments) == 0 || !json.Valid(b.Arguments) {
 					return NewError(ErrorTypeValidation, fmt.Sprintf("messages[%d]: tool use %q arguments must be valid JSON", i, b.ID))
 				}
-				if seenToolUses[b.ID] {
-					return NewError(ErrorTypeValidation, fmt.Sprintf("messages[%d]: duplicate tool use id %q", i, b.ID))
-				}
-				seenToolUses[b.ID] = true
-				openToolUses[b.ID] = true
 			case ToolResultBlock:
 				if msg.Role != RoleTool {
 					return NewError(ErrorTypeValidation, fmt.Sprintf("messages[%d]: tool result block requires tool role", i))
 				}
 				if b.ToolUseID == "" {
 					return NewError(ErrorTypeValidation, fmt.Sprintf("messages[%d]: tool result missing tool use id", i))
-				}
-				if !validToolUseID(b.ToolUseID) {
-					return NewError(ErrorTypeValidation, fmt.Sprintf("messages[%d]: tool result id %q is invalid", i, b.ToolUseID))
 				}
 				if !utf8.ValidString(b.ToolUseID) {
 					return NewError(ErrorTypeValidation, fmt.Sprintf("messages[%d]: tool result id must be valid UTF-8", i))
@@ -175,20 +162,10 @@ func validateMessages(messages []Message) error {
 				if err := validateToolResultContent(i, b.Content); err != nil {
 					return err
 				}
-				if !seenToolUses[b.ToolUseID] {
-					return NewError(ErrorTypeValidation, fmt.Sprintf("messages[%d]: tool result references unknown tool use %q", i, b.ToolUseID))
-				}
-				delete(openToolUses, b.ToolUseID)
 			default:
 				return NewError(ErrorTypeValidation, fmt.Sprintf("messages[%d]: unsupported block %T", i, block))
 			}
 		}
-		if msg.Role == RoleUser && len(openToolUses) > 0 {
-			return NewError(ErrorTypeValidation, fmt.Sprintf("messages[%d]: user message follows unresolved tool use", i))
-		}
-	}
-	if len(openToolUses) > 0 {
-		return NewError(ErrorTypeValidation, "messages: unresolved tool use at end of history")
 	}
 	return nil
 }
@@ -277,53 +254,8 @@ func validateImageUTF8(messageIndex int, block ImageBlock) error {
 	return nil
 }
 
-func validateProviderOptionsUTF8(options ProviderOptions) error {
-	for key, value := range options {
-		if !utf8.ValidString(key) {
-			return NewError(ErrorTypeValidation, "provider option key must be valid UTF-8")
-		}
-		if err := validateAnyUTF8(value, "provider option "+key); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func validateThinking(thinking *Thinking) error {
 	return thinking.Validate()
-}
-
-func validateAnyUTF8(value any, path string) error {
-	switch v := value.(type) {
-	case string:
-		if !utf8.ValidString(v) {
-			return NewError(ErrorTypeValidation, path+" must be valid UTF-8")
-		}
-	case []string:
-		for i, item := range v {
-			if !utf8.ValidString(item) {
-				return NewError(ErrorTypeValidation, fmt.Sprintf("%s[%d] must be valid UTF-8", path, i))
-			}
-		}
-	case []any:
-		for i, item := range v {
-			if err := validateAnyUTF8(item, fmt.Sprintf("%s[%d]", path, i)); err != nil {
-				return err
-			}
-		}
-	case map[string]any:
-		for key, item := range v {
-			if !utf8.ValidString(key) {
-				return NewError(ErrorTypeValidation, path+" key must be valid UTF-8")
-			}
-			if err := validateAnyUTF8(item, path+"."+key); err != nil {
-				return err
-			}
-		}
-	case ProviderOptions:
-		return validateProviderOptionsUTF8(v)
-	}
-	return nil
 }
 
 func validateResponse(resp *Response, provider, model string) error {
@@ -401,14 +333,17 @@ func cloneRequest(req Request) *Request {
 	out.Messages = cloneMessages(req.Messages)
 	out.Stop = append([]string(nil), req.Stop...)
 	out.Tools = cloneTools(req.Tools)
-	out.ToolChoice = cloneAny(req.ToolChoice)
+	if req.ToolChoice != nil {
+		choice := *req.ToolChoice
+		out.ToolChoice = &choice
+	}
 	out.ResponseFormat = cloneResponseFormat(req.ResponseFormat)
 	out.Thinking = cloneThinking(req.Thinking)
 	out.Cache = cloneCachePolicy(req.Cache)
 	if req.ProviderOptions != nil {
 		out.ProviderOptions = make(ProviderOptions, len(req.ProviderOptions))
 		for k, v := range req.ProviderOptions {
-			out.ProviderOptions[k] = cloneAny(v)
+			out.ProviderOptions[k] = append(json.RawMessage(nil), v...)
 		}
 	}
 	return &out
@@ -479,82 +414,10 @@ func cloneResponse(resp *Response) *Response {
 	}
 	out := *resp
 	out.Blocks = cloneBlocks(resp.Blocks)
+	out.Usage = resp.Usage.Clone()
 	out.Warnings = append([]Warning(nil), resp.Warnings...)
 	out.Raw = cloneBytes(resp.Raw)
 	return &out
-}
-
-func cloneAny(v any) any {
-	if v == nil {
-		return nil
-	}
-	return cloneValue(reflect.ValueOf(v)).Interface()
-}
-
-func cloneValue(v reflect.Value) reflect.Value {
-	if !v.IsValid() {
-		return v
-	}
-	switch v.Kind() {
-	case reflect.Interface:
-		if v.IsNil() {
-			return reflect.Zero(v.Type())
-		}
-		cloned := cloneValue(v.Elem())
-		out := reflect.New(v.Type()).Elem()
-		out.Set(cloned)
-		return out
-	case reflect.Pointer:
-		if v.IsNil() {
-			return reflect.Zero(v.Type())
-		}
-		elem := cloneValue(v.Elem())
-		out := reflect.New(v.Type().Elem())
-		if elem.IsValid() {
-			out.Elem().Set(elem)
-		}
-		return out
-	case reflect.Map:
-		if v.IsNil() {
-			return reflect.Zero(v.Type())
-		}
-		out := reflect.MakeMapWithSize(v.Type(), v.Len())
-		iter := v.MapRange()
-		for iter.Next() {
-			key := cloneValue(iter.Key())
-			value := cloneValue(iter.Value())
-			out.SetMapIndex(key, value)
-		}
-		return out
-	case reflect.Slice:
-		if v.IsNil() {
-			return reflect.Zero(v.Type())
-		}
-		out := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
-		for i := 0; i < v.Len(); i++ {
-			out.Index(i).Set(cloneValue(v.Index(i)))
-		}
-		return out
-	case reflect.Array:
-		out := reflect.New(v.Type()).Elem()
-		for i := 0; i < v.Len(); i++ {
-			out.Index(i).Set(cloneValue(v.Index(i)))
-		}
-		return out
-	case reflect.Struct:
-		out := reflect.New(v.Type()).Elem()
-		// Preserve private state, such as time.Time's internals. Reflection
-		// can only recursively copy exported fields without unsafe access.
-		out.Set(v)
-		for i := 0; i < v.NumField(); i++ {
-			if out.Field(i).CanSet() {
-				out.Field(i).Set(cloneValue(v.Field(i)))
-			}
-		}
-		return out
-	default:
-		return v
-	}
 }
 
 func cloneTools(tools []Tool) []Tool {

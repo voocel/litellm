@@ -131,11 +131,11 @@ func TestProviderOptions(t *testing.T) {
 	body, _ := captureBody(t, compat.Config{APIKey: "key"}, &litellm.Request{
 		Model:    "deepseek-v4-flash",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			ProviderOptionLogprobs:    true,
 			ProviderOptionTopLogprobs: 5,
 			ProviderOptionUserID:      "user-123",
-		},
+		}),
 	})
 	if body["logprobs"] != true ||
 		body["top_logprobs"] != float64(5) ||
@@ -158,7 +158,7 @@ func TestRejectsUnknownProviderOptions(t *testing.T) {
 	_, err = p.Chat(context.Background(), &litellm.Request{
 		Model:           "deepseek-v4-flash",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{"unknown": true},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"unknown": true}),
 	})
 	if err == nil || !strings.Contains(err.Error(), `unsupported provider option "unknown"`) {
 		t.Fatalf("err = %v", err)
@@ -266,4 +266,13 @@ func mustTool(t *testing.T, name string, strict litellm.StrictMode) litellm.Tool
 	}
 	tool.Strict = strict
 	return tool
+}
+
+func mustProviderOptions(t *testing.T, values map[string]any) litellm.ProviderOptions {
+	t.Helper()
+	o, err := litellm.NewProviderOptions(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
 }

@@ -271,7 +271,7 @@ func TestHandleInvokesCallbackPerEventAndAggregates(t *testing.T) {
 func TestCollectStampsUsageProviderAndModelFromDoneEvent(t *testing.T) {
 	resp, err := Collect(&eventSliceStream{events: []Event{
 		ContentDelta{Text: "ok"},
-		UsageEvent{Usage: Usage{InputTokens: 1, OutputTokens: 2, TotalTokens: 3}},
+		UsageEvent{Usage: Usage{InputTokens: IntPtr(1), OutputTokens: IntPtr(2), TotalTokens: IntPtr(3)}},
 		DoneEvent{FinishReason: FinishReasonStop, Provider: "test-provider", Model: "test-model"},
 	}})
 	if err != nil {

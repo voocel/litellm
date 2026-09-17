@@ -120,7 +120,7 @@ type CapabilityMapper func(model string, base litellm.Capabilities) litellm.Capa
 type HeaderMapper func(http.Header, *litellm.Request)
 type ResponseFormatMapper func(*litellm.ResponseFormat) (any, error)
 type SchemaMapper func(litellm.Schema, litellm.StrictMode) (any, error)
-type ProviderOptionsMapper func(litellm.ProviderOptions, map[string]any, *litellm.Request) error
+type ProviderOptionsMapper func(map[string]any, map[string]any, *litellm.Request) error
 type WarningMapper func(*litellm.Request) []litellm.Warning
 type MessageMapper func([]litellm.Message) (any, error)
 type ToolMapper func([]litellm.Tool) (any, error)

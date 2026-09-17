@@ -89,13 +89,20 @@ msgs = append(msgs,
 
 `JSONRaw` returns marshal errors instead of silently producing invalid tool arguments. Use `MustJSONRaw` only for static test data or package-level examples where panic is acceptable.
 
-By default the SDK validates message history strictly. Dirty tool histories, invalid tool IDs, missing tool results, and unsupported provider options return errors. If you need to import legacy history, enable repair explicitly:
+The Client validates the shared model's structure; Providers enforce their own protocol constraints. Applications explicitly check whether tool history is complete. Repair is a separate operation; `WithMessageRepair` has been removed:
 
 ```go
-client, err := openai.NewClient(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")}, litellm.WithMessageRepair(litellm.RepairAll))
+if err := litellm.ValidateHistory(msgs); err != nil {
+    log.Fatal(err)
+}
+
+// Call only when the application chooses repair; msgs remains unchanged.
+repaired, warnings := litellm.RepairMessages(msgs, litellm.RepairAll)
+_ = repaired
+_ = warnings
 ```
 
-Repairs and provider normalizations that change observable data are exposed through `Response.Warnings`, `WarningEvent`, and `Hook.OnWarning`.
+The application handles repair warnings directly. Provider normalization warnings still reach `Response.Warnings`, `WarningEvent`, and `CallObserver.OnEvent`. Synthetic tool results mark interrupted execution; they do not claim that a tool ran.
 
 Raw provider response bodies are not retained by default. Enable them explicitly when debugging:
 
@@ -159,7 +166,7 @@ resp, err := litellm.Collect(stream)
 
 ## Retry
 
-Retries are off by default. Enable them per provider:
+Retries are off by default. `LiteLLMError.Temporary` / `IsTemporaryError` describe a potentially transient failure, not a guarantee that replay is safe. Opting into retries accepts possible duplicate requests and charges. The transport retries selected HTTP statuses, never network failures or interrupted response streams. Enable retries per provider:
 
 ```go
 import "github.com/voocel/litellm/retry"
@@ -203,7 +210,7 @@ resp, err := client.Chat(ctx, litellm.Request{
 	Model:      "gpt-5.6",
 	Messages:   []litellm.Message{litellm.UserText("Weather in Paris?")},
 	Tools:      []litellm.Tool{tool},
-	ToolChoice: "auto",
+	ToolChoice: &litellm.ToolChoice{Mode: litellm.ToolChoiceAuto},
 })
 ```
 
@@ -347,48 +354,66 @@ Only providers that implement `ModelLister` support this. Returned fields are be
 
 ## Provider Options
 
-Provider-specific request options go in `Request.ProviderOptions`. Unknown keys error by default.
+`Request.ProviderOptions` is `map[string]json.RawMessage`: it carries JSON data only. `NewProviderOptions` and `Set` encode values immediately and return encoding errors. The Client copies JSON bytes for execution and each Observer. Providers decode and validate their supported keys at their own boundary; unknown keys error by default.
 
 ```go
+options, err := litellm.NewProviderOptions(map[string]any{
+    openai.ProviderOptionPromptCacheOptions: openai.PromptCacheOptions{Mode: "implicit", TTL: "30m"},
+})
+if err != nil {
+    log.Fatal(err)
+}
 resp, err := client.Chat(ctx, litellm.Request{
-	Model:    "gpt-5.6",
-	Messages: []litellm.Message{litellm.UserText("Hello")},
-	ProviderOptions: litellm.ProviderOptions{
-		openai.ProviderOptionPromptCacheOptions: openai.PromptCacheOptions{Mode: "implicit", TTL: "30m"},
-	},
+    Model: "gpt-5.6",
+    Messages: []litellm.Message{litellm.UserText("Hello")},
+    ProviderOptions: options,
 })
 ```
 
-## Hooks And OTel
+`ToolChoice` no longer accepts strings or protocol objects. Use `&litellm.ToolChoice{Mode: litellm.ToolChoiceAuto}` (also `None` / `Required`), or `&litellm.ToolChoice{Name: "lookup"}` to select a named tool. `nil` leaves the provider default in place. Do not mutate requests concurrently with an invocation.
 
-Hooks observe requests, responses, warnings, and stream events. Hook inputs are copies; mutating them does not affect provider calls, returned responses, or events seen by the caller. Core hooks do not recover panics.
+## Observers And OTel
 
-Exported fields in custom request option structs are copied recursively. Unexported state is preserved by value; any references it contains must be treated as read-only.
+An `Observer` starts a separate `CallObserver` for every Chat/Stream invocation, including local validation failures. `Start` receives an isolated snapshot of the caller's request before defaults and validation. Its returned context reaches later observers, the Provider and HTTP requests. Observer factories may run concurrently; each call owns its state.
+
+`OnEvent` observes validated stream events and warnings (including Chat warnings). `End` runs once, in reverse observer registration order, with status `completed`, `failed`, `canceled` or `closed`, duration, error and the final/partial response. Opening a stream does not end the call. Consume streams to termination or Close them; cancellation without Next/Close does not run callbacks in the background.
+
+Inputs, events and results are isolated copies. Callbacks run synchronously; the core does not recover panics. Application consumer callback errors belong to the consumer, not the model execution; closing that unfinished stream reports `closed`. A cleanup error after completion is returned by Close without revising the completed result. Deadlines and idle timeouts report `failed`; explicit context cancellation reports `canceled`.
 
 ```go
-client, err := litellm.New(provider, litellm.WithHook(litellm.HookFuncs{
-	OnStreamEventFunc: func(ctx context.Context, meta litellm.CallMeta, event litellm.Event) {
-		if delta, ok := event.(litellm.ContentDelta); ok {
-			fmt.Print(delta.Text)
-		}
-	},
-}))
+observer := litellm.ObserverFunc(func(ctx context.Context, info litellm.CallInfo) (context.Context, litellm.CallObserver) {
+    return ctx, litellm.CallObserverFuncs{
+        EndFunc: func(result litellm.CallResult) {
+            fmt.Printf("%s/%s: %s (%s), err=%v\n",
+                info.Provider, info.Model, result.Status, result.Duration, result.Err)
+        },
+    }
+})
+client, err := litellm.New(provider, litellm.WithObservers(observer))
 ```
 
-The optional `github.com/voocel/litellm/otel` module adapts hooks to OpenTelemetry spans
-using the current GenAI semantic conventions. It records metadata such as
-`gen_ai.provider.name`, model, duration, and token usage by default, but does not
-record prompts or completions. Content may include user data, tool arguments,
-and tool results; enable it only after accepting the privacy and storage
-implications. When enabled, messages are recorded as schema-compliant JSON in
-`gen_ai.input.messages` and `gen_ai.output.messages`. Deprecated attributes
-such as `gen_ai.system`, `gen_ai.prompt`, and `gen_ai.completion` are not emitted:
+The optional `github.com/voocel/litellm/otel` module creates a span per call and propagates its context to the transport. It uses the final/partial result without a global call registry, lock or duplicate stream collector. Content capture is off by default. Enable it explicitly to record messages, which may contain user data and tool arguments:
 
 ```go
 import litellmotel "github.com/voocel/litellm/otel"
 
-hook := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
+observer := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
+client, err := litellm.New(provider, litellm.WithObservers(observer))
 ```
+
+Migration: `Hook`, `HookFuncs`, `CallMeta` and `WithHook(s)` have been removed. Use `ObserverFunc`, `CallObserverFuncs`, `CallInfo`/`CallResult` and `WithObservers`; there is no compatibility shim. During development `otel/go.mod` replaces the core dependency with `..`. Before publishing, release the new core API, update OTel's required core version, and remove the local replacement.
+
+## Usage
+
+Token counts are `*int`: `nil` means unknown; `litellm.IntPtr(0)` means a known zero. Input includes cache reads and writes; output includes reasoning. Detail counts are subsets, not extra tokens to add again. Anthropic / Bedrock adapters add separate cache counts to input, and Gemini adds thoughts to output. Unreported details remain `nil`; OTel omits these attributes instead of recording zero.
+
+```go
+if resp.Usage.InputTokens != nil {
+    fmt.Println(*resp.Usage.InputTokens)
+}
+```
+
+Pricing requires known input and output counts. A distinct cache rate requires its corresponding cache count; missing data returns an error. Cache reads and writes are billed once, and negative counts or cache counts exceeding input are rejected. Unconfigured cache rates use the ordinary input rate.
 
 ## Pricing
 

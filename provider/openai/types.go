@@ -174,20 +174,20 @@ type delta struct {
 }
 
 type usage struct {
-	PromptTokens            int                      `json:"prompt_tokens"`
-	CompletionTokens        int                      `json:"completion_tokens"`
-	TotalTokens             int                      `json:"total_tokens"`
+	PromptTokens            *int                     `json:"prompt_tokens"`
+	CompletionTokens        *int                     `json:"completion_tokens"`
+	TotalTokens             *int                     `json:"total_tokens"`
 	PromptTokensDetails     *promptTokensDetails     `json:"prompt_tokens_details,omitempty"`
 	CompletionTokensDetails *completionTokensDetails `json:"completion_tokens_details,omitempty"`
 }
 
 type promptTokensDetails struct {
-	CachedTokens     int `json:"cached_tokens,omitempty"`
-	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	CachedTokens     *int `json:"cached_tokens,omitempty"`
+	CacheWriteTokens *int `json:"cache_write_tokens,omitempty"`
 }
 
 type completionTokensDetails struct {
-	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+	ReasoningTokens *int `json:"reasoning_tokens,omitempty"`
 }
 
 type streamChunk struct {

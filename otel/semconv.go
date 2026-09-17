@@ -32,7 +32,7 @@ const (
 	attrErrorType        = "error.type"
 )
 
-func semanticOperation(meta litellm.CallMeta) string {
+func semanticOperation(meta litellm.CallInfo) string {
 	if meta.Provider == "gemini" {
 		return "generate_content"
 	}

@@ -15,10 +15,10 @@ type anthropicResponse struct {
 }
 
 type anthropicUsage struct {
-	InputTokens              int `json:"input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	InputTokens              *int `json:"input_tokens"`
+	OutputTokens             *int `json:"output_tokens"`
+	CacheCreationInputTokens *int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     *int `json:"cache_read_input_tokens,omitempty"`
 }
 
 func convertResponse(resp *anthropicResponse, fallbackModel string) (*litellm.Response, error) {
@@ -30,14 +30,7 @@ func convertResponse(resp *anthropicResponse, fallbackModel string) (*litellm.Re
 		Provider:        "anthropic",
 		FinishReason:    litellm.NormalizeFinishReason(resp.StopReason),
 		FinishReasonRaw: resp.StopReason,
-		Usage: litellm.Usage{
-			InputTokens:      resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens,
-			OutputTokens:     resp.Usage.OutputTokens,
-			TotalTokens:      resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.OutputTokens,
-			CacheReadTokens:  resp.Usage.CacheReadInputTokens,
-			CacheWriteTokens: resp.Usage.CacheCreationInputTokens,
-			Provider:         "anthropic",
-		},
+		Usage:           convertStreamUsage(&resp.Usage, resp.Model),
 	}
 	if out.Model == "" {
 		out.Model = fallbackModel

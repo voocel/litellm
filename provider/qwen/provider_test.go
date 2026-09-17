@@ -55,7 +55,7 @@ func TestProviderOptions(t *testing.T) {
 	body := captureBody(t, &litellm.Request{
 		Model:    "qwen3.7-plus",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			ProviderOptionTopK:              50,
 			ProviderOptionRepetitionPenalty: 1.05,
 			ProviderOptionPresencePenalty:   0.2,
@@ -69,7 +69,7 @@ func TestProviderOptions(t *testing.T) {
 			ProviderOptionLogprobs:          true,
 			ProviderOptionTopLogprobs:       3,
 			ProviderOptionParallelToolCalls: false,
-		},
+		}),
 	})
 	if body["top_k"] != float64(50) ||
 		body["repetition_penalty"] != 1.05 ||
@@ -104,7 +104,7 @@ func TestRejectsUnknownProviderOptions(t *testing.T) {
 	_, err = p.Chat(context.Background(), &litellm.Request{
 		Model:           "qwen3.7-plus",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{"unknown": true},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"unknown": true}),
 	})
 	if err == nil || !strings.Contains(err.Error(), `unsupported provider option "unknown"`) {
 		t.Fatalf("err = %v", err)
@@ -208,4 +208,13 @@ func captureBody(t *testing.T, req *litellm.Request) map[string]any {
 		t.Fatalf("Chat: %v", err)
 	}
 	return body
+}
+
+func mustProviderOptions(t *testing.T, values map[string]any) litellm.ProviderOptions {
+	t.Helper()
+	o, err := litellm.NewProviderOptions(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
 }

@@ -118,7 +118,7 @@ func TestCompatWrappersRejectUnknownProviderOptions(t *testing.T) {
 			_, err := provider.Chat(context.Background(), &litellm.Request{
 				Model:           "m",
 				Messages:        []litellm.Message{litellm.UserText("hi")},
-				ProviderOptions: litellm.ProviderOptions{"unknown": true},
+				ProviderOptions: mustProviderOptions(t, map[string]any{"unknown": true}),
 			})
 			if err == nil || !litellm.IsValidationError(err) || !strings.Contains(err.Error(), "unsupported provider option") {
 				t.Fatalf("expected provider option validation error, got %v", err)
@@ -211,4 +211,13 @@ func streamResponse(body string) *http.Response {
 	resp := jsonResponse(http.StatusOK, body)
 	resp.Header.Set("Content-Type", "text/event-stream")
 	return resp
+}
+
+func mustProviderOptions(t *testing.T, values map[string]any) litellm.ProviderOptions {
+	t.Helper()
+	o, err := litellm.NewProviderOptions(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
 }

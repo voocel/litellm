@@ -2,6 +2,7 @@ package litellm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -184,12 +185,7 @@ func TestClientDeepClonesRequestForProvider(t *testing.T) {
 			}),
 			ToolResultText("call_1", "ok"),
 		},
-		ToolChoice: map[string]any{
-			"type": "function",
-			"function": map[string]any{
-				"name": "tool",
-			},
-		},
+		ToolChoice: &ToolChoice{Name: "tool"},
 		ResponseFormat: &ResponseFormat{
 			Type: ResponseFormatJSONSchema,
 			JSONSchema: &JSONSchema{
@@ -199,12 +195,12 @@ func TestClientDeepClonesRequestForProvider(t *testing.T) {
 		},
 		Thinking: &Thinking{Mode: ThinkingEnabled, BudgetTokens: &budget},
 		Cache:    &CachePolicy{Retention: CacheTTL1h, Placement: CachePlacementPrefix},
-		ProviderOptions: ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			"metadata": map[string]any{
 				"tags":   []any{"a", "b"},
 				"nested": map[string]any{"k": "v"},
 			},
-		},
+		}),
 	}
 	provider := &testProvider{
 		name: "test",
@@ -222,12 +218,9 @@ func TestClientDeepClonesRequestForProvider(t *testing.T) {
 			tool.Arguments[0] = '['
 			tool.Cache.TTL = CacheTTL5m
 			cloned.Messages[1].Blocks[0] = tool
-			choice := cloned.ToolChoice.(map[string]any)
-			choice["type"] = "mutated"
-			choice["function"].(map[string]any)["name"] = "mutated"
-			metadata := cloned.ProviderOptions["metadata"].(map[string]any)
-			metadata["tags"].([]any)[0] = "mutated"
-			metadata["nested"].(map[string]any)["k"] = "mutated"
+			cloned.ToolChoice.Name = "mutated"
+			cloned.ProviderOptions["metadata"][0] = '['
+
 			return &Response{Blocks: []Block{Text("ok")}}, nil
 		},
 	}
@@ -255,18 +248,16 @@ func TestClientDeepClonesRequestForProvider(t *testing.T) {
 	if string(tool.Arguments) != `{}` || tool.Cache.TTL != CacheTTL1h {
 		t.Fatalf("tool block mutated: %#v", tool)
 	}
-	choice := req.ToolChoice.(map[string]any)
-	if choice["type"] != "function" || choice["function"].(map[string]any)["name"] != "tool" {
-		t.Fatalf("tool choice mutated: %#v", choice)
+	if req.ToolChoice.Name != "tool" {
+		t.Fatalf("tool choice mutated: %#v", req.ToolChoice)
 	}
-	metadata := req.ProviderOptions["metadata"].(map[string]any)
-	if metadata["tags"].([]any)[0] != "a" || metadata["nested"].(map[string]any)["k"] != "v" {
-		t.Fatalf("provider options mutated: %#v", metadata)
+	if string(req.ProviderOptions["metadata"]) != `{"nested":{"k":"v"},"tags":["a","b"]}` {
+		t.Fatal("provider options mutated")
 	}
 }
 
 func TestValidateRejectsInvalidScalars(t *testing.T) {
-	temp := 2.1
+	temp := math.Inf(1)
 	client, err := New(&testProvider{name: "test"})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -353,13 +344,9 @@ func TestValidateRejectsInvalidUTF8ProviderOptions(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 	_, err = client.Chat(context.Background(), Request{
-		Model:    "model",
-		Messages: []Message{UserText("hi")},
-		ProviderOptions: ProviderOptions{
-			"metadata": map[string]any{
-				"bad": string([]byte{0xff}),
-			},
-		},
+		Model:           "model",
+		Messages:        []Message{UserText("hi")},
+		ProviderOptions: ProviderOptions{"metadata": json.RawMessage{'"', 0xff, '"'}},
 	})
 	if err == nil || !IsValidationError(err) || !strings.Contains(err.Error(), "valid UTF-8") {
 		t.Fatalf("expected UTF-8 validation error, got %v", err)
@@ -418,16 +405,20 @@ func TestStreamIdleTimeoutStopsAfterDoneEvent(t *testing.T) {
 	}
 }
 
-func TestClientHooks(t *testing.T) {
+func TestClientObservers(t *testing.T) {
 	var before, after int
-	client, err := New(&testProvider{name: "hook"}, WithHook(HookFuncs{
-		BeforeRequestFunc: func(ctx context.Context, meta CallMeta, req *Request) {
-			before++
-			if meta.Provider != "hook" || meta.Model != "m" {
-				t.Fatalf("bad meta: %+v", meta)
-			}
-		},
-		AfterResponseFunc: func(ctx context.Context, meta CallMeta, resp *Response, err error) {
+	client, err := New(&testProvider{name: "hook"}, WithObservers(ObserverFunc(func(ctx context.Context, info CallInfo) (context.Context, CallObserver) {
+		meta := info
+
+		before++
+		if meta.Provider != "hook" || meta.Model != "m" {
+			t.Fatalf("bad meta: %+v", meta)
+		}
+
+		return ctx, CallObserverFuncs{EndFunc: func(result CallResult) {
+			resp := result.Response
+			err := result.Err
+
 			after++
 			if err != nil {
 				t.Fatalf("unexpected err: %v", err)
@@ -435,8 +426,9 @@ func TestClientHooks(t *testing.T) {
 			if resp == nil || resp.Text() != "ok" {
 				t.Fatalf("bad hook response: %#v", resp)
 			}
-		},
-	}))
+
+		}}
+	})))
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -449,7 +441,7 @@ func TestClientHooks(t *testing.T) {
 	}
 }
 
-func TestHooksCannotMutateProviderRequestOrReturnedResponse(t *testing.T) {
+func TestObserversCannotMutateProviderRequestOrReturnedResponse(t *testing.T) {
 	provider := &testProvider{
 		name: "hook",
 		chatFunc: func(ctx context.Context, req *Request) (*Response, error) {
@@ -462,16 +454,20 @@ func TestHooksCannotMutateProviderRequestOrReturnedResponse(t *testing.T) {
 			return &Response{Blocks: []Block{Text("ok")}, Warnings: []Warning{{Code: "w"}}}, nil
 		},
 	}
-	client, err := New(provider, WithHook(HookFuncs{
-		BeforeRequestFunc: func(ctx context.Context, meta CallMeta, req *Request) {
-			req.Model = "mutated"
-			req.Messages[0].Blocks[0] = Text("mutated")
-		},
-		AfterResponseFunc: func(ctx context.Context, meta CallMeta, resp *Response, err error) {
+	client, err := New(provider, WithObservers(ObserverFunc(func(ctx context.Context, info CallInfo) (context.Context, CallObserver) {
+		req := info.Request
+
+		req.Model = "mutated"
+		req.Messages[0].Blocks[0] = Text("mutated")
+
+		return ctx, CallObserverFuncs{EndFunc: func(result CallResult) {
+			resp := result.Response
+
 			resp.Blocks[0] = Text("mutated")
 			resp.Warnings[0].Code = "mutated"
-		},
-	}))
+
+		}}
+	})))
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -487,7 +483,7 @@ func TestHooksCannotMutateProviderRequestOrReturnedResponse(t *testing.T) {
 	}
 }
 
-func TestHooksCannotMutateStructProviderOptions(t *testing.T) {
+func TestObserversCannotMutateStructProviderOptions(t *testing.T) {
 	type options struct {
 		Tags     []string
 		Metadata map[string]string
@@ -512,21 +508,34 @@ func TestHooksCannotMutateStructProviderOptions(t *testing.T) {
 	provider := &testProvider{
 		name: "hook",
 		chatFunc: func(ctx context.Context, req *Request) (*Response, error) {
-			checkOptions(req.ProviderOptions["custom"])
-			req.ProviderOptions["custom"].(options).Tags[0] = "provider"
+			var decoded options
+			if err := json.Unmarshal(req.ProviderOptions["custom"], &decoded); err != nil {
+				t.Fatal(err)
+			}
+			checkOptions(decoded)
+			req.ProviderOptions["custom"][0] = '['
 			return &Response{Blocks: []Block{Text("ok")}}, nil
 		},
 	}
-	client, err := New(provider, WithHooks(
-		HookFuncs{BeforeRequestFunc: func(ctx context.Context, meta CallMeta, req *Request) {
-			value := req.ProviderOptions["custom"].(options)
-			value.Tags[0] = "hook"
-			value.Metadata["key"] = "hook"
-			*value.Limit = 99
-		}},
-		HookFuncs{BeforeRequestFunc: func(ctx context.Context, meta CallMeta, req *Request) {
-			checkOptions(req.ProviderOptions["custom"])
-		}},
+	client, err := New(provider, WithObservers(
+		ObserverFunc(func(ctx context.Context, info CallInfo) (context.Context, CallObserver) {
+			req := info.Request
+
+			req.ProviderOptions["custom"][0] = '['
+
+			return ctx, CallObserverFuncs{}
+		}),
+		ObserverFunc(func(ctx context.Context, info CallInfo) (context.Context, CallObserver) {
+			req := info.Request
+
+			var decoded options
+			if err := json.Unmarshal(req.ProviderOptions["custom"], &decoded); err != nil {
+				t.Fatal(err)
+			}
+			checkOptions(decoded)
+
+			return ctx, CallObserverFuncs{}
+		}),
 	))
 	if err != nil {
 		t.Fatal(err)
@@ -534,7 +543,7 @@ func TestHooksCannotMutateStructProviderOptions(t *testing.T) {
 	_, err = client.Chat(context.Background(), Request{
 		Model:           "m",
 		Messages:        []Message{UserText("hi")},
-		ProviderOptions: ProviderOptions{"custom": original},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"custom": original}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -643,11 +652,15 @@ func TestClientRejectsNilStreamWithoutError(t *testing.T) {
 		streamFunc: func(context.Context, *Request) (Stream, error) {
 			return nil, nil
 		},
-	}, WithHook(HookFuncs{
-		AfterResponseFunc: func(_ context.Context, _ CallMeta, _ *Response, err error) {
+	}, WithObservers(ObserverFunc(func(ctx context.Context, info CallInfo) (context.Context, CallObserver) {
+
+		return ctx, CallObserverFuncs{EndFunc: func(result CallResult) {
+			err := result.Err
+
 			hookErr = err
-		},
-	}))
+
+		}}
+	})))
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -656,7 +669,7 @@ func TestClientRejectsNilStreamWithoutError(t *testing.T) {
 		t.Fatalf("expected nil stream error, got %v", err)
 	}
 	if hookErr == nil || !strings.Contains(hookErr.Error(), "nil stream without error") {
-		t.Fatalf("AfterResponse received %v, want nil stream error", hookErr)
+		t.Fatalf("End received %v, want nil stream error", hookErr)
 	}
 }
 
@@ -696,11 +709,11 @@ func TestClientWrapsProviderStreamStartErrors(t *testing.T) {
 
 func TestWrapErrorClassifiesContextErrors(t *testing.T) {
 	canceled := WrapError(context.Canceled, "test")
-	if !IsNetworkError(canceled) || IsRetryableError(canceled) || !errors.Is(canceled, context.Canceled) {
+	if !IsNetworkError(canceled) || IsTemporaryError(canceled) || !errors.Is(canceled, context.Canceled) {
 		t.Fatalf("canceled error = %v", canceled)
 	}
 	deadline := WrapError(context.DeadlineExceeded, "test")
-	if !IsTimeoutError(deadline) || IsRetryableError(deadline) || !errors.Is(deadline, context.DeadlineExceeded) {
+	if !IsTimeoutError(deadline) || IsTemporaryError(deadline) || !errors.Is(deadline, context.DeadlineExceeded) {
 		t.Fatalf("deadline error = %v", deadline)
 	}
 }
@@ -751,20 +764,24 @@ func TestCollect(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsDirtyToolHistory(t *testing.T) {
-	client, err := New(&testProvider{name: "test"})
+func TestHistoryValidationIsExplicit(t *testing.T) {
+	provider := &testProvider{name: "test"}
+	client, err := New(provider)
 	if err != nil {
-		t.Fatalf("New returned error: %v", err)
+		t.Fatal(err)
 	}
-	_, err = client.Chat(context.Background(), Request{
-		Model: "m",
-		Messages: []Message{
-			Assistant(ToolUseBlock{ID: "call_1", Name: "tool", Arguments: MustJSONRaw(map[string]any{})}),
-			UserText("next"),
-		},
-	})
-	if err == nil || !IsValidationError(err) {
-		t.Fatalf("expected validation error, got %v", err)
+	messages := []Message{
+		Assistant(ToolUseBlock{ID: "provider:id!", Name: "tool", Arguments: MustJSONRaw(map[string]any{})}),
+		UserText("next"),
+	}
+	if err := ValidateHistory(messages); !IsValidationError(err) {
+		t.Fatalf("expected explicit history validation error, got %v", err)
+	}
+	if _, err := client.Chat(context.Background(), Request{Model: "m", Messages: messages}); err != nil {
+		t.Fatalf("Client must allow provider-specific IDs and partial histories: %v", err)
+	}
+	if got := provider.lastReq.Messages[0].Blocks[0].(ToolUseBlock).ID; got != "provider:id!" {
+		t.Fatalf("Client modified history: %q", got)
 	}
 }
 
@@ -819,83 +836,62 @@ func TestValidateAllowsToolReferenceInsideToolResult(t *testing.T) {
 }
 
 func TestMessageRepairIsExplicitAndWarns(t *testing.T) {
+	original := []Message{
+		Assistant(ToolUseBlock{ID: "bad id!", Name: "tool", Arguments: MustJSONRaw(map[string]any{})}),
+		UserText("next"),
+	}
+	messages, warnings := RepairMessages(original, RepairAll)
+	if len(warnings) != 2 {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+	if err := ValidateHistory(messages); err != nil {
+		t.Fatal(err)
+	}
+	if got := messages[0].Blocks[0].(ToolUseBlock).ID; got != "bad_id_" {
+		t.Fatalf("tool use id = %q", got)
+	}
+	if got := original[0].Blocks[0].(ToolUseBlock).ID; got != "bad id!" {
+		t.Fatalf("input mutated: %q", got)
+	}
+	if messages[1].Role != RoleTool || messages[2].Role != RoleUser {
+		t.Fatalf("messages = %#v", messages)
+	}
 	provider := &testProvider{name: "test"}
-	var hookWarnings []Warning
-	client, err := New(provider,
-		WithMessageRepair(RepairAll),
-		WithHook(HookFuncs{
-			OnWarningFunc: func(ctx context.Context, meta CallMeta, warning Warning) {
-				hookWarnings = append(hookWarnings, warning)
-			},
-		}),
-	)
+	client, err := New(provider)
 	if err != nil {
-		t.Fatalf("New returned error: %v", err)
+		t.Fatal(err)
 	}
-
-	resp, err := client.Chat(context.Background(), Request{
-		Model: "m",
-		Messages: []Message{
-			Assistant(ToolUseBlock{ID: "bad id!", Name: "tool", Arguments: MustJSONRaw(map[string]any{})}),
-			UserText("next"),
-		},
-	})
+	resp, err := client.Chat(context.Background(), Request{Model: "m", Messages: messages})
 	if err != nil {
-		t.Fatalf("Chat returned error: %v", err)
+		t.Fatal(err)
 	}
-	if len(resp.Warnings) != 2 {
-		t.Fatalf("warnings len = %d, want 2: %#v", len(resp.Warnings), resp.Warnings)
-	}
-	if len(hookWarnings) != 2 {
-		t.Fatalf("hook warnings len = %d, want 2: %#v", len(hookWarnings), hookWarnings)
-	}
-	if got := provider.lastReq.Messages[0].Blocks[0].(ToolUseBlock).ID; got != "bad_id_" {
-		t.Fatalf("tool use id = %q, want bad_id_", got)
-	}
-	if provider.lastReq.Messages[1].Role != RoleTool {
-		t.Fatalf("messages[1].Role = %q, want tool", provider.lastReq.Messages[1].Role)
-	}
-	if provider.lastReq.Messages[2].Role != RoleUser {
-		t.Fatalf("messages[2].Role = %q, want user", provider.lastReq.Messages[2].Role)
-	}
-	for _, warning := range resp.Warnings {
-		if warning.Provider != "test" {
-			t.Fatalf("warning provider = %q, want test", warning.Provider)
-		}
+	if len(resp.Warnings) != 0 {
+		t.Fatalf("repair warnings must remain with caller: %#v", resp.Warnings)
 	}
 }
 
 func TestMessageRepairSynthesizesMissingToolUseID(t *testing.T) {
-	provider := &testProvider{name: "test"}
-	client, err := New(provider, WithMessageRepair(RepairAll))
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
+	messages, warnings := RepairMessages([]Message{
+		Assistant(ToolUseBlock{Name: "tool", Arguments: MustJSONRaw(map[string]any{})}),
+	}, RepairAll)
+	if len(warnings) != 2 {
+		t.Fatalf("warnings = %#v", warnings)
 	}
-
-	resp, err := client.Chat(context.Background(), Request{
-		Model: "m",
-		Messages: []Message{
-			Assistant(ToolUseBlock{Name: "tool", Arguments: MustJSONRaw(map[string]any{})}),
-		},
-	})
-	if err != nil {
-		t.Fatalf("Chat returned error: %v", err)
+	if err := ValidateHistory(messages); err != nil {
+		t.Fatal(err)
 	}
-	if len(resp.Warnings) != 2 {
-		t.Fatalf("warnings len = %d, want 2: %#v", len(resp.Warnings), resp.Warnings)
-	}
-	generated := provider.lastReq.Messages[0].Blocks[0].(ToolUseBlock).ID
+	generated := messages[0].Blocks[0].(ToolUseBlock).ID
 	if !strings.HasPrefix(generated, "call_") {
-		t.Fatalf("generated id = %q, want call_ prefix", generated)
+		t.Fatalf("generated id = %q", generated)
 	}
-	result := provider.lastReq.Messages[1].Blocks[0].(ToolResultBlock)
+	result := messages[1].Blocks[0].(ToolResultBlock)
 	if result.ToolUseID != generated || !result.IsError {
 		t.Fatalf("synthetic result = %#v, generated=%q", result, generated)
 	}
 }
 
 func TestMessageRepairInsertsMissingToolResultsInToolUseOrder(t *testing.T) {
-	messages, warnings := repairMessages([]Message{
+	messages, warnings := RepairMessages([]Message{
 		Assistant(
 			ToolUseBlock{ID: "call_1", Name: "first", Arguments: MustJSONRaw(map[string]any{})},
 			ToolUseBlock{ID: "call_2", Name: "second", Arguments: MustJSONRaw(map[string]any{})},
@@ -918,37 +914,7 @@ func TestMessageRepairInsertsMissingToolResultsInToolUseOrder(t *testing.T) {
 	}
 }
 
-func TestStreamEmitsRepairWarnings(t *testing.T) {
-	client, err := New(&testProvider{name: "test"}, WithMessageRepair(RepairAll))
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	stream, err := client.Stream(context.Background(), Request{
-		Model: "m",
-		Messages: []Message{
-			Assistant(ToolUseBlock{ID: "bad id!", Name: "tool", Arguments: MustJSONRaw(map[string]any{})}),
-			UserText("next"),
-		},
-	})
-	if err != nil {
-		t.Fatalf("Stream returned error: %v", err)
-	}
-	defer stream.Close()
-
-	first, err := stream.Next()
-	if err != nil {
-		t.Fatalf("Next returned error: %v", err)
-	}
-	warning, ok := first.(WarningEvent)
-	if !ok {
-		t.Fatalf("first event = %#v, want WarningEvent", first)
-	}
-	if warning.Warning.Code != "message.tool_use_id_normalized" {
-		t.Fatalf("warning code = %q", warning.Warning.Code)
-	}
-}
-
-func TestStreamHookEndsOnError(t *testing.T) {
+func TestStreamObserverEndsOnError(t *testing.T) {
 	boom := errors.New("boom")
 	var endErr error
 	client, err := New(&testProvider{
@@ -956,11 +922,15 @@ func TestStreamHookEndsOnError(t *testing.T) {
 		streamFunc: func(ctx context.Context, req *Request) (Stream, error) {
 			return &testStreamWithError{events: []Event{ContentDelta{Text: "partial"}}, err: boom}, nil
 		},
-	}, WithHook(HookFuncs{
-		OnStreamEndFunc: func(ctx context.Context, meta CallMeta, err error) {
+	}, WithObservers(ObserverFunc(func(ctx context.Context, info CallInfo) (context.Context, CallObserver) {
+
+		return ctx, CallObserverFuncs{EndFunc: func(result CallResult) {
+			err := result.Err
+
 			endErr = err
-		},
-	}))
+
+		}}
+	})))
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -998,7 +968,7 @@ func TestStreamWrapsRuntimeProviderErrors(t *testing.T) {
 	}
 }
 
-func TestStreamHooksCannotMutateReturnedEvents(t *testing.T) {
+func TestStreamObserversCannotMutateReturnedEvents(t *testing.T) {
 	newEvents := func() []Event {
 		return []Event{
 			ContentStart{Block: ReasoningBlock{Extra: []byte(`{}`)}, OutputIndex: IntPtr(2), ContentIndex: IntPtr(0)},
@@ -1023,8 +993,10 @@ func TestStreamHooksCannotMutateReturnedEvents(t *testing.T) {
 		streamFunc: func(ctx context.Context, req *Request) (Stream, error) {
 			return &testStream{events: events}, nil
 		},
-	}, WithHooks(HookFuncs{
-		OnStreamEventFunc: func(ctx context.Context, meta CallMeta, event Event) {
+	}, WithObservers(ObserverFunc(func(ctx context.Context, info CallInfo) (context.Context, CallObserver) {
+
+		return ctx, CallObserverFuncs{OnEventFunc: func(event Event) {
+
 			switch e := event.(type) {
 			case ContentStart:
 				*e.OutputIndex, *e.ContentIndex = 99, 99
@@ -1055,15 +1027,19 @@ func TestStreamHooksCannotMutateReturnedEvents(t *testing.T) {
 			case ProviderEvent:
 				e.Raw[0] = '['
 			}
-		},
-	}, HookFuncs{
-		OnStreamEventFunc: func(ctx context.Context, meta CallMeta, event Event) {
+
+		}}
+	}), ObserverFunc(func(ctx context.Context, info CallInfo) (context.Context, CallObserver) {
+
+		return ctx, CallObserverFuncs{OnEventFunc: func(event Event) {
+
 			if !reflect.DeepEqual(event, want[observed]) {
 				t.Errorf("second hook saw mutated event %T: %#v", event, event)
 			}
 			observed++
-		},
-	}))
+
+		}}
+	})))
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -1162,3 +1138,106 @@ func (s *closeErrStream) Next() (Event, error) {
 }
 
 func (s *closeErrStream) Close() error { return s.err }
+
+func mustProviderOptions(t *testing.T, values map[string]any) ProviderOptions {
+	t.Helper()
+	o, err := NewProviderOptions(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
+}
+
+func TestProviderOptionsJSONBoundary(t *testing.T) {
+	source := map[string]any{"tags": []string{"original"}, "limit": int64(9007199254740993)}
+	options, err := NewProviderOptions(map[string]any{"config": source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source["tags"].([]string)[0] = "changed"
+	decoded, err := options.Decode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := decoded["config"].(map[string]any)
+	if config["tags"].([]any)[0] != "original" || config["limit"].(json.Number).String() != "9007199254740993" {
+		t.Fatalf("decoded = %#v", config)
+	}
+	config["tags"].([]any)[0] = "decoder changed"
+	second, err := options.Decode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second["config"].(map[string]any)["tags"].([]any)[0] != "original" {
+		t.Fatal("Decode shares storage")
+	}
+	if err := options.Set("invalid", func() {}); !IsValidationError(err) {
+		t.Fatalf("encoding error = %v", err)
+	}
+	if _, exists := options["invalid"]; exists {
+		t.Fatal("failed Set changed options")
+	}
+	for _, raw := range []json.RawMessage{nil, json.RawMessage(`{"unterminated":`), json.RawMessage(`1 2`), {'"', 0xff, '"'}} {
+		if _, err := (ProviderOptions{"invalid": raw}).Decode(); !IsValidationError(err) {
+			t.Fatalf("raw %q: %v", raw, err)
+		}
+	}
+}
+
+func TestClientOwnsDefaults(t *testing.T) {
+	max := 10
+	option := WithDefaults(RequestDefaults{MaxTokens: &max})
+	provider := &testProvider{name: "test"}
+	client, err := New(provider, option)
+	if err != nil {
+		t.Fatal(err)
+	}
+	max = 99
+	if _, err := client.Chat(context.Background(), Request{Model: "m", Messages: []Message{UserText("hi")}}); err != nil {
+		t.Fatal(err)
+	}
+	if *provider.lastReq.MaxTokens != 10 {
+		t.Fatal("Client shares caller defaults")
+	}
+}
+
+func TestUsageSnapshotsAndKnownZero(t *testing.T) {
+	if (Usage{}).HasTokens() {
+		t.Fatal("unknown usage has tokens")
+	}
+	usage := Usage{InputTokens: IntPtr(0), OutputTokens: IntPtr(2)}
+	if !usage.HasTokens() {
+		t.Fatal("known zero is unknown")
+	}
+	collector := NewEventCollector()
+	if _, err := collector.Apply(UsageEvent{Usage: usage}); err != nil {
+		t.Fatal(err)
+	}
+	*usage.InputTokens = 9
+	first := collector.Response()
+	if *first.Usage.InputTokens != 0 {
+		t.Fatal("collector shares incoming usage")
+	}
+	*first.Usage.InputTokens = 8
+	if *collector.Response().Usage.InputTokens != 0 {
+		t.Fatal("Response shares collector usage")
+	}
+	event := UsageEvent{Usage: Usage{InputTokens: IntPtr(0)}}
+	copied := cloneEvent(event).(UsageEvent)
+	*copied.Usage.InputTokens = 7
+	if *event.Usage.InputTokens != 0 {
+		t.Fatal("event snapshot shares usage")
+	}
+	original := &Response{Usage: event.Usage}
+	*cloneResponse(original).Usage.InputTokens = 6
+	if *original.Usage.InputTokens != 0 {
+		t.Fatal("response snapshot shares usage")
+	}
+}
+
+func TestValidateHistoryRejectsDuplicateResults(t *testing.T) {
+	messages := []Message{Assistant(ToolUseBlock{ID: "call", Name: "tool", Arguments: json.RawMessage(`{}`)}), ToolResultText("call", "ok"), ToolResultText("call", "again")}
+	if err := ValidateHistory(messages); !IsValidationError(err) {
+		t.Fatalf("duplicate result = %v", err)
+	}
+}

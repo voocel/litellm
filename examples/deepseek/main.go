@@ -115,7 +115,7 @@ func runTool(ctx context.Context, client *litellm.Client) {
 		Model:      model(),
 		Messages:   messages,
 		Tools:      []litellm.Tool{weather},
-		ToolChoice: "auto",
+		ToolChoice: &litellm.ToolChoice{Mode: "auto"},
 		MaxTokens:  litellm.IntPtr(256),
 	})
 	if err != nil {

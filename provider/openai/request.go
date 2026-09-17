@@ -4,19 +4,27 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/voocel/litellm"
 )
 
 func (p *Provider) buildRequest(req *litellm.Request, stream bool) (*chatRequest, error) {
+	if err := validateSampling(req.Temperature, req.TopP); err != nil {
+		return nil, err
+	}
+	choice, err := convertToolChoice(req.ToolChoice)
+	if err != nil {
+		return nil, err
+	}
 	out := &chatRequest{
 		Model:       req.Model,
 		Stream:      stream,
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
 		Stop:        append([]string(nil), req.Stop...),
-		ToolChoice:  req.ToolChoice,
+		ToolChoice:  choice,
 	}
 	if stream {
 		out.StreamOptions = &streamOptions{IncludeUsage: true}
@@ -53,7 +61,11 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) (*chatRequest
 		out.ResponseFormat = converted
 	}
 	if len(req.ProviderOptions) > 0 {
-		if err := applyProviderOptions(out, req.ProviderOptions); err != nil {
+		options, err := req.ProviderOptions.Decode()
+		if err != nil {
+			return nil, err
+		}
+		if err := applyProviderOptions(out, options); err != nil {
 			return nil, err
 		}
 	}
@@ -371,4 +383,27 @@ func convertResponseFormat(format *litellm.ResponseFormat) (*responseFormat, err
 		Strict:      strict,
 	}
 	return out, nil
+}
+
+func convertToolChoice(choice *litellm.ToolChoice) (any, error) {
+	if err := choice.Validate(); err != nil {
+		return nil, err
+	}
+	if choice == nil {
+		return nil, nil
+	}
+	if choice.Name != "" {
+		return map[string]any{"type": "function", "function": map[string]any{"name": choice.Name}}, nil
+	}
+	return string(choice.Mode), nil
+}
+
+func validateSampling(temperature, topP *float64) error {
+	if temperature != nil && (math.IsNaN(*temperature) || *temperature < 0 || *temperature > 2) {
+		return fmt.Errorf("openai: temperature must be between 0 and 2")
+	}
+	if topP != nil && (math.IsNaN(*topP) || *topP < 0 || *topP > 1) {
+		return fmt.Errorf("openai: top_p must be between 0 and 1")
+	}
+	return nil
 }

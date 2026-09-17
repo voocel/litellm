@@ -179,15 +179,7 @@ func (s *stream) emit(resp response) (litellm.Event, error) {
 func (s *stream) events(resp response) ([]litellm.Event, error) {
 	events := make([]litellm.Event, 0)
 	if resp.UsageMetadata != nil {
-		s.usage = litellm.Usage{
-			InputTokens:     resp.UsageMetadata.PromptTokenCount,
-			OutputTokens:    resp.UsageMetadata.CandidatesTokenCount,
-			ReasoningTokens: resp.UsageMetadata.ThoughtsTokenCount,
-			TotalTokens:     resp.UsageMetadata.TotalTokenCount,
-			CacheReadTokens: resp.UsageMetadata.CachedContentTokenCount,
-			Provider:        "gemini",
-			Model:           s.model,
-		}
+		s.usage = convertUsage(resp.UsageMetadata, s.model)
 		events = append(events, litellm.UsageEvent{Usage: s.usage})
 	}
 	if len(resp.Candidates) == 0 {

@@ -272,7 +272,7 @@ func TestBuildRequestPreservesNullableToolJSONSchema(t *testing.T) {
 				Model:      "gemini-3-pro",
 				Messages:   []litellm.Message{litellm.UserText("Audit the foundation.")},
 				Tools:      []litellm.Tool{tool},
-				ToolChoice: "auto",
+				ToolChoice: &litellm.ToolChoice{Mode: "auto"},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -306,13 +306,13 @@ func TestBuildRequestStrictToolChoice(t *testing.T) {
 	tool.Strict = litellm.StrictEnabled
 	for _, test := range []struct {
 		name   string
-		choice any
+		choice *litellm.ToolChoice
 		mode   string
 	}{
 		{name: "default", mode: "VALIDATED"},
-		{name: "auto", choice: "auto", mode: "VALIDATED"},
-		{name: "required", choice: "required", mode: "ANY"},
-		{name: "none", choice: "none", mode: "NONE"},
+		{name: "auto", choice: &litellm.ToolChoice{Mode: "auto"}, mode: "VALIDATED"},
+		{name: "required", choice: &litellm.ToolChoice{Mode: "required"}, mode: "ANY"},
+		{name: "none", choice: &litellm.ToolChoice{Mode: "none"}, mode: "NONE"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			wire, err := provider.buildRequest(&litellm.Request{
@@ -339,7 +339,7 @@ func TestBuildRequestRejectsInvalidToolChoice(t *testing.T) {
 		Model:      "gemini-3-pro",
 		Messages:   []litellm.Message{litellm.UserText("hi")},
 		Tools:      []litellm.Tool{tool},
-		ToolChoice: "invalid",
+		ToolChoice: &litellm.ToolChoice{Mode: "invalid"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "unsupported tool choice") {
 		t.Fatalf("expected tool choice error, got %v", err)
@@ -377,13 +377,13 @@ func TestBuildRequestProviderOptions(t *testing.T) {
 	wire, err := provider.buildRequest(&litellm.Request{
 		Model:    "gemini-3-pro",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			ProviderOptionTopK:           10,
 			ProviderOptionCandidateCount: 1,
 			ProviderOptionSafetySettings: []map[string]any{
 				{"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"},
 			},
-		},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("buildRequest returned error: %v", err)
@@ -404,7 +404,7 @@ func TestBuildRequestRejectsUnknownProviderOption(t *testing.T) {
 	_, err := provider.buildRequest(&litellm.Request{
 		Model:           "gemini-3-pro",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{"unknown": true},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"unknown": true}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "unsupported provider option") {
 		t.Fatalf("expected provider option error, got %v", err)
@@ -461,7 +461,7 @@ func TestChatConvertsThinkingToolAndUsage(t *testing.T) {
 	if resp.FinishReason != litellm.FinishReasonToolCall {
 		t.Fatalf("finish reason = %q", resp.FinishReason)
 	}
-	if resp.Usage.InputTokens != 3 || resp.Usage.OutputTokens != 4 || resp.Usage.ReasoningTokens != 2 || resp.Usage.CacheReadTokens != 1 {
+	if *resp.Usage.InputTokens != 3 || *resp.Usage.OutputTokens != 6 || *resp.Usage.ReasoningTokens != 2 || *resp.Usage.CacheReadTokens != 1 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
 }
@@ -629,7 +629,7 @@ func TestStreamConvertsSSEToTypedEvents(t *testing.T) {
 	if len(calls) != 1 || calls[0].ID != "call_1" || calls[0].Name != "lookup" || calls[0].Signature != "sig-call" || string(calls[0].Arguments) != `{"q":"x"}` {
 		t.Fatalf("tool calls = %+v", calls)
 	}
-	if resp.Usage.InputTokens != 3 || resp.Usage.OutputTokens != 4 || resp.Usage.ReasoningTokens != 2 || resp.Usage.CacheReadTokens != 1 {
+	if *resp.Usage.InputTokens != 3 || *resp.Usage.OutputTokens != 6 || *resp.Usage.ReasoningTokens != 2 || *resp.Usage.CacheReadTokens != 1 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
 	if resp.FinishReason != litellm.FinishReasonToolCall {
@@ -782,4 +782,27 @@ func mustTool(t *testing.T, name, description string, schema any) litellm.Tool {
 		t.Fatalf("NewTool: %v", err)
 	}
 	return tool
+}
+
+func mustProviderOptions(t *testing.T, values map[string]any) litellm.ProviderOptions {
+	t.Helper()
+	o, err := litellm.NewProviderOptions(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
+}
+
+func TestUsageIncludesReasoningAndPreservesUnknown(t *testing.T) {
+	var wire usageMetadata
+	if err := json.Unmarshal([]byte(`{"promptTokenCount":10,"candidatesTokenCount":2,"thoughtsTokenCount":3,"totalTokenCount":15,"cachedContentTokenCount":0}`), &wire); err != nil {
+		t.Fatal(err)
+	}
+	usage := convertUsage(&wire, "m")
+	if *usage.InputTokens != 10 || *usage.OutputTokens != 5 || *usage.TotalTokens != 15 || *usage.CacheReadTokens != 0 || usage.CacheWriteTokens != nil {
+		t.Fatalf("usage = %+v", usage)
+	}
+	if convertUsage(&usageMetadata{}, "m").HasTokens() {
+		t.Fatal("missing counts became known")
+	}
 }

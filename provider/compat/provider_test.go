@@ -68,7 +68,7 @@ func TestChatBuildsRequestAndConvertsResponse(t *testing.T) {
 			litellm.ToolResultText("call_1", "ok"),
 		},
 		Tools:           []litellm.Tool{tool},
-		ProviderOptions: litellm.ProviderOptions{"extra_body": true},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"extra_body": true}),
 	})
 	if err != nil {
 		t.Fatalf("Chat returned error: %v", err)
@@ -86,7 +86,7 @@ func TestChatBuildsRequestAndConvertsResponse(t *testing.T) {
 	if len(calls) != 1 || calls[0].ID != "call_1" || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
 		t.Fatalf("tool calls = %+v", calls)
 	}
-	if resp.Usage.ReasoningTokens != 2 {
+	if *resp.Usage.ReasoningTokens != 2 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
 }
@@ -150,7 +150,7 @@ func TestRejectsUnknownProviderOptionByDefault(t *testing.T) {
 	_, err = provider.Chat(context.Background(), &litellm.Request{
 		Model:           "m",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{"unknown": true},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"unknown": true}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "unsupported provider option") {
 		t.Fatalf("expected unknown option error, got %v", err)
@@ -169,7 +169,7 @@ func TestConfigCanAllowUnknownProviderOptions(t *testing.T) {
 	data, _, err := provider.buildRequest(&litellm.Request{
 		Model:           "m",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{"min_p": 0.05},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"min_p": 0.05}),
 	}, false)
 	if err != nil {
 		t.Fatalf("buildRequest returned error: %v", err)
@@ -195,7 +195,7 @@ func TestBuildRequestRequiresSingleOutput(t *testing.T) {
 	req := &litellm.Request{
 		Model:           "m",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{"n": 1},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"n": 1}),
 	}
 	data, _, err := provider.buildRequest(req, false)
 	if err != nil {
@@ -205,7 +205,7 @@ func TestBuildRequestRequiresSingleOutput(t *testing.T) {
 		t.Fatalf("body missing n=1: %s", data)
 	}
 
-	req.ProviderOptions["n"] = 2
+	req.ProviderOptions["n"] = json.RawMessage(`2`)
 	_, _, err = provider.buildRequest(req, false)
 	if err == nil || !strings.Contains(err.Error(), `provider option "n" must be 1`) {
 		t.Fatalf("expected single-output error, got %v", err)
@@ -221,7 +221,7 @@ func TestConfigAllowsUnknownProviderOptionsWithoutBypassingKnownMapper(t *testin
 		Name: "mapped",
 		Request: RequestSpec{
 			AllowedProviderOptions: map[string]struct{}{"known": {}},
-			ProviderOptions: func(options litellm.ProviderOptions, body map[string]any, _ *litellm.Request) error {
+			ProviderOptions: func(options map[string]any, body map[string]any, _ *litellm.Request) error {
 				for key, value := range options {
 					if key != "known" {
 						t.Fatalf("mapper saw unknown option %q", key)
@@ -238,10 +238,10 @@ func TestConfigAllowsUnknownProviderOptionsWithoutBypassingKnownMapper(t *testin
 	data, _, err := provider.buildRequest(&litellm.Request{
 		Model:    "m",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			"known": "typed",
 			"min_p": 0.05,
-		},
+		}),
 	}, false)
 	if err != nil {
 		t.Fatalf("buildRequest returned error: %v", err)
@@ -263,7 +263,7 @@ func TestConfigAllowedUnknownProviderOptionsRejectGeneratedFieldConflict(t *test
 		Name: "mapped",
 		Request: RequestSpec{
 			AllowedProviderOptions: map[string]struct{}{"known": {}},
-			ProviderOptions: func(options litellm.ProviderOptions, body map[string]any, _ *litellm.Request) error {
+			ProviderOptions: func(options map[string]any, body map[string]any, _ *litellm.Request) error {
 				body["known"] = options["known"]
 				return nil
 			},
@@ -275,10 +275,10 @@ func TestConfigAllowedUnknownProviderOptionsRejectGeneratedFieldConflict(t *test
 	_, _, err = provider.buildRequest(&litellm.Request{
 		Model:    "m",
 		Messages: []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			"known":    "typed",
 			"messages": []any{"override"},
-		},
+		}),
 	}, false)
 	if err == nil || !strings.Contains(err.Error(), `provider option "messages" conflicts with generated request field`) {
 		t.Fatalf("expected generated field conflict, got %v", err)
@@ -301,7 +301,7 @@ func TestProviderOptionsRejectGeneratedFieldConflict(t *testing.T) {
 	_, _, err = provider.buildRequest(&litellm.Request{
 		Model:           "m",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{"model": "override"},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"model": "override"}),
 	}, false)
 	if err == nil || !strings.Contains(err.Error(), `provider option "model" conflicts with generated request field`) {
 		t.Fatalf("expected generated field conflict, got %v", err)
@@ -316,7 +316,7 @@ func TestChatReturnsStructuredValidationError(t *testing.T) {
 	_, err = provider.Chat(context.Background(), &litellm.Request{
 		Model:           "m",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{"unknown": true},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"unknown": true}),
 	})
 	if err == nil || !litellm.IsValidationError(err) {
 		t.Fatalf("expected structured validation error, got %v", err)
@@ -524,7 +524,7 @@ func TestChatConvertsPromptTokensDetailsCachedTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chat returned error: %v", err)
 	}
-	if resp.Usage.CacheReadTokens != 7 {
+	if *resp.Usage.CacheReadTokens != 7 {
 		t.Fatalf("cache read tokens = %d, want 7", resp.Usage.CacheReadTokens)
 	}
 }
@@ -754,4 +754,13 @@ func mustTool(t *testing.T, name, description string, schema any) litellm.Tool {
 		t.Fatalf("NewTool: %v", err)
 	}
 	return tool
+}
+
+func mustProviderOptions(t *testing.T, values map[string]any) litellm.ProviderOptions {
+	t.Helper()
+	o, err := litellm.NewProviderOptions(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
 }

@@ -142,7 +142,7 @@ func reasoningEffort(effort string) (string, error) {
 	}
 }
 
-func mapExtra(options litellm.ProviderOptions, body map[string]any, req *litellm.Request) error {
+func mapExtra(options map[string]any, body map[string]any, req *litellm.Request) error {
 	for key, value := range options {
 		switch key {
 		case ProviderOptionCacheRetention:
@@ -410,4 +410,15 @@ func addAdditionalPropertiesFalse(schema any) any {
 	default:
 		return schema
 	}
+}
+
+// NewClient builds the provider from cfg and wraps it in a ready *litellm.Client.
+// It is a convenience for the common single-provider case. It calls New(cfg)
+// and then litellm.New(provider, opts...).
+func NewClient(cfg Config, opts ...litellm.ClientOption) (*litellm.Client, error) {
+	p, err := New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return litellm.New(p, opts...)
 }

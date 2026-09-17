@@ -68,7 +68,7 @@ func TestProviderOptions(t *testing.T) {
 		Model:    "glm-5.2",
 		Messages: []litellm.Message{litellm.UserText("hi")},
 		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			ProviderOptionDoSample:   false,
 			ProviderOptionRequestID:  "request-123",
 			ProviderOptionToolStream: true,
@@ -76,7 +76,7 @@ func TestProviderOptions(t *testing.T) {
 			ProviderOptionThinking: map[string]any{
 				"clear_thinking": false,
 			},
-		},
+		}),
 	})
 	if body["do_sample"] != false ||
 		body["request_id"] != "request-123" ||
@@ -94,12 +94,12 @@ func TestToolChoiceContract(t *testing.T) {
 	body := captureBody(t, &litellm.Request{
 		Model:      "glm-5.2",
 		Messages:   []litellm.Message{litellm.UserText("hi")},
-		ToolChoice: "auto",
+		ToolChoice: &litellm.ToolChoice{Mode: "auto"},
 	})
 	if body["tool_choice"] != "auto" {
 		t.Fatalf("body = %#v", body)
 	}
-	if err := validateToolChoice("required"); err == nil || !strings.Contains(err.Error(), `only supports "auto"`) {
+	if err := validateToolChoice(&litellm.ToolChoice{Mode: "required"}); err == nil || !strings.Contains(err.Error(), `only supports "auto"`) {
 		t.Fatalf("expected tool_choice error, got %v", err)
 	}
 
@@ -116,7 +116,7 @@ func TestProviderOptionsValidation(t *testing.T) {
 	err := chatErr(t, &litellm.Request{
 		Model:           "glm-5.2",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{"unknown": true},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"unknown": true}),
 	})
 	if err == nil || !strings.Contains(err.Error(), `unsupported provider option "unknown"`) {
 		t.Fatalf("expected unknown option error, got %v", err)
@@ -126,9 +126,9 @@ func TestProviderOptionsValidation(t *testing.T) {
 		Model:    "glm-5.2",
 		Messages: []litellm.Message{litellm.UserText("hi")},
 		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			ProviderOptionThinking: map[string]any{"type": "disabled"},
-		},
+		}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "conflicts with Request.Thinking") {
 		t.Fatalf("expected thinking conflict error, got %v", err)
@@ -161,7 +161,7 @@ func TestReasoningContentRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
-	if resp.Model != "glm-5.2" || resp.Text() != "ok" || resp.Reasoning() != "think" || resp.Usage.CacheReadTokens != 4 {
+	if resp.Model != "glm-5.2" || resp.Text() != "ok" || resp.Reasoning() != "think" || *resp.Usage.CacheReadTokens != 4 {
 		t.Fatalf("response = model %q text %q reasoning %q usage %+v", resp.Model, resp.Text(), resp.Reasoning(), resp.Usage)
 	}
 
@@ -170,9 +170,9 @@ func TestReasoningContentRoundTrip(t *testing.T) {
 		Messages: []litellm.Message{
 			litellm.Assistant(resp.Blocks...),
 		},
-		ProviderOptions: litellm.ProviderOptions{
+		ProviderOptions: mustProviderOptions(t, map[string]any{
 			ProviderOptionThinking: map[string]any{"clear_thinking": false},
-		},
+		}),
 	})
 	if err != nil {
 		t.Fatalf("round-trip Chat: %v", err)
@@ -219,7 +219,7 @@ func TestStreamReasoningContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if resp.Model != "glm-5.2" || resp.Text() != "ok" || resp.Reasoning() != "think" || resp.Usage.CacheReadTokens != 4 {
+	if resp.Model != "glm-5.2" || resp.Text() != "ok" || resp.Reasoning() != "think" || *resp.Usage.CacheReadTokens != 4 {
 		t.Fatalf("response = model %q text %q reasoning %q usage %+v", resp.Model, resp.Text(), resp.Reasoning(), resp.Usage)
 	}
 }
@@ -305,4 +305,13 @@ func chatErr(t *testing.T, req *litellm.Request) error {
 	}
 	_, err = p.Chat(context.Background(), req)
 	return err
+}
+
+func mustProviderOptions(t *testing.T, values map[string]any) litellm.ProviderOptions {
+	t.Helper()
+	o, err := litellm.NewProviderOptions(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
 }

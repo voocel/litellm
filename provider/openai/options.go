@@ -1,7 +1,9 @@
 package openai
 
 import (
+	"encoding/json"
 	"fmt"
+	"strconv"
 )
 
 const (
@@ -283,6 +285,12 @@ func optionBool(key string, value any) (bool, error) {
 
 func optionFloat64(key string, value any) (float64, error) {
 	switch v := value.(type) {
+	case json.Number:
+		n, err := v.Float64()
+		if err != nil {
+			return 0, fmt.Errorf("openai: provider option %q must be number: %w", key, err)
+		}
+		return n, nil
 	case float64:
 		return v, nil
 	case float32:
@@ -298,6 +306,11 @@ func optionFloat64(key string, value any) (float64, error) {
 
 func optionInt(key string, value any) (int, error) {
 	switch v := value.(type) {
+	case json.Number:
+		n, err := strconv.ParseInt(string(v), 10, strconv.IntSize)
+		if err == nil {
+			return int(n), nil
+		}
 	case int:
 		return v, nil
 	case int64:

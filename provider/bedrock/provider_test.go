@@ -110,12 +110,12 @@ func TestBuildRequestConvertsToolChoice(t *testing.T) {
 
 	for _, test := range []struct {
 		name   string
-		choice litellm.ToolChoice
+		choice *litellm.ToolChoice
 		want   string
 	}{
-		{name: "auto", choice: "auto", want: `{"auto":{}}`},
-		{name: "required", choice: "required", want: `{"any":{}}`},
-		{name: "named function", choice: map[string]any{"type": "function", "function": map[string]any{"name": "lookup"}}, want: `{"tool":{"name":"lookup"}}`},
+		{name: "auto", choice: &litellm.ToolChoice{Mode: "auto"}, want: `{"auto":{}}`},
+		{name: "required", choice: &litellm.ToolChoice{Mode: "required"}, want: `{"any":{}}`},
+		{name: "named function", choice: &litellm.ToolChoice{Name: "lookup"}, want: `{"tool":{"name":"lookup"}}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			wire, err := provider.buildRequest(&litellm.Request{
@@ -141,7 +141,7 @@ func TestBuildRequestConvertsToolChoice(t *testing.T) {
 		Model:      "model",
 		Messages:   []litellm.Message{litellm.UserText("hi")},
 		Tools:      []litellm.Tool{tool},
-		ToolChoice: "none",
+		ToolChoice: &litellm.ToolChoice{Mode: "none"},
 	})
 	if err != nil {
 		t.Fatalf("buildRequest none: %v", err)
@@ -298,7 +298,7 @@ func TestBuildRequestRejectsUnknownProviderOption(t *testing.T) {
 	_, err := provider.buildRequest(&litellm.Request{
 		Model:           "anthropic.claude-sonnet-4-20250514-v1:0",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{"unknown": true},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"unknown": true}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "unsupported provider option") {
 		t.Fatalf("expected provider option error, got %v", err)
@@ -319,7 +319,7 @@ func TestBuildRequestRejectsInvalidCacheRetention(t *testing.T) {
 	_, err = provider.buildRequest(&litellm.Request{
 		Model:           "anthropic.claude-sonnet-4-20250514-v1:0",
 		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: litellm.ProviderOptions{"cache_retention": "forever"},
+		ProviderOptions: mustProviderOptions(t, map[string]any{"cache_retention": "forever"}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "unsupported cache retention") {
 		t.Fatalf("expected provider option cache retention error, got %v", err)
@@ -397,7 +397,7 @@ func TestChatSignsRequestAndConvertsResponse(t *testing.T) {
 	if len(calls) != 1 || calls[0].ID != "toolu_1" || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
 		t.Fatalf("tool calls = %+v", calls)
 	}
-	if resp.Usage.InputTokens != 7 || resp.Usage.OutputTokens != 7 || resp.Usage.CacheReadTokens != 2 || resp.Usage.CacheWriteTokens != 3 {
+	if *resp.Usage.InputTokens != 10 || *resp.Usage.OutputTokens != 7 || *resp.Usage.CacheReadTokens != 2 || *resp.Usage.CacheWriteTokens != 3 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
 	if resp.FinishReason != litellm.FinishReasonToolCall {
@@ -449,7 +449,7 @@ func TestStreamConvertsEventStreamToTypedEvents(t *testing.T) {
 	if len(calls) != 1 || calls[0].ID != "toolu_1" || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
 		t.Fatalf("tool calls = %+v", calls)
 	}
-	if resp.Usage.InputTokens != 7 || resp.Usage.OutputTokens != 7 || resp.Usage.CacheReadTokens != 2 || resp.Usage.CacheWriteTokens != 3 {
+	if *resp.Usage.InputTokens != 10 || *resp.Usage.OutputTokens != 7 || *resp.Usage.CacheReadTokens != 2 || *resp.Usage.CacheWriteTokens != 3 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
 	if resp.FinishReason != litellm.FinishReasonToolCall {
@@ -564,4 +564,13 @@ func mustTool(t *testing.T, name, description string, schema any) litellm.Tool {
 		t.Fatalf("NewTool: %v", err)
 	}
 	return tool
+}
+
+func mustProviderOptions(t *testing.T, values map[string]any) litellm.ProviderOptions {
+	t.Helper()
+	o, err := litellm.NewProviderOptions(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
 }

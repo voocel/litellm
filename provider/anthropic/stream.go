@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/internal/tokenusage"
 )
 
 type stream struct {
@@ -19,6 +20,7 @@ type stream struct {
 	done             bool
 	model            string
 	usage            litellm.Usage
+	wireUsage        anthropicUsage
 	finish           litellm.FinishReason
 	contentBlocks    map[int]bool
 	finishRaw        string
@@ -148,7 +150,7 @@ func (s *stream) events(chunk streamChunk, raw json.RawMessage) ([]litellm.Event
 				s.model = chunk.Message.Model
 			}
 			if chunk.Message.Usage != nil {
-				s.usage = convertStreamUsage(chunk.Message.Usage, s.model)
+				s.mergeUsage(chunk.Message.Usage)
 				return []litellm.Event{litellm.UsageEvent{Usage: s.usage}}, nil
 			}
 		}
@@ -248,30 +250,30 @@ func convertStreamUsage(u *anthropicUsage, model string) litellm.Usage {
 	if u == nil {
 		return litellm.Usage{}
 	}
+	// Anthropic reports uncached input separately from cache reads and creation.
+	input := tokenusage.AddDetails(u.InputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens)
 	return litellm.Usage{
-		InputTokens:      u.InputTokens + u.CacheReadInputTokens,
-		OutputTokens:     u.OutputTokens,
-		TotalTokens:      u.InputTokens + u.CacheReadInputTokens + u.OutputTokens,
+		InputTokens: input, OutputTokens: u.OutputTokens,
+		TotalTokens:      tokenusage.Sum(input, u.OutputTokens),
 		CacheReadTokens:  u.CacheReadInputTokens,
 		CacheWriteTokens: u.CacheCreationInputTokens,
-		Provider:         "anthropic",
-		Model:            model,
+		Provider:         "anthropic", Model: model,
 	}
 }
 
 func (s *stream) mergeUsage(u *anthropicUsage) {
-	next := convertStreamUsage(u, s.model)
-	if next.InputTokens > 0 || u.CacheReadInputTokens > 0 {
-		s.usage.InputTokens = next.InputTokens
-		s.usage.CacheReadTokens = next.CacheReadTokens
+	// Stream counters are cumulative snapshots; explicit zero overwrites earlier data.
+	if u.InputTokens != nil {
+		s.wireUsage.InputTokens = u.InputTokens
 	}
-	if next.OutputTokens > 0 {
-		s.usage.OutputTokens = next.OutputTokens
+	if u.OutputTokens != nil {
+		s.wireUsage.OutputTokens = u.OutputTokens
 	}
-	if next.CacheWriteTokens > 0 {
-		s.usage.CacheWriteTokens = next.CacheWriteTokens
+	if u.CacheReadInputTokens != nil {
+		s.wireUsage.CacheReadInputTokens = u.CacheReadInputTokens
 	}
-	s.usage.TotalTokens = s.usage.InputTokens + s.usage.OutputTokens
-	s.usage.Provider = "anthropic"
-	s.usage.Model = s.model
+	if u.CacheCreationInputTokens != nil {
+		s.wireUsage.CacheCreationInputTokens = u.CacheCreationInputTokens
+	}
+	s.usage = convertStreamUsage(&s.wireUsage, s.model)
 }

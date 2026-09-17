@@ -131,7 +131,7 @@ func thinkingWarnings(req *litellm.Request) []litellm.Warning {
 	}}
 }
 
-func mapProviderOptions(options litellm.ProviderOptions, body map[string]any, req *litellm.Request) error {
+func mapProviderOptions(options map[string]any, body map[string]any, req *litellm.Request) error {
 	thinkingEnabled := req.Thinking == nil || req.Thinking.Mode != litellm.ThinkingDisabled
 	if thinkingEnabled {
 		if req.Temperature != nil || req.TopP != nil {
@@ -148,4 +148,15 @@ func mapProviderOptions(options litellm.ProviderOptions, body map[string]any, re
 		body[key] = value
 	}
 	return nil
+}
+
+// NewClient builds the provider from cfg and wraps it in a ready *litellm.Client.
+// It is a convenience for the common single-provider case. It calls New(cfg)
+// and then litellm.New(provider, opts...).
+func NewClient(cfg Config, opts ...litellm.ClientOption) (*litellm.Client, error) {
+	p, err := New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return litellm.New(p, opts...)
 }

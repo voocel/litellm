@@ -3,6 +3,7 @@ package anthropic
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/voocel/litellm"
@@ -149,74 +150,21 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) (*anthropicRe
 	return out, nil, nil
 }
 
-func convertToolChoice(choice litellm.ToolChoice) (any, error) {
+func convertToolChoice(choice *litellm.ToolChoice) (any, error) {
+	if err := choice.Validate(); err != nil {
+		return nil, err
+	}
 	if choice == nil {
 		return nil, nil
 	}
-	if value, ok := choice.(string); ok {
-		switch strings.ToLower(strings.TrimSpace(value)) {
-		case "auto", "none":
-			return map[string]any{"type": strings.ToLower(strings.TrimSpace(value))}, nil
-		case "required", "any":
-			return map[string]any{"type": "any"}, nil
-		default:
-			return nil, fmt.Errorf("anthropic: unsupported tool_choice %q", value)
-		}
+	if choice.Name != "" {
+		return map[string]any{"type": "tool", "name": choice.Name}, nil
 	}
-	data, err := json.Marshal(choice)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic: tool_choice must be an object: %w", err)
+	mode := string(choice.Mode)
+	if choice.Mode == litellm.ToolChoiceRequired {
+		mode = "any"
 	}
-	var decoded map[string]any
-	if err := json.Unmarshal(data, &decoded); err != nil || decoded == nil {
-		return nil, fmt.Errorf("anthropic: tool_choice must be an object")
-	}
-	typ, _ := decoded["type"].(string)
-	typ = strings.ToLower(strings.TrimSpace(typ))
-	switch typ {
-	case "auto", "any":
-		out := map[string]any{"type": typ}
-		if err := copyDisableParallelToolUse(decoded, out); err != nil {
-			return nil, err
-		}
-		return out, nil
-	case "none":
-		return map[string]any{"type": typ}, nil
-	case "required":
-		out := map[string]any{"type": "any"}
-		if err := copyDisableParallelToolUse(decoded, out); err != nil {
-			return nil, err
-		}
-		return out, nil
-	case "tool", "function":
-		name, _ := decoded["name"].(string)
-		if function, ok := decoded["function"].(map[string]any); ok && name == "" {
-			name, _ = function["name"].(string)
-		}
-		if strings.TrimSpace(name) == "" {
-			return nil, fmt.Errorf("anthropic: named tool_choice requires a tool name")
-		}
-		out := map[string]any{"type": "tool", "name": name}
-		if err := copyDisableParallelToolUse(decoded, out); err != nil {
-			return nil, err
-		}
-		return out, nil
-	default:
-		return nil, fmt.Errorf("anthropic: unsupported tool_choice type %q", typ)
-	}
-}
-
-func copyDisableParallelToolUse(from, to map[string]any) error {
-	value, ok := from["disable_parallel_tool_use"]
-	if !ok {
-		return nil
-	}
-	disable, ok := value.(bool)
-	if !ok {
-		return fmt.Errorf("anthropic: disable_parallel_tool_use must be boolean")
-	}
-	to["disable_parallel_tool_use"] = disable
-	return nil
+	return map[string]any{"type": mode}, nil
 }
 
 func convertResponseFormat(format *litellm.ResponseFormat) (*anthropicOutputFormat, error) {
@@ -238,7 +186,12 @@ func convertResponseFormat(format *litellm.ResponseFormat) (*anthropicOutputForm
 	}
 }
 
-func anthropicMetadata(options litellm.ProviderOptions) (map[string]any, error) {
+func anthropicMetadata(rawOptions litellm.ProviderOptions) (map[string]any, error) {
+	options, err := rawOptions.Decode()
+	if err != nil {
+		return nil, err
+	}
+
 	if len(options) == 0 {
 		return nil, nil
 	}
@@ -294,7 +247,7 @@ func validateSampling(temperature, topP *float64) error {
 	if temperature != nil && *temperature != 1 {
 		return fmt.Errorf("anthropic: temperature must be 1 on current Claude models, got %g", *temperature)
 	}
-	if topP != nil && (*topP < 0.99 || *topP > 1) {
+	if topP != nil && (math.IsNaN(*topP) || *topP < 0.99 || *topP > 1) {
 		return fmt.Errorf("anthropic: top_p must be between 0.99 and 1 on current Claude models, got %g", *topP)
 	}
 	return nil
@@ -487,6 +440,9 @@ func convertBlocks(blocks []litellm.Block) ([]anthropicContent, error) {
 				out = append(out, anthropicContent{Type: "thinking", Thinking: b.Text, Signature: b.Signature, CacheControl: cache})
 			}
 		case litellm.ToolUseBlock:
+			if err := validateToolID(b.ID); err != nil {
+				return nil, err
+			}
 			input := map[string]any{}
 			if len(b.Arguments) > 0 {
 				if err := json.Unmarshal(b.Arguments, &input); err != nil {
@@ -502,6 +458,9 @@ func convertBlocks(blocks []litellm.Block) ([]anthropicContent, error) {
 			}
 			out = append(out, anthropicContent{Type: "tool_use", ID: b.ID, Name: b.Name, Input: &input, CacheControl: cache})
 		case litellm.ToolResultBlock:
+			if err := validateToolID(b.ToolUseID); err != nil {
+				return nil, err
+			}
 			content, err := convertToolResultContent(b.Content)
 			if err != nil {
 				return nil, err
@@ -531,4 +490,13 @@ func convertToolResultContent(blocks []litellm.Block) (any, error) {
 		}
 	}
 	return convertBlocks(blocks)
+}
+
+func validateToolID(id string) error {
+	if id == "" || strings.IndexFunc(id, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-')
+	}) >= 0 {
+		return fmt.Errorf("anthropic: tool id %q must contain only letters, digits, underscores or hyphens", id)
+	}
+	return nil
 }
