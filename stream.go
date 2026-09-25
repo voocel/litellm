@@ -461,6 +461,9 @@ func mergeBlockMetadata(block, final Block) (Block, error) {
 		if f.Logprobs != nil {
 			b.Logprobs = f.Logprobs
 		}
+		if f.Signature != "" {
+			b.Signature = f.Signature
+		}
 		return b, nil
 	case ReasoningBlock:
 		f, ok := final.(ReasoningBlock)

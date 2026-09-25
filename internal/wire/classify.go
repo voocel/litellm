@@ -128,6 +128,12 @@ func vendorErrorType(code, message string) (litellm.ErrorType, bool) {
 	if containsAny(haystack, contentFilterTokens) {
 		return litellm.ErrorTypeContentFilter, true
 	}
+	if containsAny(haystack, quotaTokens) {
+		return litellm.ErrorTypeQuota, true
+	}
+	if containsAny(haystack, authTokens) {
+		return litellm.ErrorTypeAuth, true
+	}
 	return "", false
 }
 
@@ -174,6 +180,22 @@ var contentFilterTokens = []string{
 	"content filtering policy",
 }
 
+// quotaTokens are OpenAI billing codes, sent with 429 but not cleared by
+// retrying: insufficient_quota and its specific successors.
+var quotaTokens = []string{
+	"insufficient_quota",
+	"credit_balance_exhausted",
+	"spend_limit_exceeded",
+	"usage_limit_exceeded",
+}
+
+// authTokens are invalid-key rejections sent without 401/403: Gemini answers
+// 400 with a fixed message and reason API_KEY_INVALID.
+var authTokens = []string{
+	"api key not valid",
+	"api_key_invalid",
+}
+
 func containsAny(haystack string, tokens []string) bool {
 	for _, token := range tokens {
 		if strings.Contains(haystack, token) {
@@ -208,7 +230,8 @@ func classifyHTTPError(statusCode int) litellm.ErrorType {
 
 // A provider error without an HTTP status has no known recovery semantics.
 func isTemporaryHTTPError(status int, kind litellm.ErrorType) bool {
-	if kind == litellm.ErrorTypeContentFilter || kind == litellm.ErrorTypeContextOverflow {
+	switch kind {
+	case litellm.ErrorTypeContentFilter, litellm.ErrorTypeContextOverflow, litellm.ErrorTypeQuota, litellm.ErrorTypeAuth:
 		return false
 	}
 	switch status {

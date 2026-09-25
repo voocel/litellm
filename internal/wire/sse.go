@@ -72,7 +72,7 @@ func (r *SSEReader) readLine() (string, error) {
 	for {
 		chunk, err := r.r.ReadSlice('\n')
 		if len(buf)+len(chunk) > maxLine {
-			return "", litellm.NewError(r.provider, litellm.ErrorTypeProvider, fmt.Sprintf("%s: stream line exceeds %d bytes", r.provider, maxLine), nil)
+			return "", litellm.NewError(r.provider, litellm.ErrorTypeProvider, fmt.Sprintf("stream line exceeds %d bytes", maxLine), nil)
 		}
 		buf = append(buf, chunk...)
 		switch {

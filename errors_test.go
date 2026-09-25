@@ -70,4 +70,10 @@ func TestWrapErrorPreservesCauseAndClassification(t *testing.T) {
 	if !IsTimeoutError(deadline) || IsTemporaryError(deadline) || !errors.Is(deadline, context.DeadlineExceeded) {
 		t.Fatalf("deadline error = %v", deadline)
 	}
+	// A provider error caused by cancellation is reclassified without
+	// repeating its provider prefix.
+	read := WrapError("test", ErrorTypeProvider, NewError("test", ErrorTypeProvider, "read stream", context.DeadlineExceeded))
+	if !IsTimeoutError(read) || read.Error() != "test: read stream: context deadline exceeded" {
+		t.Fatalf("read error = %v", read)
+	}
 }

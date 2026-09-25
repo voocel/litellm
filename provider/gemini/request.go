@@ -112,8 +112,8 @@ func convertBlocks(blocks []litellm.Block, names map[string]string) ([]part, err
 	for _, block := range blocks {
 		switch b := block.(type) {
 		case litellm.TextBlock:
-			if b.Text != "" {
-				out = append(out, part{Text: b.Text})
+			if b.Text != "" || b.Signature != "" {
+				out = append(out, part{Text: new(b.Text), ThoughtSignature: b.Signature})
 			}
 		case litellm.ImageBlock:
 			converted, err := convertImage(b)
@@ -123,7 +123,7 @@ func convertBlocks(blocks []litellm.Block, names map[string]string) ([]part, err
 			out = append(out, converted)
 		case litellm.ReasoningBlock:
 			if b.Text != "" || b.Signature != "" {
-				out = append(out, part{Text: b.Text, Thought: true, ThoughtSignature: b.Signature})
+				out = append(out, part{Text: new(b.Text), Thought: true, ThoughtSignature: b.Signature})
 			}
 		case litellm.ToolUseBlock:
 			args := json.RawMessage("{}")

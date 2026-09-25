@@ -32,17 +32,18 @@ func Do(client litellm.HTTPClient, req *http.Request, provider, operation string
 	return resp, nil
 }
 
-// ChunkError converts the error field of an OpenAI-style stream chunk, or
+// ErrorField converts the error member of an OpenAI-style response body or
+// stream chunk, which gateways such as OpenRouter send with HTTP 200, or
 // returns nil when it is absent or null. A numeric code is the upstream HTTP
-// status (OpenRouter) and is classified as one; otherwise the code,
-// metadata.error_type or type is used.
-func ChunkError(provider string, raw json.RawMessage) error {
+// status and is classified as one; otherwise the code, metadata.error_type or
+// type is used.
+func ErrorField(provider string, raw json.RawMessage) error {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
 	}
 	var text string
 	if json.Unmarshal(raw, &text) == nil {
-		return StreamError(provider, "", "stream error: "+text)
+		return StreamError(provider, "", text)
 	}
 	var e struct {
 		Code     json.RawMessage `json:"code"`
@@ -60,7 +61,7 @@ func ChunkError(provider string, raw json.RawMessage) error {
 	var code string
 	_ = json.Unmarshal(e.Code, &code)
 	message := cmp.Or(e.Message, string(raw))
-	return StreamError(provider, cmp.Or(code, e.Metadata.ErrorType, e.Type), "stream error: "+message)
+	return StreamError(provider, cmp.Or(code, e.Metadata.ErrorType, e.Type), message)
 }
 
 // HTTPClient returns c, or http.DefaultClient when c is nil.

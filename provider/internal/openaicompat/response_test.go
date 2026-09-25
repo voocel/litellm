@@ -76,6 +76,15 @@ func TestChatResponse(t *testing.T) {
 			},
 		},
 		{
+			name:  "argument-less tool call is an empty object, as streamed",
+			newFn: plain,
+			body:  `{"choices":[{"message":{"tool_calls":[{"id":"c","type":"function","function":{"name":"f","arguments":""}}]},"finish_reason":"tool_calls"}]}`,
+			want: &litellm.Response{
+				Blocks: []litellm.Block{litellm.ToolUseBlock{ID: "c", Name: "f", Arguments: json.RawMessage(`{}`)}},
+				Model:  "m", Provider: "test", FinishReason: litellm.FinishReasonToolCall, FinishReasonRaw: "tool_calls",
+			},
+		},
+		{
 			name:  "cache usage",
 			newFn: plain,
 			body:  `{"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":1,"total_tokens":10,"prompt_tokens_details":{"cached_tokens":4,"cache_write_tokens":2}}}`,
@@ -113,5 +122,9 @@ func TestChatErrors(t *testing.T) {
 	}
 	if _, err := compattest.Chat(t, plain, `{`); !litellm.IsProviderError(err) {
 		t.Fatalf("malformed body: %v", err)
+	}
+	// Gateways report upstream failures with HTTP 200 and an error body.
+	if _, err := compattest.Chat(t, plain, `{"error":{"code":429,"message":"Rate limited"}}`); !litellm.IsRateLimitError(err) {
+		t.Fatalf("error body: %v", err)
 	}
 }

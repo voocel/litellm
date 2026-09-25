@@ -3,9 +3,10 @@ package openaicompat
 import "encoding/json"
 
 type chatResponse struct {
-	Model   string   `json:"model"`
-	Choices []choice `json:"choices"`
-	Usage   usage    `json:"usage"`
+	Model   string          `json:"model"`
+	Choices []choice        `json:"choices"`
+	Usage   usage           `json:"usage"`
+	Error   json.RawMessage `json:"error"`
 }
 
 type choice struct {

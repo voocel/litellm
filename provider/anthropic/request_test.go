@@ -121,6 +121,7 @@ func TestBuildRequest(t *testing.T) {
 			name: "reasoning replays signature and redacted data",
 			req: withMessages(litellm.UserText("hi"), litellm.Assistant(
 				litellm.ReasoningBlock{Text: "t", Signature: "sig"},
+				litellm.ReasoningBlock{Signature: "omitted"},
 				litellm.ReasoningBlock{Redacted: []byte("opaque")},
 				litellm.ToolUseBlock{ID: "t1", Name: "f", Arguments: json.RawMessage(`{"q":"x"}`)},
 			)),
@@ -128,6 +129,7 @@ func TestBuildRequest(t *testing.T) {
 				{"role":"user","content":[{"type":"text","text":"hi"}]},
 				{"role":"assistant","content":[
 					{"type":"thinking","thinking":"t","signature":"sig"},
+					{"type":"thinking","thinking":"","signature":"omitted"},
 					{"type":"redacted_thinking","data":"opaque"},
 					{"type":"tool_use","id":"t1","name":"f","input":{"q":"x"}}]}]`},
 		},

@@ -19,7 +19,7 @@ type stream struct {
 	blocks    wire.BlockTracker[int] // key: run number
 	run       int
 	open      string // kind of the open text or thought run
-	signature string // latest thought signature of the open run
+	signature string // signature of the open run, delivered when it ends
 	toolCalls bool
 }
 
@@ -50,7 +50,7 @@ func (s *stream) Next() (event litellm.Event, err error) {
 		if err := json.Unmarshal([]byte(frame.Data), &chunk); err != nil {
 			return nil, litellm.NewError("gemini", litellm.ErrorTypeProvider, "parse stream chunk", err)
 		}
-		if err := wire.ChunkError("gemini", chunk.Error); err != nil {
+		if err := wire.ErrorField("gemini", chunk.Error); err != nil {
 			return nil, err
 		}
 		s.pending = s.events(s.pending, chunk)
@@ -80,18 +80,9 @@ func (s *stream) events(events []litellm.Event, chunk response) []litellm.Event 
 	for _, p := range candidate.Content.Parts {
 		switch b := partBlock(p).(type) {
 		case litellm.TextBlock:
-			events = s.continueRun(events, "text", litellm.TextBlock{})
-			index, _ := s.blocks.Index(s.run)
-			events = append(events, litellm.TextDelta{Index: index, Text: b.Text})
+			events = s.extendRun(events, "text", b.Text, b.Signature)
 		case litellm.ReasoningBlock:
-			events = s.continueRun(events, "reasoning", litellm.ReasoningBlock{})
-			if b.Signature != "" {
-				s.signature = b.Signature
-			}
-			if b.Text != "" {
-				index, _ := s.blocks.Index(s.run)
-				events = append(events, litellm.ReasoningDelta{Index: index, Text: b.Text})
-			}
+			events = s.extendRun(events, "reasoning", b.Text, b.Signature)
 		case litellm.ToolUseBlock:
 			events = s.endRun(events)
 			if p.FunctionCall.ID == "" {
@@ -105,31 +96,54 @@ func (s *stream) events(events []litellm.Event, chunk response) []litellm.Event 
 			s.toolCalls = true
 		}
 	}
+	if candidate.FinishMessage != "" {
+		events = append(events, litellm.WarningEvent{Warning: finishMessageWarning(candidate.FinishMessage)})
+	}
 	if candidate.FinishReason != "" {
 		return s.finish(events, candidate.FinishReason, finishReason(candidate.FinishReason, s.toolCalls))
 	}
 	return events
 }
 
-// continueRun keeps the open run when it has the same kind, else starts one.
-func (s *stream) continueRun(events []litellm.Event, kind string, block litellm.Block) []litellm.Event {
-	if s.open == kind {
-		return events
+// extendRun adds a text or thought part to the open run of its kind. A new
+// run starts on a change of kind, or when both carry a signature: signatures
+// cannot be merged.
+func (s *stream) extendRun(events []litellm.Event, kind, text, signature string) []litellm.Event {
+	if s.open != kind || (signature != "" && s.signature != "") {
+		events = s.endRun(events)
+		s.run++
+		s.open = kind
+		var block litellm.Block = litellm.TextBlock{}
+		if kind == "reasoning" {
+			block = litellm.ReasoningBlock{}
+		}
+		events, _ = s.blocks.Open(events, s.run, block)
 	}
-	events = s.endRun(events)
-	s.run++
-	s.open = kind
-	events, _ = s.blocks.Open(events, s.run, block)
+	if text != "" {
+		index, _ := s.blocks.Index(s.run)
+		if kind == "reasoning" {
+			events = append(events, litellm.ReasoningDelta{Index: index, Text: text})
+		} else {
+			events = append(events, litellm.TextDelta{Index: index, Text: text})
+		}
+	}
+	if signature != "" {
+		s.signature = signature
+	}
 	return events
 }
 
+// endRun closes the open run, delivering its signature if any.
 func (s *stream) endRun(events []litellm.Event) []litellm.Event {
 	if s.open == "" {
 		return events
 	}
 	var final litellm.Block
 	if s.signature != "" {
-		final = litellm.ReasoningBlock{Signature: s.signature}
+		final = litellm.TextBlock{Signature: s.signature}
+		if s.open == "reasoning" {
+			final = litellm.ReasoningBlock{Signature: s.signature}
+		}
 	}
 	s.open, s.signature = "", ""
 	return s.blocks.Close(events, s.run, final)

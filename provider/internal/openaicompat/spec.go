@@ -60,9 +60,6 @@ type Spec struct {
 	EmptyToolCallContent bool
 	// OmitStreamOptions leaves stream_options out of stream requests.
 	OmitStreamOptions bool
-	// CumulativeStream reports that stream deltas carry all text so far rather
-	// than increments.
-	CumulativeStream bool
 }
 
 func (s Spec) maxTokensField() string {

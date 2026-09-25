@@ -30,7 +30,7 @@ Each adapter maps the shared `litellm.Request` onto its vendor's wire format and
 | Grok | — | error (cannot be disabled) | `reasoning_effort` | error | ignored |
 | MiMo | `thinking.type: "enabled"` | `thinking.type: "disabled"` | error | error | ignored |
 | MiniMax | `thinking.type: "adaptive"` | `thinking.type: "disabled"` | error | error | ignored |
-| OpenRouter | `reasoning.enabled: true` | `reasoning.effort: "none"` | `reasoning.effort` | `reasoning.max_tokens` | ignored |
+| OpenRouter | `reasoning.enabled: true` | `reasoning.effort: "none"` | `reasoning.effort` | `reasoning.max_tokens` (not with `Effort`) | ignored |
 | Qwen | `enable_thinking: true` | `enable_thinking: false` | error | `thinking_budget` | ignored |
 
 Bedrock sends Claude's thinking format. For other model families, set their fields through the `additionalModelRequestFields` option instead of `Thinking`.
@@ -43,14 +43,16 @@ Reasoning is returned as `ReasoningBlock`. Adapters read these fields, in priori
 | --- | --- |
 | OpenAI Responses | `reasoning` items (summary, or `reasoning_text` content); the item is kept in `Extra` for replay |
 | Anthropic, Bedrock | thinking blocks with signature; redacted thinking in `Redacted` |
-| Gemini | `thought` parts with thought signatures |
+| Gemini | `thought` parts; thought signatures on thought and text parts are kept in `Signature` |
 | compat | `reasoning_content`, `reasoning` |
 | DeepSeek, GLM, Grok, MiMo, Qwen | `reasoning_content` |
 | MiniMax | `reasoning_details`, `reasoning_content` (requests set `reasoning_split: true`) |
 | Ollama | `reasoning`, `reasoning_content`, `thinking` |
 | OpenRouter | `reasoning_details`, `reasoning`, `reasoning_content`; `reasoning_details` is kept in `Extra` for replay |
 
-When a `ReasoningBlock` is sent back in history, Chat Completions adapters write it to the first field above. OpenRouter replays `reasoning_details` from `Extra`.
+When a `ReasoningBlock` is sent back in history, Chat Completions adapters write it to the first field above. OpenRouter replays `reasoning_details` from `Extra`; streamed fragments are merged into the entries a non-streaming response returns. OpenAI Responses replays only its own reasoning items from `Extra` and drops reasoning from other providers, since an input reasoning item needs its API-assigned id.
+
+Gemini requires the thought signature of each function call in the current turn. History from another provider has none; set `ToolUseBlock.Signature` to `gemini.SkipThoughtSignatureValidator` to replay such calls.
 
 ## Cache Breakpoints
 
@@ -66,4 +68,4 @@ When a `ReasoningBlock` is sent back in history, Chat Completions adapters write
 
 ## Provider Options
 
-`ProviderOptions` carry native wire fields: each key is a top-level field of the vendor's request body. Keys are checked against the adapter's list and rejected when unknown, except in `compat`, which passes every key through. When a key names a field the adapter also generates, an object is merged into it and an array is appended to it; any other collision is an error. The constants in each provider package name the accepted keys.
+`ProviderOptions` carry native wire fields: each key is a top-level field of the vendor's request body. Keys are checked against the adapter's list and rejected when unknown, except in `compat`, which passes every key through. When a key names a field the adapter also generates, an object is merged into it and an array is appended to it; any other collision is an error. Generated JSON outside the merged objects is sent byte for byte, so schema property order is kept. The constants in each provider package name the accepted keys.

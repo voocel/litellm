@@ -159,10 +159,16 @@ func WrapError(provider string, fallback ErrorType, err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return NewNetworkError(provider, err.Error(), err)
-	}
 	var e *Error
+	if isContextError(err) {
+		// Rebuild an *Error from its parts: its rendering already carries the
+		// provider prefix.
+		message, cause := err.Error(), err
+		if errors.As(err, &e) && isContextError(e.Cause) {
+			provider, message, cause = cmp.Or(e.Provider, provider), e.Message, e.Cause
+		}
+		return NewNetworkError(provider, message, cause)
+	}
 	if errors.As(err, &e) {
 		if e.Provider == "" {
 			copy := *e
@@ -172,6 +178,10 @@ func WrapError(provider string, fallback ErrorType, err error) error {
 		return err
 	}
 	return NewError(provider, fallback, err.Error(), err)
+}
+
+func isContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func isErrorType(err error, errorType ErrorType) bool {

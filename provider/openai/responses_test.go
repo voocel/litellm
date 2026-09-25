@@ -27,8 +27,11 @@ func TestBuildResponsesRequest(t *testing.T) {
 			Messages: []litellm.Message{
 				litellm.System("be brief"),
 				litellm.System("be kind"),
-				litellm.User(litellm.Text("look"), litellm.ImageBlock{URL: "https://x.test/a.png", Detail: "low"}, litellm.ImageBlock{Data: []byte("png"), MIME: "image/png"}),
+				litellm.User(litellm.Text("look"), litellm.ImageBlock{URL: "https://x.test/a.png", Detail: "low"}, litellm.ImageBlock{Data: []byte("png"), MIME: "image/png"}, litellm.ImageBlock{FileURI: "file-1"}),
 				litellm.Assistant(
+					// Reasoning from other providers has no Responses item.
+					litellm.ReasoningBlock{Text: "claude", Signature: "sig"},
+					litellm.ReasoningBlock{Text: "router", Extra: json.RawMessage(`[{"type":"reasoning.text","text":"router"}]`)},
 					litellm.ReasoningBlock{Text: "summary", Summary: true, Extra: json.RawMessage(`{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"enc"}`)},
 					litellm.Text("calling"),
 					litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
@@ -46,7 +49,8 @@ func TestBuildResponsesRequest(t *testing.T) {
 				{"type":"message","role":"user","content":[
 					{"type":"input_text","text":"look"},
 					{"type":"input_image","image_url":"https://x.test/a.png","detail":"low"},
-					{"type":"input_image","image_url":"data:image/png;base64,cG5n"}]},
+					{"type":"input_image","image_url":"data:image/png;base64,cG5n"},
+					{"type":"input_image","file_id":"file-1"}]},
 				{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"enc"},
 				{"type":"message","role":"assistant","content":[{"type":"output_text","text":"calling"}]},
 				{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}"},
@@ -112,7 +116,6 @@ func TestBuildResponsesRequestErrors(t *testing.T) {
 		{"budget", "budget_tokens is not supported", litellm.Request{Thinking: &litellm.Thinking{BudgetTokens: new(1024)}}},
 		{"cache TTL", "prompt_cache_options", litellm.Request{Messages: []litellm.Message{litellm.User(litellm.TextBlock{Text: "x", Cache: &litellm.CacheControl{TTL: litellm.CacheTTL5m}})}}},
 		{"image tool result", "only supports text content", litellm.Request{Messages: []litellm.Message{litellm.ToolResult("call_1", litellm.ImageURL("https://x.test/a.png"))}}},
-		{"invalid reasoning extra", "reasoning extra must be a JSON reasoning item", litellm.Request{Messages: []litellm.Message{litellm.Assistant(litellm.ReasoningBlock{Extra: json.RawMessage(`{`)})}}},
 		{"nested option conflict", `provider option "reasoning.summary" conflicts`, litellm.Request{Thinking: &litellm.Thinking{IncludeOutput: true}, ProviderOptions: providerOptions(t, map[string]any{ProviderOptionReasoning: map[string]any{"summary": "detailed"}})}},
 		{"option conflict", `provider option "tools" conflicts`, litellm.Request{Tools: []litellm.Tool{{Name: "ping"}}, ProviderOptions: providerOptions(t, map[string]any{ProviderOptionTools: map[string]any{"type": "web_search"}})}},
 	}
@@ -156,6 +159,14 @@ func TestConvertResponsesResponse(t *testing.T) {
 			Blocks:       []litellm.Block{litellm.ReasoningBlock{Text: "raw", Extra: json.RawMessage(rawText)}, litellm.TextBlock{Text: "no"}},
 			Model:        "req-model",
 			FinishReason: litellm.FinishReasonSafety, FinishReasonRaw: "completed",
+		},
+	}, {
+		name: "argument-less call is an empty object, as streamed",
+		body: `{"status":"completed","output":[{"type":"function_call","call_id":"c","name":"f","arguments":""}]}`,
+		want: litellm.Response{
+			Blocks:       []litellm.Block{litellm.ToolUseBlock{ID: "c", Name: "f", Arguments: json.RawMessage(`{}`)}},
+			Model:        "req-model",
+			FinishReason: litellm.FinishReasonToolCall, FinishReasonRaw: "completed",
 		},
 	}, {
 		name: "incomplete",

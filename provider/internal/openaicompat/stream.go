@@ -1,11 +1,11 @@
 package openaicompat
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/voocel/litellm"
 	"github.com/voocel/litellm/internal/wire"
@@ -40,10 +40,8 @@ type stream struct {
 	refused   bool
 	blocks    wire.BlockTracker[blockKey]
 	tools     map[int]*toolState
-	// Reasoning extras accumulate here and are delivered when the block ends.
-	extra         []json.RawMessage
-	lastText      string
-	lastReasoning string
+	// details accumulates reasoning_details, delivered when the block ends.
+	details []map[string]json.RawMessage
 }
 
 func newStream(resp *http.Response, req *litellm.Request, spec Spec) *stream {
@@ -68,35 +66,44 @@ func (s *stream) Next() (event litellm.Event, err error) {
 		}
 		frame, err := s.sse.Next()
 		if errors.Is(err, io.EOF) {
-			return nil, litellm.NewError(s.spec.Name, litellm.ErrorTypeProvider, "stream ended before [DONE]", nil)
+			// Some vendors close the stream after the finish chunk without
+			// [DONE]; only an EOF before any finish reason is a truncation.
+			if s.finishRaw == "" {
+				return nil, litellm.NewError(s.spec.Name, litellm.ErrorTypeProvider, "stream ended before a finish reason", nil)
+			}
+			s.end()
+			break
 		}
 		if err != nil {
 			return nil, err
 		}
 		if frame.Data == "[DONE]" {
-			s.pending = s.closeAll(s.pending)
-			finish := s.finish
-			if s.refused {
-				finish = litellm.FinishReasonSafety
-			}
-			s.pending = append(s.pending, litellm.DoneEvent{FinishReason: finish, FinishReasonRaw: s.finishRaw, Provider: s.spec.Name, Model: s.model})
-			s.done = true
+			s.end()
 			break
 		}
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(frame.Data), &chunk); err != nil {
 			return nil, litellm.NewError(s.spec.Name, litellm.ErrorTypeProvider, "parse stream chunk", err)
 		}
-		if err := wire.ChunkError(s.spec.Name, chunk.Error); err != nil {
+		if err := wire.ErrorField(s.spec.Name, chunk.Error); err != nil {
 			return nil, err
 		}
-		if s.pending, err = s.events(s.pending, chunk); err != nil {
-			return nil, err
-		}
+		s.pending = s.events(s.pending, chunk)
 	}
 	event = s.pending[0]
 	s.pending = s.pending[1:]
 	return event, nil
+}
+
+// end queues the remaining block ends and the DoneEvent.
+func (s *stream) end() {
+	s.pending = s.closeAll(s.pending)
+	finish := s.finish
+	if s.refused {
+		finish = litellm.FinishReasonSafety
+	}
+	s.pending = append(s.pending, litellm.DoneEvent{FinishReason: finish, FinishReasonRaw: s.finishRaw, Provider: s.spec.Name, Model: s.model})
+	s.done = true
 }
 
 func (s *stream) Close() error {
@@ -105,7 +112,7 @@ func (s *stream) Close() error {
 	return s.resp.Body.Close()
 }
 
-func (s *stream) events(events []litellm.Event, chunk streamChunk) ([]litellm.Event, error) {
+func (s *stream) events(events []litellm.Event, chunk streamChunk) []litellm.Event {
 	if chunk.Model != "" {
 		s.model = chunk.Model
 	}
@@ -113,16 +120,9 @@ func (s *stream) events(events []litellm.Event, chunk streamChunk) ([]litellm.Ev
 		events = append(events, litellm.UsageEvent{Usage: convertUsage(*chunk.Usage)})
 	}
 	for _, choice := range chunk.Choices {
-		var err error
-		if events, err = s.reasoning(events, choice.Delta.Fields); err != nil {
-			return nil, err
-		}
-		text, err := s.increment(choice.Delta.Content, &s.lastText)
-		if err != nil {
-			return nil, err
-		}
-		if text != "" {
-			events = s.text(events, text)
+		events = s.reasoning(events, choice.Delta.Fields)
+		if choice.Delta.Content != "" {
+			events = s.text(events, choice.Delta.Content)
 		}
 		if choice.Delta.Refusal != "" {
 			events = s.text(events, choice.Delta.Refusal)
@@ -136,7 +136,7 @@ func (s *stream) events(events []litellm.Event, chunk streamChunk) ([]litellm.Ev
 			events = s.closeAll(events)
 		}
 	}
-	return events, nil
+	return events
 }
 
 func (s *stream) text(events []litellm.Event, text string) []litellm.Event {
@@ -144,7 +144,7 @@ func (s *stream) text(events []litellm.Event, text string) []litellm.Event {
 	return append(events, litellm.TextDelta{Index: index, Text: text})
 }
 
-func (s *stream) reasoning(events []litellm.Event, fields map[string]json.RawMessage) ([]litellm.Event, error) {
+func (s *stream) reasoning(events []litellm.Event, fields map[string]json.RawMessage) []litellm.Event {
 	var text string
 	var extra json.RawMessage
 	for _, field := range s.spec.ReasoningFields {
@@ -156,38 +156,17 @@ func (s *stream) reasoning(events []litellm.Event, fields map[string]json.RawMes
 			text = reasoningText(raw)
 		}
 	}
-	text, err := s.increment(text, &s.lastReasoning)
-	if err != nil {
-		return nil, err
-	}
 	if text == "" && extra == nil {
-		return events, nil
+		return events
 	}
 	events, index := s.blocks.Open(events, blockKey{kind: reasoningKind}, litellm.ReasoningBlock{})
 	if extra != nil {
-		if s.spec.CumulativeStream {
-			s.extra = []json.RawMessage{extra}
-		} else {
-			s.extra = append(s.extra, extra)
-		}
+		s.details = addDetails(s.details, extra)
 	}
 	if text != "" {
 		events = append(events, litellm.ReasoningDelta{Index: index, Text: text})
 	}
-	return events, nil
-}
-
-// increment turns a cumulative snapshot into the newly added text.
-func (s *stream) increment(text string, last *string) (string, error) {
-	if !s.spec.CumulativeStream || text == "" {
-		return text, nil
-	}
-	next, ok := strings.CutPrefix(text, *last)
-	if !ok {
-		return "", litellm.NewError(s.spec.Name, litellm.ErrorTypeProvider, "cumulative stream changed unexpectedly", nil)
-	}
-	*last = text
-	return next, nil
+	return events
 }
 
 func (s *stream) tool(events []litellm.Event, position int, call toolCallDelta) []litellm.Event {
@@ -229,30 +208,58 @@ func (s *stream) closeAll(events []litellm.Event) []litellm.Event {
 			state := s.tools[key.call]
 			return litellm.ToolUseBlock{ID: state.id, Name: state.name}
 		case reasoningKind:
-			if len(s.extra) > 0 {
-				return litellm.ReasoningBlock{Extra: joinExtra(s.extra)}
+			if len(s.details) > 0 {
+				extra, _ := json.Marshal(s.details)
+				return litellm.ReasoningBlock{Extra: extra}
 			}
 		}
 		return nil
 	})
 	clear(s.tools)
-	s.extra = nil
+	s.details = nil
 	return events
 }
 
-// joinExtra concatenates reasoning_details arrays streamed across chunks.
-func joinExtra(parts []json.RawMessage) json.RawMessage {
-	if len(parts) == 1 {
-		return parts[0]
+// addDetails folds one chunk's reasoning_details into entries. Vendors split
+// an entry across adjacent fragments that repeat its type and index: text and
+// summary arrive in pieces, fields such as the signature once. Encrypted
+// fragments are always whole. The merged entries match the non-streaming
+// response and are what replay expects.
+func addDetails(entries []map[string]json.RawMessage, chunk json.RawMessage) []map[string]json.RawMessage {
+	var fragments []map[string]json.RawMessage
+	if json.Unmarshal(chunk, &fragments) != nil {
+		return entries
 	}
-	var items []json.RawMessage
-	for _, part := range parts {
-		var chunk []json.RawMessage
-		if json.Unmarshal(part, &chunk) != nil {
-			return parts[len(parts)-1]
+	for _, fragment := range fragments {
+		n := len(entries)
+		if n == 0 || !continues(entries[n-1], fragment) {
+			entries = append(entries, fragment)
+			continue
 		}
-		items = append(items, chunk...)
+		for key, value := range fragment {
+			if key == "text" || key == "summary" {
+				value = appendJSONString(entries[n-1][key], value)
+			} else if entries[n-1][key] != nil {
+				continue
+			}
+			entries[n-1][key] = value
+		}
 	}
-	data, _ := json.Marshal(items)
-	return data
+	return entries
+}
+
+func continues(entry, fragment map[string]json.RawMessage) bool {
+	return string(fragment["type"]) != `"reasoning.encrypted"` &&
+		bytes.Equal(entry["type"], fragment["type"]) && bytes.Equal(entry["index"], fragment["index"])
+}
+
+// appendJSONString concatenates two JSON strings; a non-string b replaces a.
+func appendJSONString(a, b json.RawMessage) json.RawMessage {
+	var left, right string
+	if json.Unmarshal(b, &right) != nil {
+		return b
+	}
+	_ = json.Unmarshal(a, &left)
+	out, _ := json.Marshal(left + right)
+	return out
 }

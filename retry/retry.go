@@ -94,9 +94,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 
 		delay := policy.delay(attempt, resp)
-		if err := drainAndCloseResponse(resp); err != nil {
-			return nil, err
-		}
+		discard(resp)
 		if err := sleep(req.Context(), delay); err != nil {
 			return nil, err
 		}
@@ -197,14 +195,12 @@ func sleep(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func drainAndCloseResponse(resp *http.Response) error {
-	if resp == nil || resp.Body == nil {
-		return nil
+// discard closes a response that is about to be retried. It drains a bounded
+// prefix so the connection can be reused; a read error does not matter here.
+func discard(resp *http.Response) {
+	if resp.Body == nil {
+		return
 	}
-	_, err := io.Copy(io.Discard, resp.Body)
-	closeErr := resp.Body.Close()
-	if err != nil {
-		return err
-	}
-	return closeErr
+	_, _ = io.CopyN(io.Discard, resp.Body, 64<<10)
+	_ = resp.Body.Close()
 }

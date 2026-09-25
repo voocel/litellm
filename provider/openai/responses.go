@@ -224,11 +224,16 @@ func appendMessage(items []any, role, textType string, blocks []litellm.Block) (
 			}
 			part, cache = map[string]any{"type": textType, "text": b.Text}, b.Cache
 		case litellm.ImageBlock:
-			url, err := openaicompat.ImageURL(b)
-			if err != nil {
-				return nil, err
+			part, cache = map[string]any{"type": "input_image"}, b.Cache
+			if b.FileURI != "" {
+				part["file_id"] = b.FileURI
+			} else {
+				url, err := openaicompat.ImageURL(b)
+				if err != nil {
+					return nil, err
+				}
+				part["image_url"] = url
 			}
-			part, cache = map[string]any{"type": "input_image", "image_url": url}, b.Cache
 			if b.Detail != "" {
 				part["detail"] = b.Detail
 			}
@@ -258,7 +263,7 @@ func appendAssistant(items []any, blocks []litellm.Block) ([]any, error) {
 		case litellm.TextBlock:
 			items, err = appendMessage(items, "assistant", "output_text", []litellm.Block{b})
 		case litellm.ReasoningBlock:
-			items, err = appendReasoning(items, b)
+			items = appendReasoning(items, b)
 		case litellm.ToolUseBlock:
 			items = append(items, map[string]any{"type": "function_call", "call_id": b.ID, "name": b.Name, "arguments": string(b.Arguments)})
 		default:
@@ -271,22 +276,17 @@ func appendAssistant(items []any, blocks []litellm.Block) ([]any, error) {
 	return items, nil
 }
 
-// appendReasoning replays the original reasoning item kept in Extra, or the
-// text as a summary.
-func appendReasoning(items []any, block litellm.ReasoningBlock) ([]any, error) {
-	if len(block.Extra) > 0 {
-		if !json.Valid(block.Extra) {
-			return nil, errors.New("reasoning extra must be a JSON reasoning item")
-		}
-		return append(items, json.RawMessage(block.Extra)), nil
+// appendReasoning replays the reasoning item kept in Extra. Reasoning from
+// other providers is not sent: an input reasoning item requires the id the
+// API assigned to it.
+func appendReasoning(items []any, block litellm.ReasoningBlock) []any {
+	var item struct {
+		Type string `json:"type"`
 	}
-	if block.Text == "" {
-		return items, nil
+	if json.Unmarshal(block.Extra, &item) != nil || item.Type != "reasoning" {
+		return items
 	}
-	return append(items, map[string]any{
-		"type":    "reasoning",
-		"summary": []any{map[string]any{"type": "summary_text", "text": block.Text}},
-	}), nil
+	return append(items, json.RawMessage(block.Extra))
 }
 
 func appendToolResults(items []any, blocks []litellm.Block) ([]any, error) {

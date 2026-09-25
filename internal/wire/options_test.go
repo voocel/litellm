@@ -103,3 +103,17 @@ func TestMarshal(t *testing.T) {
 		t.Fatal("option overriding a generated scalar was accepted")
 	}
 }
+
+func TestMarshalKeepsGeneratedKeyOrder(t *testing.T) {
+	body := struct {
+		Schema json.RawMessage `json:"schema"`
+		Config json.RawMessage `json:"config"`
+	}{json.RawMessage(`{"z":1,"a":2}`), json.RawMessage(`{"s":{"z":1,"a":2}}`)}
+	data, err := MarshalBody(body, map[string]any{"config": map[string]any{"b": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"config":{"b":true,"s":{"z":1,"a":2}},"schema":{"z":1,"a":2}}`; string(data) != want {
+		t.Fatalf("body = %s, want %s", data, want)
+	}
+}

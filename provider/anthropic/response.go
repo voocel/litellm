@@ -50,7 +50,11 @@ func convertContent(c content) (litellm.Block, bool) {
 	case "text":
 		return litellm.TextBlock{Text: c.Text, Annotations: annotations(c.Citations)}, true
 	case "thinking":
-		return litellm.ReasoningBlock{Text: c.Thinking, Signature: c.Signature}, true
+		var text string
+		if c.Thinking != nil {
+			text = *c.Thinking
+		}
+		return litellm.ReasoningBlock{Text: text, Signature: c.Signature}, true
 	case "redacted_thinking":
 		return litellm.ReasoningBlock{Redacted: []byte(c.Data)}, true
 	case "tool_use":

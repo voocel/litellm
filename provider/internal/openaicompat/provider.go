@@ -82,6 +82,9 @@ func (p *Provider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Res
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeProvider, "decode response", err)
 	}
+	if err := wire.ErrorField(p.Name(), parsed.Error); err != nil {
+		return nil, err
+	}
 	out, err := p.convertResponse(&parsed, req)
 	if err != nil {
 		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeProvider, err)

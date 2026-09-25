@@ -34,10 +34,12 @@ type Annotation struct {
 }
 
 // TextBlock is plain text. Annotations and Logprobs are response metadata.
+// Signature is an opaque vendor token kept for replay.
 type TextBlock struct {
 	Text        string
 	Annotations []Annotation
 	Logprobs    json.RawMessage
+	Signature   string
 	Cache       *CacheControl
 }
 

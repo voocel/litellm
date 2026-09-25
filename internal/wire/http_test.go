@@ -59,7 +59,7 @@ func TestDoReturnsSuccessfulResponseOpen(t *testing.T) {
 	}
 }
 
-func TestStreamErrorClassifiesChunkErrors(t *testing.T) {
+func TestStreamErrorClassifiesErrorFields(t *testing.T) {
 	tests := map[string]struct {
 		raw string
 		is  func(error) bool
@@ -72,15 +72,15 @@ func TestStreamErrorClassifiesChunkErrors(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			err := ChunkError("p", json.RawMessage(tt.raw))
+			err := ErrorField("p", json.RawMessage(tt.raw))
 			if !tt.is(err) {
 				t.Fatalf("err = %v", err)
 			}
 		})
 	}
 	for _, raw := range []string{"", "null"} {
-		if err := ChunkError("p", json.RawMessage(raw)); err != nil {
-			t.Fatalf("ChunkError(%q) = %v, want nil", raw, err)
+		if err := ErrorField("p", json.RawMessage(raw)); err != nil {
+			t.Fatalf("ErrorField(%q) = %v, want nil", raw, err)
 		}
 	}
 }

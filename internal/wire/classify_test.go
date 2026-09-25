@@ -82,6 +82,7 @@ func TestHTTPErrorClassifiesVendorRejections(t *testing.T) {
 		{"glm", `{"error":{"code":"1261","message":"Prompt 超长"}}`, litellm.ErrorTypeContextOverflow},
 		{"xai", `{"code":"Client specified an invalid argument","error":"This model's maximum prompt length is 131072 but the request contains 140000 tokens."}`, litellm.ErrorTypeContextOverflow},
 		{"content filter", `{"error":{"code":"content_filter","message":"blocked"}}`, litellm.ErrorTypeContentFilter},
+		{"gemini invalid key", `{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT"}}`, litellm.ErrorTypeAuth},
 		{"glm code substring", `{"error":{"code":"1214","message":"request 1261 invalid"}}`, litellm.ErrorTypeValidation},
 		{"max tokens", `{"error":{"type":"invalid_request_error","message":"max_tokens is too large"}}`, litellm.ErrorTypeValidation},
 	} {
@@ -94,6 +95,15 @@ func TestHTTPErrorClassifiesVendorRejections(t *testing.T) {
 	}
 	if err := HTTPError("test", 503, nil, `{"error":{"message":"prompt is too long"}}`); err.Temporary {
 		t.Fatal("context overflow must not be temporary behind a rewritten 5xx")
+	}
+	// Billing failures arrive as 429 but retrying does not clear them.
+	for _, body := range []string{
+		`{"error":{"message":"You exceeded your current quota","type":"insufficient_quota","param":null,"code":"insufficient_quota"}}`,
+		`{"error":{"message":"Your credit balance is exhausted","type":"insufficient_quota","code":"credit_balance_exhausted"}}`,
+	} {
+		if err := HTTPError("test", 429, nil, body); err.Type != litellm.ErrorTypeQuota || err.Temporary {
+			t.Fatalf("%s: type = %q, temporary = %v", body, err.Type, err.Temporary)
+		}
 	}
 }
 

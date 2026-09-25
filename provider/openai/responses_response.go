@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"cmp"
 	"encoding/json"
 	"strings"
 
@@ -85,7 +86,7 @@ func convertResponsesResponse(resp *responsesResponse, model string) *litellm.Re
 				}
 			}
 		case "function_call":
-			out.Blocks = append(out.Blocks, litellm.ToolUseBlock{ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(item.Arguments)})
+			out.Blocks = append(out.Blocks, litellm.ToolUseBlock{ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(cmp.Or(item.Arguments, "{}"))})
 			toolCalls = true
 		case "reasoning":
 			out.Blocks = append(out.Blocks, reasoningBlock(item))

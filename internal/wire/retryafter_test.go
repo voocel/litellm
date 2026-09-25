@@ -18,6 +18,8 @@ func TestParseRetryAfter(t *testing.T) {
 		{"0", 0},
 		{"-1", 0},
 		{"soon", 0},
+		{"9223372037", 0},
+		{"99999999999999999999", 0},
 		{now.Add(90 * time.Second).Format(http.TimeFormat), 90 * time.Second},
 		{now.Add(-time.Minute).Format(http.TimeFormat), 0},
 	} {

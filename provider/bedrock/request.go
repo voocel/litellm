@@ -179,7 +179,7 @@ func convertBlocks(blocks []litellm.Block) ([]content, error) {
 			}
 			c, cache = content{ToolUse: &toolUse{ToolUseID: b.ID, Name: b.Name, Input: input}}, b.Cache
 		case litellm.ToolResultBlock:
-			result := &toolResult{ToolUseID: b.ToolUseID}
+			result := &toolResult{ToolUseID: b.ToolUseID, Content: make([]content, 0, len(b.Content))} // content is required, even empty
 			if b.IsError {
 				result.Status = "error"
 			}

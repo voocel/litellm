@@ -139,7 +139,8 @@ func TestWrapperThinking(t *testing.T) {
 		{"minimax effort", minimax.New, high, "effort is not supported"},
 		{"ollama disabled", ollama.New, disabled, `{"reasoning_effort": "none"}`},
 		{"openrouter enabled", openrouter.New, enabled, `{"reasoning": {"enabled": true}}`},
-		{"openrouter budget", openrouter.New, &litellm.Thinking{Effort: "low", BudgetTokens: new(1024)}, `{"reasoning": {"effort": "low", "max_tokens": 1024}}`},
+		{"openrouter budget", openrouter.New, budget, `{"reasoning": {"max_tokens": 1024}}`},
+		{"openrouter effort and budget", openrouter.New, &litellm.Thinking{Effort: "low", BudgetTokens: new(1024)}, "effort and budget_tokens cannot be combined"},
 		{"openrouter disabled", openrouter.New, disabled, `{"reasoning": {"effort": "none"}}`},
 		{"qwen enabled", qwen.New, enabled, `{"enable_thinking": true, "thinking_budget": null}`},
 		{"qwen disabled", qwen.New, disabled, `{"enable_thinking": false}`},
@@ -199,13 +200,15 @@ func TestWrapperDialects(t *testing.T) {
 	t.Run("mimo omits stream options", func(t *testing.T) {
 		compattest.AssertFields(t, compattest.Body(t, mimo.New, compattest.Request(), true), `{"stream": true, "stream_options": null}`)
 	})
-	t.Run("minimax cumulative stream", func(t *testing.T) {
+	t.Run("minimax stream", func(t *testing.T) {
+		// Incremental deltas, one reasoning_details entry per run, no [DONE].
 		got, err := compattest.Collect(t, minimax.New, testgolden.ReadFixtureString(t, "../../../testdata/compat/minimax_stream.sse"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		reasoning, _ := got.Blocks[0].(litellm.ReasoningBlock)
-		if reasoning.Text != "ab" || !strings.Contains(string(reasoning.Extra), `"text":"ab"`) || strings.Contains(string(reasoning.Extra), `"text":"a"}`) || got.Text() != "hi" {
+		want := `[{"format":"MiniMax-response-v1","id":"reasoning-text-1","index":0,"text":"ab","type":"reasoning.text"}]`
+		if reasoning.Text != "ab" || string(reasoning.Extra) != want || got.Text() != "hi" || got.FinishReason != litellm.FinishReasonToolCall {
 			t.Fatalf("response = %#v", got)
 		}
 	})

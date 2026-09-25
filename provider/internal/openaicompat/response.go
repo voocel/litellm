@@ -1,6 +1,7 @@
 package openaicompat
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -43,7 +44,7 @@ func (p *Provider) convertResponse(resp *chatResponse, req *litellm.Request) (*l
 		out.Blocks = append(out.Blocks, litellm.ToolUseBlock{
 			ID:        call.ID,
 			Name:      call.Function.Name,
-			Arguments: json.RawMessage(call.Function.Arguments),
+			Arguments: json.RawMessage(cmp.Or(call.Function.Arguments, "{}")), // as streams deliver an argument-less call
 		})
 	}
 	return out, nil

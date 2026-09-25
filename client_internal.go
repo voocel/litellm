@@ -93,6 +93,9 @@ func validateMessages(messages []Message) error {
 				if !utf8.ValidString(b.Text) {
 					return NewError("", ErrorTypeValidation, fmt.Sprintf("messages[%d]: text block must be valid UTF-8", i), nil)
 				}
+				if !utf8.ValidString(b.Signature) {
+					return NewError("", ErrorTypeValidation, fmt.Sprintf("messages[%d]: text block signature must be valid UTF-8", i), nil)
+				}
 			case ImageBlock:
 				if err := validateImageUTF8(i, b); err != nil {
 					return err

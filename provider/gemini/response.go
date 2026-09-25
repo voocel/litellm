@@ -1,15 +1,14 @@
 package gemini
 
 import (
+	"cmp"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"sync/atomic"
 
 	"github.com/voocel/litellm"
 	"github.com/voocel/litellm/internal/wire"
 )
-
-var generatedToolCallSeq atomic.Uint64
 
 // convertResponse maps the first candidate. A blocked prompt or candidate is
 // a Response with its finish reason, not an error.
@@ -29,18 +28,15 @@ func convertResponse(resp *response, model string) *litellm.Response {
 	for _, p := range candidate.Content.Parts {
 		switch b := partBlock(p).(type) {
 		case litellm.TextBlock:
-			if last, ok := lastBlock[litellm.TextBlock](out.Blocks); ok {
-				last.Text += b.Text
+			if last, ok := lastBlock[litellm.TextBlock](out.Blocks); ok && (last.Signature == "" || b.Signature == "") {
+				last.Text, last.Signature = last.Text+b.Text, cmp.Or(last.Signature, b.Signature)
 				out.Blocks[len(out.Blocks)-1] = last
 				continue
 			}
 			out.Blocks = append(out.Blocks, b)
 		case litellm.ReasoningBlock:
-			if last, ok := lastBlock[litellm.ReasoningBlock](out.Blocks); ok {
-				last.Text += b.Text
-				if b.Signature != "" {
-					last.Signature = b.Signature
-				}
+			if last, ok := lastBlock[litellm.ReasoningBlock](out.Blocks); ok && (last.Signature == "" || b.Signature == "") {
+				last.Text, last.Signature = last.Text+b.Text, cmp.Or(last.Signature, b.Signature)
 				out.Blocks[len(out.Blocks)-1] = last
 				continue
 			}
@@ -54,17 +50,25 @@ func convertResponse(resp *response, model string) *litellm.Response {
 		}
 	}
 	out.FinishReason, out.FinishReasonRaw = finishReason(candidate.FinishReason, toolCalls), candidate.FinishReason
+	if candidate.FinishMessage != "" {
+		out.Warnings = append(out.Warnings, finishMessageWarning(candidate.FinishMessage))
+	}
 	return out
 }
 
-// partBlock maps one part. Adjacent text or thought parts form one block, so
-// callers merge them; a function call without an id gets a generated one.
+// partBlock maps one part. Callers merge adjacent text or thought parts into
+// one block unless both carry a signature, since signatures cannot be merged.
+// A function call without an id gets a generated one.
 func partBlock(p part) litellm.Block {
+	var text string
+	if p.Text != nil {
+		text = *p.Text
+	}
 	switch {
 	case p.FunctionCall != nil:
 		id := p.FunctionCall.ID
 		if id == "" {
-			id = fmt.Sprintf("call_%d", generatedToolCallSeq.Add(1))
+			id = "call_" + rand.Text() // unique across processes, as persisted history needs
 		}
 		args := p.FunctionCall.Args
 		if len(args) == 0 {
@@ -72,9 +76,10 @@ func partBlock(p part) litellm.Block {
 		}
 		return litellm.ToolUseBlock{ID: id, Name: p.FunctionCall.Name, Arguments: args, Signature: p.ThoughtSignature}
 	case p.Thought:
-		return litellm.ReasoningBlock{Text: p.Text, Signature: p.ThoughtSignature}
-	case p.Text != "":
-		return litellm.TextBlock{Text: p.Text}
+		return litellm.ReasoningBlock{Text: text, Signature: p.ThoughtSignature}
+	case text != "" || p.ThoughtSignature != "":
+		// Streams may send a text run's signature in an empty text part.
+		return litellm.TextBlock{Text: text, Signature: p.ThoughtSignature}
 	}
 	return nil
 }
@@ -86,6 +91,12 @@ func lastBlock[T litellm.Block](blocks []litellm.Block) (T, bool) {
 	}
 	last, ok := blocks[len(blocks)-1].(T)
 	return last, ok
+}
+
+// finishMessageWarning keeps the vendor's explanation of the finish reason,
+// such as the rejected call of MALFORMED_FUNCTION_CALL.
+func finishMessageWarning(message string) litellm.Warning {
+	return litellm.Warning{Code: "gemini.finish_message", Provider: "gemini", Message: message}
 }
 
 func generatedIDWarning(tool litellm.ToolUseBlock) litellm.Warning {
@@ -101,12 +112,16 @@ func finishReason(raw string, toolCalls bool) litellm.FinishReason {
 	return finish
 }
 
+// convertUsage reads omitted counts as zero. Empty metadata reports nothing.
 func convertUsage(u *usageMetadata) litellm.Usage {
+	if *u == (usageMetadata{}) {
+		return litellm.Usage{}
+	}
 	return litellm.Usage{
-		InputTokens:     u.PromptTokenCount,
-		OutputTokens:    wire.AddTokenDetails(u.CandidatesTokenCount, u.ThoughtsTokenCount),
-		ReasoningTokens: u.ThoughtsTokenCount,
-		TotalTokens:     u.TotalTokenCount,
-		CacheReadTokens: u.CachedContentTokenCount,
+		InputTokens:     new(u.PromptTokenCount),
+		OutputTokens:    new(u.CandidatesTokenCount + u.ThoughtsTokenCount),
+		ReasoningTokens: new(u.ThoughtsTokenCount),
+		TotalTokens:     new(u.TotalTokenCount),
+		CacheReadTokens: new(u.CachedContentTokenCount),
 	}
 }

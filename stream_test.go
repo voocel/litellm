@@ -55,7 +55,7 @@ func TestBlockEndMergesMetadataOnly(t *testing.T) {
 	resp, err := Collect(&testStream{events: []Event{
 		BlockStart{Index: 0, Block: TextBlock{Text: "he"}},
 		TextDelta{Index: 0, Text: "llo"},
-		BlockEnd{Index: 0, Block: TextBlock{Text: "ignored", Annotations: []Annotation{{Type: "url", URL: "u"}}, Logprobs: json.RawMessage(`[]`)}},
+		BlockEnd{Index: 0, Block: TextBlock{Text: "ignored", Annotations: []Annotation{{Type: "url", URL: "u"}}, Logprobs: json.RawMessage(`[]`), Signature: "t"}},
 		BlockStart{Index: 1, Block: ReasoningBlock{Summary: true, Signature: "early"}},
 		ReasoningDelta{Index: 1, Text: "r"},
 		BlockEnd{Index: 1, Block: ReasoningBlock{Text: "ignored", Signature: "late", Redacted: []byte("x"), Extra: json.RawMessage(`{}`)}},
@@ -70,7 +70,7 @@ func TestBlockEndMergesMetadataOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Block{
-		TextBlock{Text: "hello", Annotations: []Annotation{{Type: "url", URL: "u"}}, Logprobs: json.RawMessage(`[]`)},
+		TextBlock{Text: "hello", Annotations: []Annotation{{Type: "url", URL: "u"}}, Logprobs: json.RawMessage(`[]`), Signature: "t"},
 		ReasoningBlock{Text: "r", Summary: true, Signature: "late", Redacted: []byte("x"), Extra: json.RawMessage(`{}`)},
 		ToolUseBlock{ID: "call", Name: "lookup", Arguments: json.RawMessage(`{}`), Signature: "s"},
 		// An argument-less call keeps valid JSON arguments.

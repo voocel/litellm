@@ -146,6 +146,7 @@ func TestBuildRequest(t *testing.T) {
 					litellm.Assistant(litellm.ToolUseBlock{ID: "t1", Name: "f"}, litellm.ToolUseBlock{ID: "t2", Name: "f"}),
 					litellm.ToolResultText("t1", "one"),
 					{Role: litellm.RoleTool, Blocks: []litellm.Block{litellm.ToolResultBlock{ToolUseID: "t2", IsError: true, Content: []litellm.Block{litellm.Text("boom")}}}},
+					{Role: litellm.RoleTool, Blocks: []litellm.Block{litellm.ToolResultBlock{ToolUseID: "t3"}}},
 				}
 			},
 			want: map[string]string{"messages": `[
@@ -153,7 +154,8 @@ func TestBuildRequest(t *testing.T) {
 				{"role":"assistant","content":[{"toolUse":{"toolUseId":"t1","name":"f","input":{}}},{"toolUse":{"toolUseId":"t2","name":"f","input":{}}}]},
 				{"role":"user","content":[
 					{"toolResult":{"toolUseId":"t1","content":[{"text":"one"}]}},
-					{"toolResult":{"toolUseId":"t2","content":[{"text":"boom"}],"status":"error"}}]}]`},
+					{"toolResult":{"toolUseId":"t2","content":[{"text":"boom"}],"status":"error"}},
+					{"toolResult":{"toolUseId":"t3","content":[]}}]}]`},
 		},
 		{
 			name: "cache points follow their blocks",

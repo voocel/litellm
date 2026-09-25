@@ -16,7 +16,9 @@ type content struct {
 }
 
 type part struct {
-	Text             string            `json:"text,omitempty"`
+	// Text is a pointer because text is the part's data: a signature-only
+	// part must still send "text": "".
+	Text             *string           `json:"text,omitempty"`
 	Thought          bool              `json:"thought,omitempty"`
 	ThoughtSignature string            `json:"thoughtSignature,omitempty"`
 	InlineData       *inlineData       `json:"inlineData,omitempty"`
@@ -91,16 +93,18 @@ type response struct {
 }
 
 type candidate struct {
-	Content      content `json:"content"`
-	FinishReason string  `json:"finishReason,omitempty"`
+	Content       content `json:"content"`
+	FinishReason  string  `json:"finishReason,omitempty"`
+	FinishMessage string  `json:"finishMessage,omitempty"`
 }
 
+// usageMetadata counts are plain ints: the API omits zero-valued fields.
 type usageMetadata struct {
-	PromptTokenCount        *int `json:"promptTokenCount"`
-	CandidatesTokenCount    *int `json:"candidatesTokenCount"`
-	ThoughtsTokenCount      *int `json:"thoughtsTokenCount,omitempty"`
-	TotalTokenCount         *int `json:"totalTokenCount"`
-	CachedContentTokenCount *int `json:"cachedContentTokenCount,omitempty"`
+	PromptTokenCount        int `json:"promptTokenCount"`
+	CandidatesTokenCount    int `json:"candidatesTokenCount"`
+	ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
+	TotalTokenCount         int `json:"totalTokenCount"`
+	CachedContentTokenCount int `json:"cachedContentTokenCount"`
 }
 
 type promptFeedback struct {

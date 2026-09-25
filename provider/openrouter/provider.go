@@ -2,6 +2,8 @@
 package openrouter
 
 import (
+	"errors"
+
 	"github.com/voocel/litellm"
 	"github.com/voocel/litellm/provider/compat"
 	"github.com/voocel/litellm/provider/internal/openaicompat"
@@ -24,8 +26,9 @@ const (
 )
 
 // New connects to https://openrouter.ai/api/v1. Thinking maps to the reasoning
-// object (effort, max_tokens, or effort "none" when disabled) and
-// CacheControl to cache_control on content parts.
+// object (effort or max_tokens, which OpenRouter accepts one at a time, or
+// effort "none" when disabled) and CacheControl to cache_control on content
+// parts.
 func New(cfg Config) (*Provider, error) {
 	return openaicompat.New(cfg, openaicompat.Spec{
 		Name:            "openrouter",
@@ -42,6 +45,9 @@ func New(cfg Config) (*Provider, error) {
 func mapThinking(thinking *litellm.Thinking) (map[string]any, error) {
 	if thinking.Mode == litellm.ThinkingDisabled {
 		return map[string]any{"reasoning": map[string]any{"effort": "none"}}, nil
+	}
+	if thinking.Effort != "" && thinking.BudgetTokens != nil {
+		return nil, errors.New("thinking effort and budget_tokens cannot be combined")
 	}
 	reasoning := map[string]any{}
 	if thinking.Effort != "" {

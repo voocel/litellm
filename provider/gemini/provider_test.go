@@ -175,6 +175,26 @@ func TestBuildRequestToolResultsAndTurns(t *testing.T) {
 	]`)
 }
 
+func TestBuildRequestReplaysSignatures(t *testing.T) {
+	body := build(t, litellm.Request{Messages: []litellm.Message{
+		litellm.UserText("go"),
+		litellm.Assistant(
+			litellm.ReasoningBlock{Signature: "r"},
+			litellm.TextBlock{Text: "answer", Signature: "t"},
+			litellm.TextBlock{Signature: "e"},
+		),
+	}})
+	// Text is the part's data, so signature-only parts keep an empty text.
+	assertField(t, body, "contents", `[
+		{"role":"user","parts":[{"text":"go"}]},
+		{"role":"model","parts":[
+			{"text":"","thought":true,"thoughtSignature":"r"},
+			{"text":"answer","thoughtSignature":"t"},
+			{"text":"","thoughtSignature":"e"}
+		]}
+	]`)
+}
+
 func TestBuildRequestErrors(t *testing.T) {
 	strict := mustTool(t, "a", "", nil)
 	strict.Strict = litellm.StrictEnabled
@@ -345,17 +365,26 @@ func TestStreamWarnsForGeneratedToolCallID(t *testing.T) {
 	}
 }
 
-func TestUsageIncludesReasoningAndPreservesUnknown(t *testing.T) {
+func TestUsageIncludesReasoningAndReadsOmittedCountsAsZero(t *testing.T) {
 	var meta usageMetadata
-	if err := json.Unmarshal([]byte(`{"promptTokenCount":10,"candidatesTokenCount":2,"thoughtsTokenCount":3,"totalTokenCount":15,"cachedContentTokenCount":0}`), &meta); err != nil {
+	if err := json.Unmarshal([]byte(`{"promptTokenCount":10,"candidatesTokenCount":2,"thoughtsTokenCount":3,"totalTokenCount":15,"cachedContentTokenCount":4}`), &meta); err != nil {
 		t.Fatal(err)
 	}
 	usage := convertUsage(&meta)
-	if *usage.InputTokens != 10 || *usage.OutputTokens != 5 || *usage.TotalTokens != 15 || *usage.CacheReadTokens != 0 || usage.CacheWriteTokens != nil {
+	if *usage.InputTokens != 10 || *usage.OutputTokens != 5 || *usage.ReasoningTokens != 3 || *usage.TotalTokens != 15 || *usage.CacheReadTokens != 4 || usage.CacheWriteTokens != nil {
 		t.Fatalf("usage = %+v", usage)
 	}
+	// The API omits zero counts, e.g. no output after thinking hit MAX_TOKENS.
+	meta = usageMetadata{}
+	if err := json.Unmarshal([]byte(`{"promptTokenCount":10,"thoughtsTokenCount":3,"totalTokenCount":13}`), &meta); err != nil {
+		t.Fatal(err)
+	}
+	usage = convertUsage(&meta)
+	if *usage.OutputTokens != 3 || *usage.ReasoningTokens != 3 || *usage.CacheReadTokens != 0 {
+		t.Fatalf("usage with omitted counts = %+v", usage)
+	}
 	if convertUsage(&usageMetadata{}).HasTokens() {
-		t.Fatal("missing counts became known")
+		t.Fatal("empty metadata became known")
 	}
 }
 

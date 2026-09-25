@@ -65,7 +65,7 @@ type content struct {
 	Type         string          `json:"type"`
 	Text         string          `json:"text,omitempty"`
 	Source       *imageSource    `json:"source,omitempty"`
-	Thinking     string          `json:"thinking,omitempty"`
+	Thinking     *string         `json:"thinking,omitempty"` // set on thinking blocks, which require it even when empty
 	Signature    string          `json:"signature,omitempty"`
 	Data         string          `json:"data,omitempty"`
 	ID           string          `json:"id,omitempty"`
@@ -229,7 +229,7 @@ func convertBlocks(blocks []litellm.Block) ([]content, error) {
 			}
 			c = content{Type: "image", Source: source, CacheControl: convertCache(b.Cache)}
 		case litellm.ReasoningBlock:
-			c = content{Type: "thinking", Thinking: b.Text, Signature: b.Signature, CacheControl: convertCache(b.Cache)}
+			c = content{Type: "thinking", Thinking: new(b.Text), Signature: b.Signature, CacheControl: convertCache(b.Cache)}
 			if len(b.Redacted) > 0 {
 				c = content{Type: "redacted_thinking", Data: string(b.Redacted), CacheControl: convertCache(b.Cache)}
 			}
