@@ -49,7 +49,15 @@ func TestStreamSignaturesMatchCompleteResponse(t *testing.T) {
 			`{"candidates":[{"content":{"parts":[{"text":"lo"}]}}]}`,
 			`{"candidates":[{"content":{"parts":[{"text":"","thoughtSignature":"sig"}]},"finishReason":"STOP"}]}`,
 		},
-		want: []litellm.Block{litellm.TextBlock{Text: "Hello", Signature: "sig"}},
+		want: []litellm.Block{litellm.TextBlock{Text: "Hello", State: signed("m", "sig")}},
+	}, {
+		name:     "signed text parts stay apart",
+		complete: `{"candidates":[{"content":{"parts":[{"text":"a","thoughtSignature":"s1"},{"text":"b","thoughtSignature":"s2"}]},"finishReason":"STOP"}]}`,
+		chunks: []string{
+			`{"candidates":[{"content":{"parts":[{"text":"a","thoughtSignature":"s1"}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"text":"b","thoughtSignature":"s2"}]},"finishReason":"STOP"}]}`,
+		},
+		want: []litellm.Block{litellm.TextBlock{Text: "a", State: signed("m", "s1")}, litellm.TextBlock{Text: "b", State: signed("m", "s2")}},
 	}, {
 		name: "signed thought parts stay apart",
 		complete: `{"candidates":[{"content":{"parts":[
@@ -63,8 +71,8 @@ func TestStreamSignaturesMatchCompleteResponse(t *testing.T) {
 			`{"candidates":[{"content":{"parts":[{"text":"answer"}]},"finishReason":"MALFORMED_FUNCTION_CALL","finishMessage":"Malformed function call: f("}]}`,
 		},
 		want: []litellm.Block{
-			litellm.ReasoningBlock{Text: "ab", Signature: "s1"},
-			litellm.ReasoningBlock{Text: "c", Signature: "s2"},
+			litellm.ReasoningBlock{Text: "ab", State: signed("m", "s1")},
+			litellm.ReasoningBlock{Text: "c", State: signed("m", "s2")},
 			litellm.TextBlock{Text: "answer"},
 		},
 	}} {

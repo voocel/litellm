@@ -119,6 +119,9 @@ func (p *Provider) convertMessages(messages []litellm.Message) ([]map[string]any
 		if err != nil {
 			return nil, fmt.Errorf("messages[%d]: %w", i, err)
 		}
+		if len(converted) == 1 {
+			continue // only the role is left, e.g. after reasoning with no field to go in
+		}
 		out = append(out, converted)
 	}
 	return out, nil
@@ -215,10 +218,10 @@ func (p *Provider) withCache(part map[string]any, cache *litellm.CacheControl) (
 	return part, nil
 }
 
-// putReasoning replays a ReasoningBlock. An Extra holding a reasoning_details
-// array is appended verbatim and supersedes the text field; otherwise Text goes
-// to the first other field the spec names. Extra from another protocol is not
-// a details array and is ignored. Blocks with neither are dropped.
+// putReasoning replays a ReasoningBlock. reasoning_details this provider
+// produced are appended verbatim and supersede the text field; otherwise Text,
+// whatever its origin, goes to the first other field the spec names. Blocks
+// with neither are dropped.
 func (p *Provider) putReasoning(message map[string]any, block litellm.ReasoningBlock) {
 	var field string
 	for _, name := range p.spec.ReasoningFields {
@@ -227,8 +230,7 @@ func (p *Provider) putReasoning(message map[string]any, block litellm.ReasoningB
 			break
 		}
 	}
-	var items []any
-	if slices.Contains(p.spec.ReasoningFields, "reasoning_details") && json.Unmarshal(block.Extra, &items) == nil && items != nil {
+	if items, ok := wire.ReadState[[]any](block.State, p.spec.Name); ok && items != nil && slices.Contains(p.spec.ReasoningFields, "reasoning_details") {
 		current, _ := message["reasoning_details"].([]any)
 		message["reasoning_details"] = append(current, items...)
 		if field != "" {

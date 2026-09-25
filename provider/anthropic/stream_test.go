@@ -33,9 +33,9 @@ func TestStreamFixtureEvents(t *testing.T) {
 	}
 	want := []litellm.Event{
 		litellm.UsageEvent{Usage: litellm.Usage{InputTokens: new(7), OutputTokens: new(1), TotalTokens: new(8), CacheReadTokens: new(2)}},
-		litellm.BlockStart{Index: 0, Block: litellm.ReasoningBlock{}},
+		litellm.BlockStart{Index: 0, Block: litellm.ReasoningBlock{State: reasoningState("claude", "thinking", "", "")}},
 		litellm.ReasoningDelta{Index: 0, Text: "think"},
-		litellm.BlockEnd{Index: 0, Block: litellm.ReasoningBlock{Signature: "sig-thinking"}},
+		litellm.BlockEnd{Index: 0, Block: litellm.ReasoningBlock{State: reasoningState("claude", "thinking", "sig-thinking", "")}},
 		litellm.BlockStart{Index: 1, Block: litellm.TextBlock{}},
 		litellm.TextDelta{Index: 1, Text: "hello"},
 		litellm.BlockEnd{Index: 1},
@@ -90,7 +90,7 @@ func TestStreamEvents(t *testing.T) {
 				litellm.ProviderEvent{Name: "content_block_start", Raw: json.RawMessage(serverStart)},
 				litellm.ProviderEvent{Name: "content_block_delta", Raw: json.RawMessage(serverDelta)},
 				litellm.ProviderEvent{Name: "content_block_stop", Raw: json.RawMessage(serverStop)},
-				litellm.BlockStart{Index: 0, Block: litellm.ReasoningBlock{Redacted: []byte("opaque")}},
+				litellm.BlockStart{Index: 0, Block: litellm.ReasoningBlock{State: reasoningState("m", "redacted_thinking", "", "opaque")}},
 				litellm.BlockEnd{Index: 0},
 				done,
 			},
@@ -124,6 +124,23 @@ func TestStreamEvents(t *testing.T) {
 				litellm.BlockStart{Index: 0, Block: litellm.TextBlock{Text: "a"}},
 				litellm.TextDelta{Index: 0, Text: "b"},
 				litellm.BlockEnd{Index: 0},
+				done,
+			},
+		},
+		{
+			// Thinking is replayable only once signed, so a cut-off block has no
+			// State; message_stop still delivers a pending signature.
+			name: "thinking gets State with its signature",
+			lines: []string{
+				`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`,
+				`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"t"}}`,
+				`{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig"}}`,
+				`{"type":"message_stop"}`,
+			},
+			want: []litellm.Event{
+				litellm.BlockStart{Index: 0, Block: litellm.ReasoningBlock{}},
+				litellm.ReasoningDelta{Index: 0, Text: "t"},
+				litellm.BlockEnd{Index: 0, Block: litellm.ReasoningBlock{State: reasoningState("m", "thinking", "sig", "")}},
 				done,
 			},
 		},

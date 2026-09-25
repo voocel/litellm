@@ -27,7 +27,7 @@ func TestCollectAssemblesInterleavedBlocks(t *testing.T) {
 		ToolUseDelta{Index: 2, Arguments: `"x"}`},
 		BlockEnd{Index: 2},
 		WarningEvent{Warning: Warning{Code: "w"}},
-		BlockEnd{Index: 1, Block: ReasoningBlock{Signature: "sig"}},
+		BlockEnd{Index: 1, Block: ReasoningBlock{State: testState(`"sig"`)}},
 		BlockEnd{Index: 0},
 		DoneEvent{FinishReason: FinishReasonToolCall, FinishReasonRaw: "tool_use", Provider: "test", Model: "m"},
 	}})
@@ -37,7 +37,7 @@ func TestCollectAssemblesInterleavedBlocks(t *testing.T) {
 	want := &Response{
 		Blocks: []Block{
 			TextBlock{Text: "hello"},
-			ReasoningBlock{Text: "think", Signature: "sig"},
+			ReasoningBlock{Text: "think", State: testState(`"sig"`)},
 			ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
 		},
 		Provider:        "test",
@@ -55,13 +55,13 @@ func TestBlockEndMergesMetadataOnly(t *testing.T) {
 	resp, err := Collect(&testStream{events: []Event{
 		BlockStart{Index: 0, Block: TextBlock{Text: "he"}},
 		TextDelta{Index: 0, Text: "llo"},
-		BlockEnd{Index: 0, Block: TextBlock{Text: "ignored", Annotations: []Annotation{{Type: "url", URL: "u"}}, Logprobs: json.RawMessage(`[]`), Signature: "t"}},
-		BlockStart{Index: 1, Block: ReasoningBlock{Summary: true, Signature: "early"}},
+		BlockEnd{Index: 0, Block: TextBlock{Text: "ignored", Annotations: []Annotation{{Type: "url", URL: "u"}}, Logprobs: json.RawMessage(`[]`), State: testState(`"t"`)}},
+		BlockStart{Index: 1, Block: ReasoningBlock{Summary: true, State: testState(`"early"`)}},
 		ReasoningDelta{Index: 1, Text: "r"},
-		BlockEnd{Index: 1, Block: ReasoningBlock{Text: "ignored", Signature: "late", Redacted: []byte("x"), Extra: json.RawMessage(`{}`)}},
+		BlockEnd{Index: 1, Block: ReasoningBlock{Text: "ignored", State: testState(`"late"`)}},
 		BlockStart{Index: 2, Block: ToolUseBlock{Name: "lookup"}},
 		ToolUseDelta{Index: 2, Arguments: `{}`},
-		BlockEnd{Index: 2, Block: ToolUseBlock{ID: "call", Arguments: json.RawMessage(`"ignored"`), Signature: "s"}},
+		BlockEnd{Index: 2, Block: ToolUseBlock{ID: "call", Arguments: json.RawMessage(`"ignored"`), State: testState(`"s"`)}},
 		BlockStart{Index: 3, Block: ToolUseBlock{ID: "empty", Name: "noop"}},
 		BlockEnd{Index: 3},
 		DoneEvent{Provider: "test", Model: "m"},
@@ -70,9 +70,9 @@ func TestBlockEndMergesMetadataOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Block{
-		TextBlock{Text: "hello", Annotations: []Annotation{{Type: "url", URL: "u"}}, Logprobs: json.RawMessage(`[]`), Signature: "t"},
-		ReasoningBlock{Text: "r", Summary: true, Signature: "late", Redacted: []byte("x"), Extra: json.RawMessage(`{}`)},
-		ToolUseBlock{ID: "call", Name: "lookup", Arguments: json.RawMessage(`{}`), Signature: "s"},
+		TextBlock{Text: "hello", Annotations: []Annotation{{Type: "url", URL: "u"}}, Logprobs: json.RawMessage(`[]`), State: testState(`"t"`)},
+		ReasoningBlock{Text: "r", Summary: true, State: testState(`"late"`)},
+		ToolUseBlock{ID: "call", Name: "lookup", Arguments: json.RawMessage(`{}`), State: testState(`"s"`)},
 		// An argument-less call keeps valid JSON arguments.
 		ToolUseBlock{ID: "empty", Name: "noop", Arguments: json.RawMessage(`{}`)},
 	}
@@ -135,7 +135,7 @@ func TestHandleDeliversCompletedBlocks(t *testing.T) {
 		BlockStart{Index: 0, Block: ReasoningBlock{}},
 		ReasoningDelta{Index: 0, Text: "th"},
 		ReasoningDelta{Index: 0, Text: "ink"},
-		BlockEnd{Index: 0, Block: ReasoningBlock{Signature: "sig"}},
+		BlockEnd{Index: 0, Block: ReasoningBlock{State: testState(`"sig"`)}},
 		DoneEvent{Provider: "test", Model: "m"},
 	}
 	for name, stream := range map[string]Stream{
@@ -154,7 +154,7 @@ func TestHandleDeliversCompletedBlocks(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		want := BlockEnd{Index: 0, Block: ReasoningBlock{Text: "think", Signature: "sig"}}
+		want := BlockEnd{Index: 0, Block: ReasoningBlock{Text: "think", State: testState(`"sig"`)}}
 		if seen != len(events) || len(ends) != 1 || !reflect.DeepEqual(ends[0], want) {
 			t.Fatalf("%s: seen=%d ends=%#v", name, seen, ends)
 		}
@@ -290,12 +290,12 @@ func TestCollectorSnapshotsAreIndependent(t *testing.T) {
 			}
 		}
 	}
-	apply(BlockStart{Index: 0, Block: ReasoningBlock{Extra: json.RawMessage(`{"id":1}`)}}, ReasoningDelta{Index: 0, Text: "a"})
+	apply(BlockStart{Index: 0, Block: ReasoningBlock{State: testState(`{"id":1}`)}}, ReasoningDelta{Index: 0, Text: "a"})
 	first := collector.Response()
-	first.Blocks[0].(ReasoningBlock).Extra[0] = '!'
+	first.Blocks[0].(ReasoningBlock).State.Data[0] = '!'
 	apply(ReasoningDelta{Index: 0, Text: "b"})
 	second := collector.Response().Blocks[0].(ReasoningBlock)
-	if first.Reasoning() != "a" || second.Text != "ab" || string(second.Extra) != `{"id":1}` {
+	if first.Reasoning() != "a" || second.Text != "ab" || string(second.State.Data) != `{"id":1}` {
 		t.Fatalf("snapshot aliases collector: first=%#v second=%#v", first.Blocks, second)
 	}
 }
@@ -322,4 +322,8 @@ func BenchmarkCollectorText(b *testing.B) {
 			}
 		})
 	}
+}
+
+func testState(data string) *ProviderState {
+	return &ProviderState{Provider: "test", Data: json.RawMessage(data)}
 }

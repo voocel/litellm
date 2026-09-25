@@ -42,6 +42,47 @@ func TestTransportRetriesCompleteRetryableResponses(t *testing.T) {
 	}
 }
 
+// Only failures the provider reports as temporary are retried, and the body
+// read to classify one reaches the provider intact.
+func TestTransportRetriesTemporaryFailuresOnly(t *testing.T) {
+	quota := `{"error":{"code":"insufficient_quota","message":"You exceeded your current quota"}}`
+	for _, tc := range []struct {
+		name       string
+		resp       func() *http.Response
+		wantStatus int
+		wantBody   string
+	}{
+		{"exhausted quota", func() *http.Response { return response(http.StatusTooManyRequests, quota) }, http.StatusTooManyRequests, quota},
+		{"bad request", func() *http.Response { return response(http.StatusBadRequest, "bad") }, http.StatusBadRequest, "bad"},
+		{"wait beyond MaxRetryAfter", func() *http.Response {
+			resp := response(http.StatusTooManyRequests, "slow down")
+			resp.Header.Set("Retry-After", "61")
+			return resp
+		}, http.StatusTooManyRequests, "slow down"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var attempts int
+			transport := newTransport(roundTripFunc(func(*http.Request) (*http.Response, error) {
+				attempts++
+				return tc.resp(), nil
+			}), DefaultPolicy())
+			req, err := http.NewRequest(http.MethodGet, "https://example.test", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := transport.RoundTrip(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			if attempts != 1 || resp.StatusCode != tc.wantStatus || string(body) != tc.wantBody {
+				t.Fatalf("attempts=%d status=%d body=%q", attempts, resp.StatusCode, body)
+			}
+		})
+	}
+}
+
 func TestTransportDoesNotRetryNetworkErrors(t *testing.T) {
 	boom := errors.New("boom")
 	var attempts int

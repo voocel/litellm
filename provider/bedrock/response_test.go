@@ -23,8 +23,8 @@ func TestConvertResponse(t *testing.T) {
 	}
 	want := &litellm.Response{
 		Blocks: []litellm.Block{
-			litellm.ReasoningBlock{Text: "think", Signature: "sig"},
-			litellm.ReasoningBlock{Redacted: []byte("opaque")},
+			litellm.ReasoningBlock{Text: "think", State: testState(`{"signature":"sig"}`)},
+			litellm.ReasoningBlock{State: testState(`{"redactedContent":"b3BhcXVl"}`)},
 			litellm.TextBlock{Text: "hello"},
 			litellm.ToolUseBlock{ID: "toolu_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
 		},
@@ -38,4 +38,8 @@ func TestConvertResponse(t *testing.T) {
 	if got := convertResponse(&resp, "m"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got  %#v\nwant %#v", got, want)
 	}
+}
+
+func testState(data string) *litellm.ProviderState {
+	return &litellm.ProviderState{Provider: "bedrock", Model: "m", Data: json.RawMessage(data)}
 }

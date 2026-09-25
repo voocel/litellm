@@ -26,11 +26,11 @@ func TestChatResponse(t *testing.T) {
 			body:  testgolden.ReadFixtureString(t, "../../../testdata/compat/chat_response.json"),
 			want: &litellm.Response{
 				Blocks: []litellm.Block{
-					litellm.ReasoningBlock{Text: "think", Extra: json.RawMessage(`[
+					litellm.ReasoningBlock{Text: "think", State: &litellm.ProviderState{Provider: "test", Model: "m", Data: json.RawMessage(`[
           {
             "text": "think"
           }
-        ]`)},
+        ]`)}},
 					litellm.TextBlock{Text: "hello"},
 					litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
 				},

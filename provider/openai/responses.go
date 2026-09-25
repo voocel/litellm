@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/voocel/litellm"
@@ -74,7 +75,7 @@ func buildResponsesRequest(req *litellm.Request, stream bool) ([]byte, error) {
 	if req.TopP != nil {
 		body["top_p"] = *req.TopP
 	}
-	instructions, input, err := responsesInput(req.Messages)
+	instructions, input, err := responsesInput(req.Messages, req.Model)
 	if err != nil {
 		return nil, err
 	}
@@ -168,17 +169,18 @@ func responsesTools(tools []litellm.Tool) []any {
 	return out
 }
 
-// responsesInput moves system text into instructions. A system message with a
-// cache breakpoint stays in the input as a developer message, since
-// instructions cannot carry one.
-func responsesInput(messages []litellm.Message) (string, []any, error) {
+// responsesInput moves leading system text into instructions. Later system
+// messages stay in place as developer messages, where changing them keeps the
+// cached prefix valid; so does one with a cache breakpoint, which instructions
+// cannot carry.
+func responsesInput(messages []litellm.Message, model string) (string, []any, error) {
 	var instructions []string
 	items := make([]any, 0, len(messages))
 	for i, msg := range messages {
 		var err error
 		switch msg.Role {
 		case litellm.RoleSystem:
-			if text, cached, ok := textContent(msg.Blocks); ok && !cached {
+			if text, cached, ok := textContent(msg.Blocks); ok && !cached && len(items) == 0 {
 				instructions = append(instructions, text)
 				continue
 			}
@@ -186,7 +188,7 @@ func responsesInput(messages []litellm.Message) (string, []any, error) {
 		case litellm.RoleUser:
 			items, err = appendMessage(items, "user", "input_text", msg.Blocks)
 		case litellm.RoleAssistant:
-			items, err = appendAssistant(items, msg.Blocks)
+			items, err = appendAssistant(items, msg.Blocks, model)
 		case litellm.RoleTool:
 			items, err = appendToolResults(items, msg.Blocks)
 		}
@@ -256,37 +258,63 @@ func appendMessage(items []any, role, textType string, blocks []litellm.Block) (
 	return append(items, map[string]any{"type": "message", "role": role, "content": content}), nil
 }
 
-func appendAssistant(items []any, blocks []litellm.Block) ([]any, error) {
+// appendAssistant maps an assistant message. The API pairs a reasoning item
+// with the ids of the items after it, and only the model that produced the
+// reasoning accepts it. So a message holding reasoning from the requested
+// model is replayed whole, reasoning items and ids included; any other is sent
+// as plain content, without reasoning or ids. Reasoning from other providers
+// is never sent: an input reasoning item needs the id the API assigned to it.
+func appendAssistant(items []any, blocks []litellm.Block, model string) ([]any, error) {
+	replay := slices.ContainsFunc(blocks, func(block litellm.Block) bool {
+		b, ok := block.(litellm.ReasoningBlock)
+		return ok && b.State != nil && b.State.Provider == "openai" && b.State.Model == model
+	})
 	for _, block := range blocks {
-		var err error
 		switch b := block.(type) {
 		case litellm.TextBlock:
-			items, err = appendMessage(items, "assistant", "output_text", []litellm.Block{b})
+			if b.Text == "" {
+				continue
+			}
+			state, _ := wire.ReadState[itemState](b.State, "openai")
+			if !replay {
+				state.ID = ""
+			}
+			items = appendOutputText(items, b.Text, state)
 		case litellm.ReasoningBlock:
-			items = appendReasoning(items, b)
+			if item, ok := wire.ReadState[json.RawMessage](b.State, "openai"); ok && replay {
+				items = append(items, item)
+			}
 		case litellm.ToolUseBlock:
-			items = append(items, map[string]any{"type": "function_call", "call_id": b.ID, "name": b.Name, "arguments": string(b.Arguments)})
+			call := map[string]any{"type": "function_call", "call_id": b.ID, "name": b.Name, "arguments": string(b.Arguments)}
+			if state, ok := wire.ReadState[itemState](b.State, "openai"); ok && replay && state.ID != "" {
+				call["id"] = state.ID
+			}
+			items = append(items, call)
 		default:
-			err = fmt.Errorf("unsupported block %T", block)
-		}
-		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("unsupported block %T", block)
 		}
 	}
 	return items, nil
 }
 
-// appendReasoning replays the reasoning item kept in Extra. Reasoning from
-// other providers is not sent: an input reasoning item requires the id the
-// API assigned to it.
-func appendReasoning(items []any, block litellm.ReasoningBlock) []any {
-	var item struct {
-		Type string `json:"type"`
+// appendOutputText adds assistant text, joining the parts of one output
+// message. Phase is always kept, as the API asks.
+func appendOutputText(items []any, text string, state itemState) []any {
+	part := map[string]any{"type": "output_text", "text": text}
+	if n := len(items); n > 0 && state.ID != "" {
+		if last, ok := items[n-1].(map[string]any); ok && last["type"] == "message" && last["id"] == state.ID {
+			last["content"] = append(last["content"].([]any), part)
+			return items
+		}
 	}
-	if json.Unmarshal(block.Extra, &item) != nil || item.Type != "reasoning" {
-		return items
+	msg := map[string]any{"type": "message", "role": "assistant", "content": []any{part}}
+	if state.ID != "" {
+		msg["id"] = state.ID
 	}
-	return append(items, json.RawMessage(block.Extra))
+	if state.Phase != "" {
+		msg["phase"] = state.Phase
+	}
+	return append(items, msg)
 }
 
 func appendToolResults(items []any, blocks []litellm.Block) ([]any, error) {

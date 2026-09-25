@@ -237,7 +237,10 @@ func TestCacheBreakpoints(t *testing.T) {
 }
 
 func TestAssistantMessage(t *testing.T) {
-	details := litellm.ReasoningBlock{Text: "t", Extra: json.RawMessage(`[{"type":"reasoning.text","text":"t"}]`)}
+	state := func(provider, data string) *litellm.ProviderState {
+		return &litellm.ProviderState{Provider: provider, Data: json.RawMessage(data)}
+	}
+	details := litellm.ReasoningBlock{Text: "t", State: state("test", `[{"type":"reasoning.text","text":"t"}]`)}
 	call := litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{}`)}
 	toolCalls := `[{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}]`
 	both := []string{"reasoning_details", "reasoning"}
@@ -251,19 +254,19 @@ func TestAssistantMessage(t *testing.T) {
 		{name: "empty tool call content", spec: openaicompat.Spec{EmptyToolCallContent: true}, blocks: []litellm.Block{call}, want: `{"role": "assistant", "content": "", "tool_calls": ` + toolCalls + `}`},
 		{name: "reasoning dropped without fields", blocks: []litellm.Block{details, litellm.Text("ok")}, want: `{"role": "assistant", "content": "ok"}`},
 		{name: "reasoning text", spec: openaicompat.Spec{ReasoningFields: []string{"reasoning_content"}}, blocks: []litellm.Block{litellm.ReasoningBlock{Text: "a"}, litellm.ReasoningBlock{Text: "b"}}, want: `{"role": "assistant", "reasoning_content": "a\n\nb"}`},
-		{name: "extra ignored without details field", spec: openaicompat.Spec{ReasoningFields: []string{"reasoning_content"}}, blocks: []litellm.Block{details}, want: `{"role": "assistant", "reasoning_content": "t"}`},
+		{name: "state ignored without details field", spec: openaicompat.Spec{ReasoningFields: []string{"reasoning_content"}}, blocks: []litellm.Block{details}, want: `{"role": "assistant", "reasoning_content": "t"}`},
 		{name: "text goes to text field", spec: openaicompat.Spec{ReasoningFields: []string{"reasoning_details", "reasoning_content"}}, blocks: []litellm.Block{litellm.ReasoningBlock{Text: "t"}}, want: `{"role": "assistant", "reasoning_content": "t"}`},
-		{name: "details dropped without text field", spec: openaicompat.Spec{ReasoningFields: []string{"reasoning_details"}}, blocks: []litellm.Block{litellm.ReasoningBlock{Text: "t"}}, want: `{"role": "assistant"}`},
+		{name: "details dropped without text field", spec: openaicompat.Spec{ReasoningFields: []string{"reasoning_details"}}, blocks: []litellm.Block{litellm.ReasoningBlock{Text: "t"}, litellm.Text("ok")}, want: `{"role": "assistant", "content": "ok"}`},
 		{name: "details replayed", spec: openaicompat.Spec{ReasoningFields: both}, blocks: []litellm.Block{details}, want: `{"role": "assistant", "reasoning_details": [{"type": "reasoning.text", "text": "t"}]}`},
 		{
-			// Extra from another protocol, such as a Responses item, is not a details array.
-			name: "foreign extra falls back to text", spec: openaicompat.Spec{ReasoningFields: both},
-			blocks: []litellm.Block{litellm.ReasoningBlock{Text: "t", Extra: json.RawMessage(`{"id":"rs_1"}`)}},
+			// Details from another provider are not replayed, even in the same format.
+			name: "foreign state falls back to text", spec: openaicompat.Spec{ReasoningFields: both},
+			blocks: []litellm.Block{litellm.ReasoningBlock{Text: "t", State: state("other", `[{"type":"reasoning.text","text":"t"}]`)}},
 			want:   `{"role": "assistant", "reasoning": "t"}`,
 		},
 		{
 			name: "details supersede text", spec: openaicompat.Spec{ReasoningFields: both},
-			blocks: []litellm.Block{litellm.ReasoningBlock{Text: "a"}, details, litellm.ReasoningBlock{Extra: json.RawMessage(`[{"type":"reasoning.encrypted","data":"x"}]`)}, litellm.ReasoningBlock{Text: "b"}},
+			blocks: []litellm.Block{litellm.ReasoningBlock{Text: "a"}, details, litellm.ReasoningBlock{State: state("test", `[{"type":"reasoning.encrypted","data":"x"}]`)}, litellm.ReasoningBlock{Text: "b"}},
 			want:   `{"role": "assistant", "reasoning_details": [{"type": "reasoning.text", "text": "t"}, {"type": "reasoning.encrypted", "data": "x"}]}`,
 		},
 	}
@@ -274,6 +277,14 @@ func TestAssistantMessage(t *testing.T) {
 			compattest.AssertJSON(t, body["messages"].([]any)[0], tt.want)
 		})
 	}
+}
+
+// A message left with nothing to send, such as reasoning no field can carry,
+// is omitted rather than sent empty.
+func TestEmptyMessageOmitted(t *testing.T) {
+	messages := []litellm.Message{litellm.UserText("a"), litellm.Assistant(litellm.ReasoningBlock{Text: "t"}), litellm.UserText("b")}
+	body := compattest.Body(t, compattest.Spec(openaicompat.Spec{Name: "test"}), &litellm.Request{Model: "m", Messages: messages}, false)
+	compattest.AssertJSON(t, body["messages"], `[{"role": "user", "content": "a"}, {"role": "user", "content": "b"}]`)
 }
 
 func TestNewAndHeaders(t *testing.T) {

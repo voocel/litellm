@@ -34,8 +34,12 @@ func TestConvertResponse(t *testing.T) {
 					{"type":"tool_use","id":"toolu_1","name":"lookup","input":{"q":"x"}}]}`,
 			want: &litellm.Response{
 				Blocks: []litellm.Block{
-					litellm.ReasoningBlock{Text: "need lookup", Signature: "sig"},
-					litellm.ReasoningBlock{Redacted: []byte("opaque")},
+					litellm.ReasoningBlock{Text: "need lookup", State: &litellm.ProviderState{
+						Provider: "anthropic", Model: "requested", Data: json.RawMessage(`{"type":"thinking","signature":"sig"}`),
+					}},
+					litellm.ReasoningBlock{State: &litellm.ProviderState{
+						Provider: "anthropic", Model: "requested", Data: json.RawMessage(`{"type":"redacted_thinking","data":"opaque"}`),
+					}},
 					litellm.TextBlock{Text: "calling"},
 					litellm.ToolUseBlock{ID: "toolu_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
 				},

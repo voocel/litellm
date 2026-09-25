@@ -7,6 +7,7 @@
 package retry
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -29,8 +30,10 @@ type Policy struct {
 	// Jitter varies each delay by up to ±25%.
 	Jitter bool
 	// RespectRetryAfter uses the server's Retry-After instead, even beyond
-	// MaxDelay.
+	// MaxDelay. One beyond MaxRetryAfter, 60s by default, ends retrying with
+	// the response, whose error reports the wait in RetryAfter.
 	RespectRetryAfter bool
+	MaxRetryAfter     time.Duration
 }
 
 // DefaultPolicy returns a conservative retry policy for complete retryable HTTP
@@ -44,15 +47,19 @@ func DefaultPolicy() *Policy {
 		Multiplier:        2,
 		Jitter:            true,
 		RespectRetryAfter: true,
+		MaxRetryAfter:     time.Minute,
 	}
 }
 
 // NewHTTPClient returns a shallow copy of base, http.DefaultClient when nil,
-// whose Transport retries complete 429/5xx/529 responses according to policy.
-// A nil policy or MaxAttempts <= 1 disables retries. Only replayable request
-// bodies are resent; replayable means the bytes can be resent, not that the
-// operation is idempotent. Transport failures and response-body errors,
-// including interrupted successful streams, are never retried.
+// whose Transport retries, according to policy, complete responses that
+// providers report as temporary errors: 408, 429, 500, 502, 503, 504 and 529
+// statuses, except those the body shows to be exhausted quota,
+// authentication, content filter or context overflow failures. A nil policy
+// or MaxAttempts <= 1 disables retries. Only replayable request bodies are
+// resent; replayable means the bytes can be resent, not that the operation is
+// idempotent. Transport failures and response-body errors, including
+// interrupted successful streams, are never retried.
 func NewHTTPClient(base *http.Client, policy *Policy) *http.Client {
 	if base == nil {
 		base = http.DefaultClient
@@ -89,11 +96,13 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, err
 		}
 		// A body that cannot be resent ends retrying with the response as is.
-		if !isRetryableStatus(resp.StatusCode) || attempt == policy.MaxAttempts || (req.Body != nil && req.GetBody == nil) {
+		if attempt == policy.MaxAttempts || (req.Body != nil && req.GetBody == nil) || !temporary(resp) {
 			return resp, nil
 		}
-
-		delay := policy.delay(attempt, resp)
+		delay, ok := policy.delay(attempt, resp)
+		if !ok {
+			return resp, nil
+		}
 		discard(resp)
 		if err := sleep(req.Context(), delay); err != nil {
 			return nil, err
@@ -130,13 +139,18 @@ func normalizePolicy(policy Policy) Policy {
 	if policy.Multiplier <= 0 {
 		policy.Multiplier = 2
 	}
+	if policy.MaxRetryAfter <= 0 {
+		policy.MaxRetryAfter = time.Minute
+	}
 	return policy
 }
 
-func (p Policy) delay(attempt int, resp *http.Response) time.Duration {
+// delay returns the wait before the next attempt, or false when the server
+// asks for a longer one than MaxRetryAfter.
+func (p Policy) delay(attempt int, resp *http.Response) (time.Duration, bool) {
 	if p.RespectRetryAfter {
 		if retryAfter := parseRetryAfter(resp); retryAfter > 0 {
-			return retryAfter
+			return retryAfter, retryAfter <= p.MaxRetryAfter
 		}
 	}
 	delay := p.InitialDelay
@@ -157,21 +171,25 @@ func (p Policy) delay(attempt int, resp *http.Response) time.Duration {
 			delay = 0
 		}
 	}
-	return delay
+	return delay, true
 }
 
-func isRetryableStatus(statusCode int) bool {
-	switch statusCode {
-	case http.StatusTooManyRequests,
-		http.StatusInternalServerError,
-		http.StatusBadGateway,
-		http.StatusServiceUnavailable,
-		http.StatusGatewayTimeout,
-		529:
-		return true
-	default:
+// temporary classifies a failed response as the provider will report it. The
+// status decides unless the body can rule a retry out; the body prefix read
+// for that is put back.
+func temporary(resp *http.Response) bool {
+	if resp.StatusCode < 400 || !wire.HTTPError("", resp.StatusCode, nil, "").Temporary {
 		return false
 	}
+	var data []byte
+	if resp.Body != nil {
+		data, _ = io.ReadAll(io.LimitReader(resp.Body, wire.MaxErrorBody))
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(data), resp.Body), resp.Body}
+	}
+	return wire.HTTPError("", resp.StatusCode, resp.Header, string(data)).Temporary
 }
 
 func parseRetryAfter(resp *http.Response) time.Duration {

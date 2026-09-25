@@ -32,8 +32,8 @@ func TestBuildRequestGolden(t *testing.T) {
 				litellm.ImageBlock{FileURI: "gs://bucket/image.png", MIME: "image/png"},
 			),
 			litellm.Assistant(
-				litellm.ReasoningBlock{Text: "Need weather.", Signature: "sig-think"},
-				litellm.ToolUseBlock{ID: "call_weather", Name: "get_weather", Arguments: json.RawMessage(`{"city":"Paris"}`), Signature: "sig-call"},
+				litellm.ReasoningBlock{Text: "Need weather.", State: signed("gemini-3-pro", "sig-think")},
+				litellm.ToolUseBlock{ID: "call_weather", Name: "get_weather", Arguments: json.RawMessage(`{"city":"Paris"}`), State: signed("gemini-3-pro", "sig-call")},
 			),
 			litellm.ToolResultText("call_weather", `{"temp":"15C"}`),
 		},
@@ -154,18 +154,19 @@ func TestBuildRequestToolResultsAndTurns(t *testing.T) {
 		litellm.UserText("go"),
 		litellm.Assistant(
 			litellm.ToolUseBlock{ID: "a", Name: "first"},
-			litellm.ToolUseBlock{ID: "b", Name: "second", Signature: SkipThoughtSignatureValidator},
+			litellm.ToolUseBlock{ID: "b", Name: "second"},
 		),
 		litellm.ToolResultText("a", "plain"),
 		{Role: litellm.RoleTool, Blocks: []litellm.Block{litellm.ToolResultBlock{ToolUseID: "b", Content: []litellm.Block{litellm.Text("boom")}, IsError: true}}},
 		litellm.UserText("continue"),
 	}})
-	// Parallel responses and the following text share one user turn.
+	// Parallel responses and the following text share one user turn. The first
+	// unsigned call gets the documented placeholder signature.
 	assertField(t, body, "contents", `[
 		{"role":"user","parts":[{"text":"go"}]},
 		{"role":"model","parts":[
-			{"functionCall":{"id":"a","name":"first","args":{}}},
-			{"functionCall":{"id":"b","name":"second","args":{}},"thoughtSignature":"skip_thought_signature_validator"}
+			{"functionCall":{"id":"a","name":"first","args":{}},"thoughtSignature":"skip_thought_signature_validator"},
+			{"functionCall":{"id":"b","name":"second","args":{}}}
 		]},
 		{"role":"user","parts":[
 			{"functionResponse":{"id":"a","name":"first","response":{"result":"plain"}}},
@@ -176,21 +177,39 @@ func TestBuildRequestToolResultsAndTurns(t *testing.T) {
 }
 
 func TestBuildRequestReplaysSignatures(t *testing.T) {
+	foreign := &litellm.ProviderState{Provider: "anthropic", Data: json.RawMessage(`{"type":"thinking","signature":"a"}`)}
 	body := build(t, litellm.Request{Messages: []litellm.Message{
 		litellm.UserText("go"),
 		litellm.Assistant(
-			litellm.ReasoningBlock{Signature: "r"},
-			litellm.TextBlock{Text: "answer", Signature: "t"},
-			litellm.TextBlock{Signature: "e"},
+			litellm.ReasoningBlock{State: signed("m", "r")},
+			litellm.TextBlock{Text: "answer", State: signed("m", "t")},
+			litellm.TextBlock{State: signed("m", "e")},
+			litellm.ToolUseBlock{ID: "a", Name: "f", State: signed("m", "c")},
+		),
+		litellm.ToolResultText("a", "ok"),
+		litellm.Assistant(
+			litellm.ReasoningBlock{Text: "foreign", State: foreign},
+			litellm.ReasoningBlock{State: foreign},
+			litellm.TextBlock{Text: "x", State: foreign},
+			litellm.ToolUseBlock{ID: "b", Name: "f", State: foreign},
 		),
 	}})
 	// Text is the part's data, so signature-only parts keep an empty text.
+	// Foreign reasoning becomes an unsigned thought and its first call gets the
+	// placeholder, while an own signed call keeps its signature.
 	assertField(t, body, "contents", `[
 		{"role":"user","parts":[{"text":"go"}]},
 		{"role":"model","parts":[
 			{"text":"","thought":true,"thoughtSignature":"r"},
 			{"text":"answer","thoughtSignature":"t"},
-			{"text":"","thoughtSignature":"e"}
+			{"text":"","thoughtSignature":"e"},
+			{"functionCall":{"id":"a","name":"f","args":{}},"thoughtSignature":"c"}
+		]},
+		{"role":"user","parts":[{"functionResponse":{"id":"a","name":"f","response":{"result":"ok"}}}]},
+		{"role":"model","parts":[
+			{"text":"foreign","thought":true},
+			{"text":"x"},
+			{"functionCall":{"id":"b","name":"f","args":{}},"thoughtSignature":"skip_thought_signature_validator"}
 		]}
 	]`)
 }
@@ -248,9 +267,11 @@ func TestChatConvertsResponse(t *testing.T) {
 		t.Fatalf("last block = %#v", resp.Blocks[len(resp.Blocks)-1])
 	}
 	want := []litellm.Block{
-		litellm.ReasoningBlock{Text: "thinking", Signature: "sig-think"},
+		litellm.ReasoningBlock{Text: "thinking", State: &litellm.ProviderState{
+			Provider: "gemini", Model: "gemini-3-pro", Data: json.RawMessage(`{"thoughtSignature":"sig-think"}`),
+		}},
 		litellm.TextBlock{Text: "answer"},
-		litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`), Signature: "sig-call"},
+		litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`), State: signed("gemini-3-pro", "sig-call")},
 		litellm.ToolUseBlock{ID: generated.ID, Name: "noop", Arguments: json.RawMessage(`{}`)},
 	}
 	if !reflect.DeepEqual(resp.Blocks, want) {
@@ -308,12 +329,12 @@ func TestStreamEvents(t *testing.T) {
 	assertEvents(t, stream, []litellm.Event{
 		litellm.BlockStart{Index: 0, Block: litellm.ReasoningBlock{}},
 		litellm.ReasoningDelta{Index: 0, Text: "think"},
-		litellm.BlockEnd{Index: 0, Block: litellm.ReasoningBlock{Signature: "sig-think"}},
+		litellm.BlockEnd{Index: 0, Block: litellm.ReasoningBlock{State: signed("gemini-3-pro", "sig-think")}},
 		litellm.BlockStart{Index: 1, Block: litellm.TextBlock{}},
 		litellm.TextDelta{Index: 1, Text: "ans"},
 		litellm.TextDelta{Index: 1, Text: "wer"},
 		litellm.BlockEnd{Index: 1},
-		litellm.BlockStart{Index: 2, Block: litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Signature: "sig-call"}},
+		litellm.BlockStart{Index: 2, Block: litellm.ToolUseBlock{ID: "call_1", Name: "lookup", State: signed("gemini-3-pro", "sig-call")}},
 		litellm.ToolUseDelta{Index: 2, Arguments: `{"q":"x"}`},
 		litellm.BlockEnd{Index: 2},
 		litellm.UsageEvent{Usage: usage},

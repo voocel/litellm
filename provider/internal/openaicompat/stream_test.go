@@ -109,7 +109,7 @@ func TestStreamEvents(t *testing.T) {
 				litellm.BlockStart{Index: 0, Block: litellm.ReasoningBlock{}},
 				litellm.ReasoningDelta{Index: 0, Text: "Let"},
 				litellm.ReasoningDelta{Index: 0, Text: " me"},
-				litellm.BlockEnd{Index: 0, Block: litellm.ReasoningBlock{Extra: json.RawMessage(`[{"index":0,"signature":"SIG","text":"Let me","type":"reasoning.text"},{"data":"x","index":1,"type":"reasoning.encrypted"},{"data":"y","index":1,"type":"reasoning.encrypted"}]`)}},
+				litellm.BlockEnd{Index: 0, Block: litellm.ReasoningBlock{State: &litellm.ProviderState{Provider: "test", Model: "m", Data: json.RawMessage(`[{"index":0,"signature":"SIG","text":"Let me","type":"reasoning.text"},{"data":"x","index":1,"type":"reasoning.encrypted"},{"data":"y","index":1,"type":"reasoning.encrypted"}]`)}}},
 				done,
 			},
 		},

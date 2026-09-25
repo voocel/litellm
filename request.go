@@ -33,13 +33,32 @@ type Annotation struct {
 	Extra json.RawMessage
 }
 
+// ProviderState is data a provider attaches to a block it produced so the
+// block can be sent back to it: a reasoning signature, encrypted reasoning or
+// an item id. Keep it with the block when storing history; only the provider
+// named by Provider reads it.
+//
+// Replay rule: portable content (text, reasoning text, tool calls) maps to
+// wherever the target wire format can carry it, while State is sent only to
+// the provider that produced it. A block the wire cannot carry without its
+// State, such as Anthropic thinking, is dropped; where the vendor documents a
+// placeholder for foreign content, the provider supplies it. Blocks built by
+// the caller (nil State) count as foreign.
+type ProviderState struct {
+	// Provider is the Name of the provider that produced the block.
+	Provider string
+	// Model is the requested model.
+	Model string
+	// Data holds the vendor's native fields as JSON.
+	Data json.RawMessage
+}
+
 // TextBlock is plain text. Annotations and Logprobs are response metadata.
-// Signature is an opaque vendor token kept for replay.
 type TextBlock struct {
 	Text        string
 	Annotations []Annotation
 	Logprobs    json.RawMessage
-	Signature   string
+	State       *ProviderState
 	Cache       *CacheControl
 }
 
@@ -55,24 +74,22 @@ type ImageBlock struct {
 }
 
 // ReasoningBlock is model reasoning. Summary marks Text as a summary rather
-// than the full reasoning. Signature, Redacted (encrypted reasoning) and Extra
-// (the vendor item verbatim) are kept for replay to the same provider.
+// than the full reasoning. Text is empty when the vendor returns the reasoning
+// encrypted or redacted; State then carries it.
 type ReasoningBlock struct {
-	Text      string
-	Summary   bool
-	Signature string
-	Redacted  []byte
-	Extra     json.RawMessage
-	Cache     *CacheControl
+	Text    string
+	Summary bool
+	State   *ProviderState
+	Cache   *CacheControl
 }
 
 // ToolUseBlock is a tool call from the assistant. Arguments is the JSON the
-// model produced. Signature is an opaque vendor token kept for replay.
+// model produced.
 type ToolUseBlock struct {
 	ID        string
 	Name      string
 	Arguments json.RawMessage
-	Signature string
+	State     *ProviderState
 	Cache     *CacheControl
 }
 

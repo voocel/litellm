@@ -34,7 +34,7 @@ func convertResponse(resp *response, model string) *litellm.Response {
 		out.Model = resp.Model
 	}
 	for _, c := range resp.Content {
-		if block, ok := convertContent(c); ok {
+		if block, ok := convertContent(c, model); ok {
 			out.Blocks = append(out.Blocks, block)
 		} else {
 			out.Warnings = append(out.Warnings, unsupportedBlock(c.Type))
@@ -43,24 +43,33 @@ func convertResponse(resp *response, model string) *litellm.Response {
 	return out
 }
 
-// convertContent maps a response content block. Blocks litellm does not model,
-// such as server tool calls, are reported by unsupportedBlock.
-func convertContent(c content) (litellm.Block, bool) {
+// convertContent maps a response content block for the requested model.
+// Blocks litellm does not model, such as server tool calls, are reported by
+// unsupportedBlock.
+func convertContent(c content, model string) (litellm.Block, bool) {
 	switch c.Type {
 	case "text":
 		return litellm.TextBlock{Text: c.Text, Annotations: annotations(c.Citations)}, true
-	case "thinking":
+	case "thinking", "redacted_thinking":
 		var text string
 		if c.Thinking != nil {
 			text = *c.Thinking
 		}
-		return litellm.ReasoningBlock{Text: text, Signature: c.Signature}, true
-	case "redacted_thinking":
-		return litellm.ReasoningBlock{Redacted: []byte(c.Data)}, true
+		return litellm.ReasoningBlock{Text: text, State: reasoningState(model, c.Type, c.Signature, c.Data)}, true
 	case "tool_use":
 		return litellm.ToolUseBlock{ID: c.ID, Name: c.Name, Arguments: c.Input}, true
 	}
 	return nil, false
+}
+
+// reasoningState returns the State of a thinking block, nil until it has the
+// signature or redacted data that makes it replayable: a stream cut short
+// before the signature leaves thinking that cannot be sent back.
+func reasoningState(model, blockType, signature, data string) *litellm.ProviderState {
+	if signature == "" && data == "" {
+		return nil
+	}
+	return wire.NewState("anthropic", model, thinkingState{Type: blockType, Signature: signature, Data: data})
 }
 
 // annotations maps citations, keeping each verbatim in Extra.

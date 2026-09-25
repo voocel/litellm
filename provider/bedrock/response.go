@@ -18,7 +18,7 @@ func convertResponse(resp *response, model string) *litellm.Response {
 		case c.Text != "":
 			out.Blocks = append(out.Blocks, litellm.TextBlock{Text: c.Text})
 		case c.ReasoningContent != nil:
-			out.Blocks = append(out.Blocks, convertReasoning(c.ReasoningContent))
+			out.Blocks = append(out.Blocks, convertReasoning(c.ReasoningContent, model))
 		case c.ToolUse != nil:
 			out.Blocks = append(out.Blocks, litellm.ToolUseBlock{ID: c.ToolUse.ToolUseID, Name: c.ToolUse.Name, Arguments: c.ToolUse.Input})
 		}
@@ -26,11 +26,13 @@ func convertResponse(resp *response, model string) *litellm.Response {
 	return out
 }
 
-func convertReasoning(r *reasoningContent) litellm.ReasoningBlock {
+func convertReasoning(r *reasoningContent, model string) litellm.ReasoningBlock {
+	state := reasoningState{RedactedContent: r.RedactedContent}
+	var text string
 	if r.ReasoningText != nil {
-		return litellm.ReasoningBlock{Text: r.ReasoningText.Text, Signature: r.ReasoningText.Signature}
+		text, state.Signature = r.ReasoningText.Text, r.ReasoningText.Signature
 	}
-	return litellm.ReasoningBlock{Redacted: r.RedactedContent}
+	return litellm.ReasoningBlock{Text: text, State: wire.NewState("bedrock", model, state)}
 }
 
 // convertUsage reports input as the total: Bedrock counts cache reads and

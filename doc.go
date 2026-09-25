@@ -44,8 +44,10 @@ Create a provider with its package-specific config, then bind a Client:
 # Blocks
 
 Message and Response content is represented as ordered Blocks. This preserves
-the order of text, reasoning, tool use, and tool results, with provider
-signatures, across multi-turn agent workflows.
+the order of text, reasoning, tool use, and tool results across multi-turn
+agent workflows. Data a vendor needs back, such as a reasoning signature,
+travels in a block's ProviderState and is sent only to the provider that
+produced it.
 
 # Streaming
 

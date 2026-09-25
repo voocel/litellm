@@ -12,11 +12,6 @@ import (
 	"github.com/voocel/litellm/internal/wire"
 )
 
-// SkipThoughtSignatureValidator is the placeholder Gemini accepts as the
-// Signature of a function call that did not come from Gemini, for example
-// when a conversation moves from another provider.
-const SkipThoughtSignatureValidator = "skip_thought_signature_validator"
-
 // ProviderOptions are native request fields copied into the body. An option
 // naming a generated object or array is merged into or appended to it, e.g.
 // {"topK": 40} under "generationConfig" or [{"googleSearch": {}}] under
@@ -104,7 +99,31 @@ func convertMessages(messages []litellm.Message) ([]content, []part, error) {
 		}
 		out = append(out, content{Role: role, Parts: parts})
 	}
+	for _, c := range out {
+		if c.Role == "model" {
+			signFirstCall(c.Parts)
+		}
+	}
 	return out, system, nil
+}
+
+// skipSignature is the placeholder Gemini documents for function calls it did
+// not sign. It is sent as this literal string, which the Gemini API and
+// Vertex AI accept, not base64-encoded like real signatures.
+const skipSignature = "skip_thought_signature_validator"
+
+// signFirstCall gives the first function call of a model turn the placeholder
+// signature when it has none, such as one from another provider: that call
+// must carry a signature.
+func signFirstCall(parts []part) {
+	for i := range parts {
+		if parts[i].FunctionCall != nil {
+			if parts[i].ThoughtSignature == "" {
+				parts[i].ThoughtSignature = skipSignature
+			}
+			return
+		}
+	}
 }
 
 func convertBlocks(blocks []litellm.Block, names map[string]string) ([]part, error) {
@@ -112,8 +131,8 @@ func convertBlocks(blocks []litellm.Block, names map[string]string) ([]part, err
 	for _, block := range blocks {
 		switch b := block.(type) {
 		case litellm.TextBlock:
-			if b.Text != "" || b.Signature != "" {
-				out = append(out, part{Text: new(b.Text), ThoughtSignature: b.Signature})
+			if sig := signature(b.State); b.Text != "" || sig != "" {
+				out = append(out, part{Text: new(b.Text), ThoughtSignature: sig})
 			}
 		case litellm.ImageBlock:
 			converted, err := convertImage(b)
@@ -122,8 +141,9 @@ func convertBlocks(blocks []litellm.Block, names map[string]string) ([]part, err
 			}
 			out = append(out, converted)
 		case litellm.ReasoningBlock:
-			if b.Text != "" || b.Signature != "" {
-				out = append(out, part{Text: new(b.Text), Thought: true, ThoughtSignature: b.Signature})
+			// Reasoning from elsewhere is sent as an unsigned thought.
+			if sig := signature(b.State); b.Text != "" || sig != "" {
+				out = append(out, part{Text: new(b.Text), Thought: true, ThoughtSignature: sig})
 			}
 		case litellm.ToolUseBlock:
 			args := json.RawMessage("{}")
@@ -135,7 +155,7 @@ func convertBlocks(blocks []litellm.Block, names map[string]string) ([]part, err
 				args = json.RawMessage(b.Arguments)
 			}
 			names[b.ID] = b.Name
-			out = append(out, part{FunctionCall: &functionCall{ID: b.ID, Name: b.Name, Args: args}, ThoughtSignature: b.Signature})
+			out = append(out, part{FunctionCall: &functionCall{ID: b.ID, Name: b.Name, Args: args}, ThoughtSignature: signature(b.State)})
 		case litellm.ToolResultBlock:
 			name, ok := names[b.ToolUseID]
 			if !ok {

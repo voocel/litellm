@@ -208,12 +208,13 @@ func TestWrapperDialects(t *testing.T) {
 		}
 		reasoning, _ := got.Blocks[0].(litellm.ReasoningBlock)
 		want := `[{"format":"MiniMax-response-v1","id":"reasoning-text-1","index":0,"text":"ab","type":"reasoning.text"}]`
-		if reasoning.Text != "ab" || string(reasoning.Extra) != want || got.Text() != "hi" || got.FinishReason != litellm.FinishReasonToolCall {
+		if reasoning.Text != "ab" || reasoning.State.Provider != "minimax" || string(reasoning.State.Data) != want || got.Text() != "hi" || got.FinishReason != litellm.FinishReasonToolCall {
 			t.Fatalf("response = %#v", got)
 		}
 	})
 	t.Run("openrouter replays reasoning details", func(t *testing.T) {
-		msg := litellm.Assistant(litellm.ReasoningBlock{Text: "t", Extra: json.RawMessage(`[{"type":"reasoning.encrypted","data":"x"}]`)}, litellm.Text("ok"))
+		state := &litellm.ProviderState{Provider: "openrouter", Data: json.RawMessage(`[{"type":"reasoning.encrypted","data":"x"}]`)}
+		msg := litellm.Assistant(litellm.ReasoningBlock{Text: "t", State: state}, litellm.Text("ok"))
 		body := compattest.Body(t, openrouter.New, &litellm.Request{Model: "m", Messages: []litellm.Message{msg}}, false)
 		compattest.AssertJSON(t, body["messages"], `[{"role": "assistant", "content": "ok", "reasoning_details": [{"type": "reasoning.encrypted", "data": "x"}]}]`)
 	})

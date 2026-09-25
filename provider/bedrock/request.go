@@ -133,6 +133,9 @@ func convertMessages(out *request, messages []litellm.Message) error {
 		if err != nil {
 			return fmt.Errorf("messages[%d]: %w", i, err)
 		}
+		if len(blocks) == 0 {
+			continue // left empty, such as by dropped foreign reasoning
+		}
 		role := "user"
 		if msg.Role == litellm.RoleAssistant {
 			role = "assistant"
@@ -156,6 +159,9 @@ func convertBlocks(blocks []litellm.Block) ([]content, error) {
 		var cache *litellm.CacheControl
 		switch b := block.(type) {
 		case litellm.TextBlock:
+			if b.Text == "" {
+				continue // an empty text block has no content member
+			}
 			c, cache = content{Text: b.Text}, b.Cache
 		case litellm.ImageBlock:
 			img, err := convertImage(b)
@@ -164,9 +170,14 @@ func convertBlocks(blocks []litellm.Block) ([]content, error) {
 			}
 			c, cache = content{Image: img}, b.Cache
 		case litellm.ReasoningBlock:
-			c, cache = content{ReasoningContent: &reasoningContent{ReasoningText: &reasoningText{Text: b.Text, Signature: b.Signature}}}, b.Cache
-			if len(b.Redacted) > 0 {
-				c = content{ReasoningContent: &reasoningContent{RedactedContent: b.Redacted}}
+			// Reasoning from elsewhere lacks the signature models require.
+			state, ok := wire.ReadState[reasoningState](b.State, "bedrock")
+			if !ok {
+				continue
+			}
+			c, cache = content{ReasoningContent: &reasoningContent{ReasoningText: &reasoningText{Text: b.Text, Signature: state.Signature}}}, b.Cache
+			if len(state.RedactedContent) > 0 {
+				c.ReasoningContent = &reasoningContent{RedactedContent: state.RedactedContent}
 			}
 		case litellm.ToolUseBlock:
 			input := json.RawMessage("{}")
@@ -177,9 +188,9 @@ func convertBlocks(blocks []litellm.Block) ([]content, error) {
 				}
 				input = json.RawMessage(b.Arguments)
 			}
-			c, cache = content{ToolUse: &toolUse{ToolUseID: b.ID, Name: b.Name, Input: input}}, b.Cache
+			c, cache = content{ToolUse: &toolUse{ToolUseID: claude.ToolUseID(b.ID), Name: b.Name, Input: input}}, b.Cache
 		case litellm.ToolResultBlock:
-			result := &toolResult{ToolUseID: b.ToolUseID, Content: make([]content, 0, len(b.Content))} // content is required, even empty
+			result := &toolResult{ToolUseID: claude.ToolUseID(b.ToolUseID), Content: make([]content, 0, len(b.Content))} // content is required, even empty
 			if b.IsError {
 				result.Status = "error"
 			}

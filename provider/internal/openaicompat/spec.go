@@ -53,8 +53,9 @@ type Spec struct {
 	// breakpoints, which are hints.
 	Cache func(*litellm.CacheControl) (map[string]any, error)
 	// ReasoningFields names the message fields that carry reasoning, in
-	// priority order. reasoning_details is kept as ReasoningBlock.Extra and
-	// replayed verbatim; history text is sent in the first other field.
+	// priority order. reasoning_details is kept as the ReasoningBlock State and
+	// replayed verbatim to this provider; history text is sent in the first
+	// other field.
 	ReasoningFields []string
 	// EmptyToolCallContent sends "content": "" on assistant tool call messages.
 	EmptyToolCallContent bool

@@ -45,11 +45,11 @@ type stream struct {
 	finish    litellm.FinishReason
 	finishRaw string
 	blocks    wire.BlockTracker[int] // native index to litellm index
-	reasoning map[int]litellm.ReasoningBlock
+	reasoning map[int]reasoningState
 }
 
 func newStream(resp *http.Response, model string) *stream {
-	return &stream{reader: bufio.NewReader(resp.Body), response: resp, model: model, reasoning: make(map[int]litellm.ReasoningBlock)}
+	return &stream{reader: bufio.NewReader(resp.Body), response: resp, model: model, reasoning: make(map[int]reasoningState)}
 }
 
 func (s *stream) Next() (event litellm.Event, err error) {
@@ -112,7 +112,7 @@ func (s *stream) events(events []litellm.Event, name string, e streamEvent, raw 
 			events, i := s.blocks.Open(events, index, litellm.ReasoningBlock{})
 			r := s.reasoning[index]
 			r.Signature += d.ReasoningContent.Signature
-			r.Redacted = append(r.Redacted, d.ReasoningContent.RedactedContent...)
+			r.RedactedContent = append(r.RedactedContent, d.ReasoningContent.RedactedContent...)
 			s.reasoning[index] = r
 			if d.ReasoningContent.Text != "" {
 				events = append(events, litellm.ReasoningDelta{Index: i, Text: d.ReasoningContent.Text})
@@ -124,14 +124,7 @@ func (s *stream) events(events []litellm.Event, name string, e streamEvent, raw 
 			}
 		}
 	case "contentBlockStop":
-		// Reasoning signatures and redacted data arrive as deltas and are
-		// delivered here.
-		var final litellm.Block
-		if r := s.reasoning[index]; r.Signature != "" || len(r.Redacted) > 0 {
-			final = r
-		}
-		delete(s.reasoning, index)
-		return s.blocks.Close(events, index, final)
+		return s.blocks.Close(events, index, s.final(index))
 	case "messageStop":
 		s.finish, s.finishRaw = wire.FinishReason(e.StopReason), e.StopReason
 		return events
@@ -139,11 +132,22 @@ func (s *stream) events(events []litellm.Event, name string, e streamEvent, raw 
 		if e.Usage != nil {
 			events = append(events, litellm.UsageEvent{Usage: convertUsage(*e.Usage)})
 		}
-		events = s.blocks.CloseAll(events, nil)
+		events = s.blocks.CloseAll(events, s.final)
 		s.done = true
 		return append(events, litellm.DoneEvent{FinishReason: s.finish, FinishReasonRaw: s.finishRaw, Provider: "bedrock", Model: s.model})
 	}
 	return append(events, litellm.ProviderEvent{Name: "bedrock." + name, Raw: json.RawMessage(raw)})
+}
+
+// final returns the state of a reasoning block, whose signature or redacted
+// content arrives as deltas.
+func (s *stream) final(index int) litellm.Block {
+	r, ok := s.reasoning[index]
+	if !ok {
+		return nil
+	}
+	delete(s.reasoning, index)
+	return litellm.ReasoningBlock{State: wire.NewState("bedrock", s.model, r)}
 }
 
 // streamException maps a modeled exception frame, named by :exception-type

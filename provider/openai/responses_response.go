@@ -27,6 +27,7 @@ type responsesResponse struct {
 type responsesOutputItem struct {
 	ID        string                 `json:"id"`
 	Type      string                 `json:"type"`
+	Phase     string                 `json:"phase"`
 	CallID    string                 `json:"call_id"`
 	Name      string                 `json:"name"`
 	Arguments string                 `json:"arguments"`
@@ -34,8 +35,25 @@ type responsesOutputItem struct {
 	Summary   []struct {
 		Text string `json:"text"`
 	} `json:"summary"`
-	// Raw is the item as received, replayed for reasoning items.
+	// Raw is the item as received, the State of reasoning items.
 	Raw json.RawMessage `json:"-"`
+}
+
+// itemState is the State of text and function calls: the id of their output
+// item, which replay pairs with the reasoning before it, and a message's
+// phase.
+type itemState struct {
+	ID    string `json:"id,omitempty"`
+	Phase string `json:"phase,omitempty"`
+}
+
+// state returns the State of a block from an output item with the given id
+// and phase, nil when there are neither.
+func (s itemState) state(model string) *litellm.ProviderState {
+	if s == (itemState{}) {
+		return nil
+	}
+	return wire.NewState("openai", model, s)
 }
 
 func (i *responsesOutputItem) UnmarshalJSON(data []byte) error {
@@ -81,15 +99,19 @@ func convertResponsesResponse(resp *responsesResponse, model string) *litellm.Re
 		case "message":
 			for _, part := range item.Content {
 				if block, refusal, ok := contentPartBlock(part); ok {
+					block.State = itemState{item.ID, item.Phase}.state(model)
 					out.Blocks = append(out.Blocks, block)
 					refused = refused || refusal
 				}
 			}
 		case "function_call":
-			out.Blocks = append(out.Blocks, litellm.ToolUseBlock{ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(cmp.Or(item.Arguments, "{}"))})
+			out.Blocks = append(out.Blocks, litellm.ToolUseBlock{
+				ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(cmp.Or(item.Arguments, "{}")),
+				State: itemState{ID: item.ID}.state(model),
+			})
 			toolCalls = true
 		case "reasoning":
-			out.Blocks = append(out.Blocks, reasoningBlock(item))
+			out.Blocks = append(out.Blocks, reasoningBlock(item, model))
 		}
 	}
 	reason := ""
@@ -101,8 +123,8 @@ func convertResponsesResponse(resp *responsesResponse, model string) *litellm.Re
 }
 
 // reasoningBlock uses the summary, or the raw reasoning text some models
-// return instead. Extra keeps the item for replay.
-func reasoningBlock(item responsesOutputItem) litellm.ReasoningBlock {
+// return instead. The item is its State.
+func reasoningBlock(item responsesOutputItem, model string) litellm.ReasoningBlock {
 	var summaries, texts []string
 	for _, summary := range item.Summary {
 		summaries = append(summaries, summary.Text)
@@ -112,20 +134,21 @@ func reasoningBlock(item responsesOutputItem) litellm.ReasoningBlock {
 			texts = append(texts, part.Text)
 		}
 	}
+	state := wire.NewState("openai", model, item.Raw)
 	if len(summaries) == 0 && len(texts) > 0 {
-		return litellm.ReasoningBlock{Text: strings.Join(texts, ""), Extra: item.Raw}
+		return litellm.ReasoningBlock{Text: strings.Join(texts, ""), State: state}
 	}
-	return litellm.ReasoningBlock{Text: strings.Join(summaries, "\n"), Summary: true, Extra: item.Raw}
+	return litellm.ReasoningBlock{Text: strings.Join(summaries, "\n"), Summary: true, State: state}
 }
 
-func contentPartBlock(part responsesContentPart) (litellm.Block, bool, bool) {
+func contentPartBlock(part responsesContentPart) (litellm.TextBlock, bool, bool) {
 	switch part.Type {
 	case "output_text":
 		return litellm.TextBlock{Text: part.Text, Annotations: openaicompat.Annotations(part.Annotations), Logprobs: part.Logprobs}, false, true
 	case "refusal":
 		return litellm.TextBlock{Text: part.Refusal}, true, true
 	}
-	return nil, false, false
+	return litellm.TextBlock{}, false, false
 }
 
 // finish derives the finish reason shared by responses and streams.

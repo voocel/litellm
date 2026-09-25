@@ -43,8 +43,10 @@ type responsesStream struct {
 	sse       *wire.SSEReader
 	pending   []litellm.Event
 	done      bool
+	requested string // the requested model, for ProviderState
 	model     string
 	blocks    wire.BlockTracker[partKey]
+	messages  map[int]itemState // message items by output index
 	tools     map[int]litellm.ToolUseBlock
 	streamed  map[int]bool // function calls whose arguments arrived as deltas
 	summaries map[int]int  // last summary index per reasoning item
@@ -57,7 +59,9 @@ func newResponsesStream(resp *http.Response, model string) *responsesStream {
 	return &responsesStream{
 		resp:      resp,
 		sse:       wire.NewSSEReader(resp.Body, "openai"),
+		requested: model,
 		model:     model,
+		messages:  make(map[int]itemState),
 		tools:     make(map[int]litellm.ToolUseBlock),
 		streamed:  make(map[int]bool),
 		summaries: make(map[int]int),
@@ -111,27 +115,34 @@ func (s *responsesStream) Close() error {
 func (s *responsesStream) events(events []litellm.Event, e responsesEvent, raw json.RawMessage) ([]litellm.Event, error) {
 	switch e.Type {
 	case "response.output_item.added":
-		if e.Item != nil && e.Item.Type == "function_call" {
-			tool := litellm.ToolUseBlock{ID: e.Item.CallID, Name: e.Item.Name}
-			s.tools[e.OutputIndex] = tool
-			s.toolCalls = true
-			events, _ = s.blocks.Open(events, itemKey(e.OutputIndex), tool)
-			return events, nil
+		if e.Item != nil {
+			switch e.Item.Type {
+			case "message":
+				s.messages[e.OutputIndex] = itemState{e.Item.ID, e.Item.Phase}
+				return events, nil
+			case "function_call":
+				tool := litellm.ToolUseBlock{ID: e.Item.CallID, Name: e.Item.Name, State: itemState{ID: e.Item.ID}.state(s.requested)}
+				s.tools[e.OutputIndex] = tool
+				s.toolCalls = true
+				events, _ = s.blocks.Open(events, itemKey(e.OutputIndex), tool)
+				return events, nil
+			}
 		}
 	case "response.output_item.done":
 		if e.Item != nil {
 			switch e.Item.Type {
 			case "function_call":
-				return s.blocks.Close(events, itemKey(e.OutputIndex), litellm.ToolUseBlock{ID: e.Item.CallID, Name: e.Item.Name}), nil
+				final := litellm.ToolUseBlock{ID: e.Item.CallID, Name: e.Item.Name, State: itemState{ID: e.Item.ID}.state(s.requested)}
+				return s.blocks.Close(events, itemKey(e.OutputIndex), final), nil
 			case "reasoning":
-				block := reasoningBlock(*e.Item)
+				block := reasoningBlock(*e.Item, s.requested)
 				events, _ = s.blocks.Open(events, itemKey(e.OutputIndex), litellm.ReasoningBlock{Summary: block.Summary})
-				return s.blocks.Close(events, itemKey(e.OutputIndex), litellm.ReasoningBlock{Extra: block.Extra}), nil
+				return s.blocks.Close(events, itemKey(e.OutputIndex), litellm.ReasoningBlock{State: block.State}), nil
 			}
 		}
 	case "response.content_part.added":
 		if e.Part != nil && (e.Part.Type == "output_text" || e.Part.Type == "refusal") {
-			events, _ = s.blocks.Open(events, partKey{e.OutputIndex, e.ContentIndex}, litellm.TextBlock{})
+			events, _ = s.blocks.Open(events, partKey{e.OutputIndex, e.ContentIndex}, s.text(e.OutputIndex))
 			return events, nil
 		}
 	case "response.content_part.done":
@@ -141,7 +152,7 @@ func (s *responsesStream) events(events []litellm.Event, e responsesEvent, raw j
 		}
 	case "response.output_text.delta", "response.refusal.delta":
 		s.refused = s.refused || e.Type == "response.refusal.delta"
-		events, index := s.blocks.Open(events, partKey{e.OutputIndex, e.ContentIndex}, litellm.TextBlock{})
+		events, index := s.blocks.Open(events, partKey{e.OutputIndex, e.ContentIndex}, s.text(e.OutputIndex))
 		return append(events, litellm.TextDelta{Index: index, Text: e.Delta}), nil
 	case "response.reasoning_summary_text.delta":
 		events, index := s.blocks.Open(events, itemKey(e.OutputIndex), litellm.ReasoningBlock{Summary: true})
@@ -194,6 +205,11 @@ func (s *responsesStream) events(events []litellm.Event, e responsesEvent, raw j
 		return nil, litellm.NewError("openai", litellm.ErrorTypeProvider, "stream event missing type", nil)
 	}
 	return append(events, litellm.ProviderEvent{Name: e.Type, Raw: raw}), nil
+}
+
+// text opens a content part of the message item at output.
+func (s *responsesStream) text(output int) litellm.TextBlock {
+	return litellm.TextBlock{State: s.messages[output].state(s.requested)}
 }
 
 func (s *responsesStream) toolDelta(events []litellm.Event, output int, arguments string) []litellm.Event {

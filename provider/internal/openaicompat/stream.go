@@ -34,6 +34,7 @@ type stream struct {
 	spec      Spec
 	pending   []litellm.Event
 	done      bool
+	requested string // the requested model, for ProviderState
 	model     string
 	finish    litellm.FinishReason
 	finishRaw string
@@ -46,11 +47,12 @@ type stream struct {
 
 func newStream(resp *http.Response, req *litellm.Request, spec Spec) *stream {
 	return &stream{
-		resp:  resp,
-		sse:   wire.NewSSEReader(resp.Body, spec.Name),
-		spec:  spec,
-		model: req.Model,
-		tools: make(map[int]*toolState),
+		resp:      resp,
+		sse:       wire.NewSSEReader(resp.Body, spec.Name),
+		spec:      spec,
+		requested: req.Model,
+		model:     req.Model,
+		tools:     make(map[int]*toolState),
 	}
 }
 
@@ -200,7 +202,7 @@ func (s *stream) tool(events []litellm.Event, position int, call toolCallDelta) 
 }
 
 // closeAll ends every open block in index order, delivering each tool's final
-// id and name and the joined reasoning extras.
+// id and name and the merged reasoning_details.
 func (s *stream) closeAll(events []litellm.Event) []litellm.Event {
 	events = s.blocks.CloseAll(events, func(key blockKey) litellm.Block {
 		switch key.kind {
@@ -209,8 +211,8 @@ func (s *stream) closeAll(events []litellm.Event) []litellm.Event {
 			return litellm.ToolUseBlock{ID: state.id, Name: state.name}
 		case reasoningKind:
 			if len(s.details) > 0 {
-				extra, _ := json.Marshal(s.details)
-				return litellm.ReasoningBlock{Extra: extra}
+				details, _ := json.Marshal(s.details)
+				return litellm.ReasoningBlock{State: wire.NewState(s.spec.Name, s.requested, json.RawMessage(details))}
 			}
 		}
 		return nil

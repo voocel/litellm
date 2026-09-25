@@ -19,7 +19,7 @@ func TestBuildRequestGolden(t *testing.T) {
 			litellm.System("You are helpful."),
 			litellm.User(litellm.TextBlock{Text: "Use the tool.", Cache: &litellm.CacheControl{TTL: litellm.CacheTTL1h}}),
 			litellm.Assistant(
-				litellm.ReasoningBlock{Text: "I should call the tool.", Signature: "sig-thinking"},
+				litellm.ReasoningBlock{Text: "I should call the tool.", State: reasoningState("claude-sonnet-5", "thinking", "sig-thinking", "")},
 				litellm.ToolUseBlock{ID: "toolu_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
 			),
 			litellm.ToolResult("toolu_1", litellm.Text("result text"), litellm.ToolReferenceBlock{ToolName: "lookup"}),
@@ -54,13 +54,22 @@ func TestBuildRequest(t *testing.T) {
 			want: map[string]string{"system": `"be brief"`},
 		},
 		{
-			name: "system blocks are hoisted and keep cache",
-			req: withMessages(litellm.UserText("hi"), litellm.Message{Role: litellm.RoleSystem, Blocks: []litellm.Block{
-				litellm.Text("a"), litellm.TextBlock{Text: "b", Cache: &litellm.CacheControl{}},
-			}}),
+			name: "leading system blocks keep cache",
+			req: withMessages(litellm.System("a"), litellm.Message{Role: litellm.RoleSystem, Blocks: []litellm.Block{
+				litellm.TextBlock{Text: "b", Cache: &litellm.CacheControl{}},
+			}}, litellm.UserText("hi")),
 			want: map[string]string{
 				"system":   `[{"type":"text","text":"a"},{"type":"text","text":"b","cache_control":{"type":"ephemeral"}}]`,
 				"messages": `[{"role":"user","content":[{"type":"text","text":"hi"}]}]`,
+			},
+		},
+		{
+			name: "later system messages stay in place",
+			req:  withMessages(litellm.System("a"), litellm.UserText("hi"), litellm.System("b"), litellm.System("c")),
+			want: map[string]string{
+				"system": `"a"`,
+				"messages": `[{"role":"user","content":[{"type":"text","text":"hi"}]},
+					{"role":"system","content":[{"type":"text","text":"b"},{"type":"text","text":"c"}]}]`,
 			},
 		},
 		{
@@ -118,11 +127,13 @@ func TestBuildRequest(t *testing.T) {
 				{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1"}]}]`},
 		},
 		{
-			name: "reasoning replays signature and redacted data",
+			name: "own reasoning is replayed, foreign reasoning dropped",
 			req: withMessages(litellm.UserText("hi"), litellm.Assistant(
-				litellm.ReasoningBlock{Text: "t", Signature: "sig"},
-				litellm.ReasoningBlock{Signature: "omitted"},
-				litellm.ReasoningBlock{Redacted: []byte("opaque")},
+				litellm.ReasoningBlock{Text: "t", State: reasoningState("m", "thinking", "sig", "")},
+				litellm.ReasoningBlock{State: reasoningState("m", "thinking", "omitted", "")},
+				litellm.ReasoningBlock{State: reasoningState("m", "redacted_thinking", "", "opaque")},
+				litellm.ReasoningBlock{Text: "foreign", State: &litellm.ProviderState{Provider: "gemini", Data: json.RawMessage(`{"thoughtSignature":"g"}`)}},
+				litellm.ReasoningBlock{Text: "unsigned"},
 				litellm.ToolUseBlock{ID: "t1", Name: "f", Arguments: json.RawMessage(`{"q":"x"}`)},
 			)),
 			want: map[string]string{"messages": `[
@@ -132,6 +143,32 @@ func TestBuildRequest(t *testing.T) {
 					{"type":"thinking","thinking":"","signature":"omitted"},
 					{"type":"redacted_thinking","data":"opaque"},
 					{"type":"tool_use","id":"t1","name":"f","input":{"q":"x"}}]}]`},
+		},
+		{
+			// Gemini returns signature-only text parts; the API rejects empty text.
+			name: "empty text is dropped",
+			req: withMessages(litellm.UserText("hi"), litellm.Assistant(
+				litellm.TextBlock{State: &litellm.ProviderState{Provider: "gemini", Data: json.RawMessage(`{"thoughtSignature":"g"}`)}},
+				litellm.Text("ok"),
+			)),
+			want: map[string]string{"messages": `[
+				{"role":"user","content":[{"type":"text","text":"hi"}]},
+				{"role":"assistant","content":[{"type":"text","text":"ok"}]}]`},
+		},
+		{
+			name: "message left empty is omitted",
+			req:  withMessages(litellm.UserText("a"), litellm.Assistant(litellm.ReasoningBlock{Text: "foreign"}), litellm.UserText("b")),
+			want: map[string]string{"messages": `[{"role":"user","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}]`},
+		},
+		{
+			name: "foreign tool ids are mapped in pairs",
+			req: withMessages(
+				litellm.Assistant(litellm.ToolUseBlock{ID: "functions.f:0", Name: "f"}),
+				litellm.ToolResultText("functions.f:0", "ok"),
+			),
+			want: map[string]string{"messages": `[
+				{"role":"assistant","content":[{"type":"tool_use","id":"functions_f_0_d6bdd4de","name":"f","input":{}}]},
+				{"role":"user","content":[{"type":"tool_result","tool_use_id":"functions_f_0_d6bdd4de","content":"ok"}]}]`},
 		},
 		{
 			name:    "tool arguments must be an object",

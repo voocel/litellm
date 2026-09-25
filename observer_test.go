@@ -124,9 +124,9 @@ func TestObserverSnapshotsAreSharedAndIsolated(t *testing.T) {
 	t.Run("stream", func(t *testing.T) {
 		newEvents := func() []Event {
 			return []Event{
-				BlockStart{Index: 0, Block: ReasoningBlock{Extra: json.RawMessage(`{}`)}},
+				BlockStart{Index: 0, Block: ReasoningBlock{State: testState(`{}`)}},
 				ReasoningDelta{Index: 0, Text: "think"},
-				BlockEnd{Index: 0, Block: ReasoningBlock{Signature: "sig"}},
+				BlockEnd{Index: 0},
 				BlockStart{Index: 1, Block: TextBlock{}},
 				TextDelta{Index: 1, Text: "hi"},
 				BlockEnd{Index: 1, Block: TextBlock{Annotations: []Annotation{{Extra: json.RawMessage(`{}`)}}}},
@@ -147,7 +147,7 @@ func TestObserverSnapshotsAreSharedAndIsolated(t *testing.T) {
 				switch e := event.(type) {
 				case BlockStart:
 					if b, ok := e.Block.(ReasoningBlock); ok {
-						b.Extra[0] = '['
+						b.State.Data[0] = '['
 					}
 				case BlockEnd:
 					if b, ok := e.Block.(TextBlock); ok {
@@ -191,7 +191,7 @@ func TestObserverSnapshotsAreSharedAndIsolated(t *testing.T) {
 		}
 		reasoning := resp.Blocks[0].(ReasoningBlock)
 		text := resp.Blocks[1].(TextBlock)
-		if string(reasoning.Extra) != `{}` || reasoning.Signature != "sig" || string(text.Annotations[0].Extra) != `{}` || *resp.Usage.InputTokens != 1 {
+		if string(reasoning.State.Data) != `{}` || string(text.Annotations[0].Extra) != `{}` || *resp.Usage.InputTokens != 1 {
 			t.Errorf("response saw observer mutation: %#v", resp)
 		}
 	})

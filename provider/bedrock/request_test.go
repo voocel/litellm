@@ -191,20 +191,44 @@ func TestBuildRequest(t *testing.T) {
 			wantErr: `messages[0]: image MIME "text/plain" must be image/<format>`,
 		},
 		{
-			name: "reasoning history replays signature and redacted data",
+			name: "own reasoning is replayed, foreign reasoning dropped",
 			req: func(r *litellm.Request) {
 				r.Messages = []litellm.Message{litellm.UserText("hi"), litellm.Assistant(
-					litellm.ReasoningBlock{Text: "t", Signature: "sig"},
-					litellm.ReasoningBlock{Redacted: []byte("opaque")},
+					litellm.ReasoningBlock{Text: "t", State: testState(`{"signature":"sig"}`)},
+					litellm.ReasoningBlock{State: testState(`{"redactedContent":"b3BhcXVl"}`)},
+					litellm.ReasoningBlock{Text: "plain", State: testState(`{}`)},
+					litellm.ReasoningBlock{Text: "foreign", State: &litellm.ProviderState{Provider: "anthropic", Data: json.RawMessage(`{"type":"thinking","signature":"a"}`)}},
+					litellm.ReasoningBlock{Text: "unsigned"},
 					litellm.Text("answer"),
-				)}
+				), litellm.Assistant(litellm.ReasoningBlock{Text: "only foreign"}), litellm.UserText("next")}
 			},
 			want: map[string]string{"messages": `[
 				{"role":"user","content":[{"text":"hi"}]},
 				{"role":"assistant","content":[
 					{"reasoningContent":{"reasoningText":{"text":"t","signature":"sig"}}},
 					{"reasoningContent":{"redactedContent":"b3BhcXVl"}},
-					{"text":"answer"}]}]`},
+					{"reasoningContent":{"reasoningText":{"text":"plain"}}},
+					{"text":"answer"}]},
+				{"role":"user","content":[{"text":"next"}]}]`},
+		},
+		{
+			name: "empty text is dropped",
+			req: func(r *litellm.Request) {
+				r.Messages = []litellm.Message{litellm.UserText("hi"), litellm.Assistant(litellm.Text(""), litellm.Text("ok"))}
+			},
+			want: map[string]string{"messages": `[{"role":"user","content":[{"text":"hi"}]},{"role":"assistant","content":[{"text":"ok"}]}]`},
+		},
+		{
+			name: "foreign tool ids are mapped in pairs",
+			req: func(r *litellm.Request) {
+				r.Messages = []litellm.Message{
+					litellm.Assistant(litellm.ToolUseBlock{ID: "functions.f:0", Name: "f"}),
+					litellm.ToolResultText("functions.f:0", "ok"),
+				}
+			},
+			want: map[string]string{"messages": `[
+				{"role":"assistant","content":[{"toolUse":{"toolUseId":"functions_f_0_d6bdd4de","name":"f","input":{}}}]},
+				{"role":"user","content":[{"toolResult":{"toolUseId":"functions_f_0_d6bdd4de","content":[{"text":"ok"}]}}]}]`},
 		},
 		{
 			name: "tool arguments must be an object",

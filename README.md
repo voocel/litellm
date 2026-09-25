@@ -66,7 +66,7 @@ msgs := []litellm.Message{
 }
 ```
 
-For multi-turn tool workflows, append the previous response blocks as they are; reasoning signatures and provider extras travel with them:
+For multi-turn tool workflows, append the previous response blocks as they are. Data a vendor needs back, such as reasoning signatures and item ids, travels in each block's `State` and is sent only to the provider that produced it, so history can move between providers; see [providers.md](providers.md#replay-state). Keep `State` when you store history:
 
 ```go
 msgs = append(msgs,
@@ -280,7 +280,7 @@ provider, err := openai.New(openai.Config{
 })
 ```
 
-The transport retries complete 429, 500, 502, 503, 504 and 529 responses, never network failures or interrupted streams. A request body that cannot be resent returns the original response. For Bedrock, the retried request carries its SigV4 signature, which stays valid for five minutes.
+The transport retries complete responses the provider would report as temporary (408, 429, 500, 502, 503, 504 and 529, unless the body shows exhausted quota, an auth failure, content filtering or context overflow), never network failures or interrupted streams. A request body that cannot be resent returns the original response, and so does a `Retry-After` beyond `MaxRetryAfter` (60s by default) when `RespectRetryAfter` is set, as it is in `DefaultPolicy`. For Bedrock, the retried request carries its SigV4 signature, which stays valid for five minutes.
 
 ## Observers And OTel
 

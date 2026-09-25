@@ -40,6 +40,13 @@ type reasoningText struct {
 	Signature string `json:"signature,omitempty"`
 }
 
+// reasoningState is the ProviderState of a reasoning block: the signature or
+// encrypted content needed to send it back.
+type reasoningState struct {
+	Signature       string `json:"signature,omitempty"`
+	RedactedContent []byte `json:"redactedContent,omitempty"`
+}
+
 type image struct {
 	Format string      `json:"format"`
 	Source imageSource `json:"source"`

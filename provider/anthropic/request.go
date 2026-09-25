@@ -80,6 +80,14 @@ type content struct {
 	Citations []json.RawMessage `json:"citations,omitempty"`
 }
 
+// thinkingState is the ProviderState of a thinking or redacted_thinking block:
+// the fields besides the text needed to send it back.
+type thinkingState struct {
+	Type      string `json:"type"`
+	Signature string `json:"signature,omitempty"`
+	Data      string `json:"data,omitempty"`
+}
+
 type imageSource struct {
 	Type      string `json:"type"`
 	MediaType string `json:"media_type,omitempty"`
@@ -183,6 +191,10 @@ func convertTool(t litellm.Tool) tool {
 	return out
 }
 
+// convertMessages sends leading system messages as the system field and later
+// ones in place, where changing them keeps the cached prefix and thinking
+// valid. Messages left empty, such as one holding only foreign reasoning, are
+// omitted.
 func convertMessages(messages []litellm.Message) (any, []message, error) {
 	var system []content
 	out := make([]message, 0, len(messages))
@@ -191,11 +203,17 @@ func convertMessages(messages []litellm.Message) (any, []message, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("messages[%d]: %w", i, err)
 		}
+		if len(blocks) == 0 {
+			continue
+		}
 		role := "user"
 		switch msg.Role {
 		case litellm.RoleSystem:
-			system = append(system, blocks...)
-			continue
+			if len(out) == 0 {
+				system = append(system, blocks...)
+				continue
+			}
+			role = "system"
 		case litellm.RoleAssistant:
 			role = "assistant"
 		}
@@ -221,6 +239,9 @@ func convertBlocks(blocks []litellm.Block) ([]content, error) {
 		var c content
 		switch b := block.(type) {
 		case litellm.TextBlock:
+			if b.Text == "" {
+				continue // empty text blocks are rejected, e.g. Gemini's signature-only parts
+			}
 			c = content{Type: "text", Text: b.Text, CacheControl: convertCache(b.Cache)}
 		case litellm.ImageBlock:
 			source, err := convertImage(b)
@@ -229,22 +250,28 @@ func convertBlocks(blocks []litellm.Block) ([]content, error) {
 			}
 			c = content{Type: "image", Source: source, CacheControl: convertCache(b.Cache)}
 		case litellm.ReasoningBlock:
-			c = content{Type: "thinking", Thinking: new(b.Text), Signature: b.Signature, CacheControl: convertCache(b.Cache)}
-			if len(b.Redacted) > 0 {
-				c = content{Type: "redacted_thinking", Data: string(b.Redacted), CacheControl: convertCache(b.Cache)}
+			// Thinking is valid only with the signature Claude issued, so
+			// reasoning from elsewhere is dropped.
+			state, ok := wire.ReadState[thinkingState](b.State, "anthropic")
+			if !ok {
+				continue
+			}
+			c = content{Type: state.Type, Signature: state.Signature, Data: state.Data, CacheControl: convertCache(b.Cache)}
+			if state.Type == "thinking" {
+				c.Thinking = new(b.Text)
 			}
 		case litellm.ToolUseBlock:
 			input, err := toolInput(b)
 			if err != nil {
 				return nil, err
 			}
-			c = content{Type: "tool_use", ID: b.ID, Name: b.Name, Input: input, CacheControl: convertCache(b.Cache)}
+			c = content{Type: "tool_use", ID: claude.ToolUseID(b.ID), Name: b.Name, Input: input, CacheControl: convertCache(b.Cache)}
 		case litellm.ToolResultBlock:
 			result, err := convertToolResult(b.Content)
 			if err != nil {
 				return nil, err
 			}
-			c = content{Type: "tool_result", ToolUseID: b.ToolUseID, Content: result, IsError: b.IsError, CacheControl: convertCache(b.Cache)}
+			c = content{Type: "tool_result", ToolUseID: claude.ToolUseID(b.ToolUseID), Content: result, IsError: b.IsError, CacheControl: convertCache(b.Cache)}
 		case litellm.ToolReferenceBlock:
 			c = content{Type: "tool_reference", ToolName: b.ToolName, CacheControl: convertCache(b.Cache)}
 		default:

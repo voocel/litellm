@@ -66,7 +66,7 @@ msgs := []litellm.Message{
 }
 ```
 
-多轮工具调用时，直接追加上一轮的响应块；推理签名与 Provider 附加数据会随之保留：
+多轮工具调用时，直接追加上一轮的响应块。推理签名、item id 等厂商需要原样取回的数据放在块的 `State` 中，只回传给产生它的 Provider，因此历史可以在 Provider 之间切换，详见 [providers.md](providers.md#replay-state)。持久化历史时请保留 `State`：
 
 ```go
 msgs = append(msgs,
@@ -280,7 +280,7 @@ provider, err := openai.New(openai.Config{
 })
 ```
 
-该传输层只重试完整的 429、500、502、503、504、529 响应，从不重试网络失败或中断的流。请求体无法重发时直接返回原响应。Bedrock 重试时沿用已签名的 SigV4 请求，签名五分钟内有效。
+该传输层只重试 Provider 会判为临时错误的完整响应（408、429、500、502、503、504、529，响应体表明额度耗尽、鉴权失败、内容过滤或上下文超限的除外），从不重试网络失败或中断的流。请求体无法重发时直接返回原响应；设置了 `RespectRetryAfter`（`DefaultPolicy` 默认开启）时，`Retry-After` 超过 `MaxRetryAfter`（默认 60 秒）也直接返回原响应。Bedrock 重试时沿用已签名的 SigV4 请求，签名五分钟内有效。
 
 ## Observer 与 OTel
 

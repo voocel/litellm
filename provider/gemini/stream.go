@@ -78,11 +78,11 @@ func (s *stream) events(events []litellm.Event, chunk response) []litellm.Event 
 	}
 	candidate := chunk.Candidates[0]
 	for _, p := range candidate.Content.Parts {
-		switch b := partBlock(p).(type) {
+		switch b := partBlock(p, s.model).(type) {
 		case litellm.TextBlock:
-			events = s.extendRun(events, "text", b.Text, b.Signature)
+			events = s.extendRun(events, "text", b.Text, p.ThoughtSignature)
 		case litellm.ReasoningBlock:
-			events = s.extendRun(events, "reasoning", b.Text, b.Signature)
+			events = s.extendRun(events, "reasoning", b.Text, p.ThoughtSignature)
 		case litellm.ToolUseBlock:
 			events = s.endRun(events)
 			if p.FunctionCall.ID == "" {
@@ -90,7 +90,7 @@ func (s *stream) events(events []litellm.Event, chunk response) []litellm.Event 
 			}
 			s.run++
 			var index int
-			events, index = s.blocks.Open(events, s.run, litellm.ToolUseBlock{ID: b.ID, Name: b.Name, Signature: b.Signature})
+			events, index = s.blocks.Open(events, s.run, litellm.ToolUseBlock{ID: b.ID, Name: b.Name, State: b.State})
 			events = append(events, litellm.ToolUseDelta{Index: index, Arguments: string(b.Arguments)})
 			events = s.blocks.Close(events, s.run, nil)
 			s.toolCalls = true
@@ -139,10 +139,10 @@ func (s *stream) endRun(events []litellm.Event) []litellm.Event {
 		return events
 	}
 	var final litellm.Block
-	if s.signature != "" {
-		final = litellm.TextBlock{Signature: s.signature}
+	if state := signed(s.model, s.signature); state != nil {
+		final = litellm.TextBlock{State: state}
 		if s.open == "reasoning" {
-			final = litellm.ReasoningBlock{Signature: s.signature}
+			final = litellm.ReasoningBlock{State: state}
 		}
 	}
 	s.open, s.signature = "", ""

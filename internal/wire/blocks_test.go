@@ -27,7 +27,7 @@ func TestTracker(t *testing.T) {
 		t.Fatal("Index reported an unopened key")
 	}
 
-	events = tracker.Close(events, "tool", litellm.ToolUseBlock{Signature: "sig"})
+	events = tracker.Close(events, "tool", litellm.ToolUseBlock{Name: "final"})
 	events = tracker.Close(events, "tool", nil)
 	if _, ok := tracker.Index("tool"); ok {
 		t.Fatal("closed key is still open")
@@ -35,7 +35,7 @@ func TestTracker(t *testing.T) {
 	// CloseAll ends the rest in index order, with finals from the callback.
 	events = tracker.CloseAll(events, func(key string) litellm.Block {
 		if key == "reasoning" {
-			return litellm.ReasoningBlock{Signature: "r"}
+			return litellm.ReasoningBlock{Text: "r"}
 		}
 		return nil
 	})
@@ -51,9 +51,9 @@ func TestTracker(t *testing.T) {
 		litellm.BlockStart{Index: 0, Block: litellm.TextBlock{}},
 		litellm.BlockStart{Index: 1, Block: litellm.ToolUseBlock{ID: "call", Name: "t"}},
 		litellm.BlockStart{Index: 2, Block: litellm.ReasoningBlock{}},
-		litellm.BlockEnd{Index: 1, Block: litellm.ToolUseBlock{Signature: "sig"}},
+		litellm.BlockEnd{Index: 1, Block: litellm.ToolUseBlock{Name: "final"}},
 		litellm.BlockEnd{Index: 0},
-		litellm.BlockEnd{Index: 2, Block: litellm.ReasoningBlock{Signature: "r"}},
+		litellm.BlockEnd{Index: 2, Block: litellm.ReasoningBlock{Text: "r"}},
 		litellm.BlockStart{Index: 3, Block: litellm.ToolUseBlock{ID: "call_2", Name: "t"}},
 		litellm.BlockEnd{Index: 3},
 	}

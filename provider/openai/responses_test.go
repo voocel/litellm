@@ -15,6 +15,18 @@ func TestBuildResponsesRequest(t *testing.T) {
 	lookup := litellm.Tool{Name: "lookup", Description: "Lookup.", Parameters: litellm.Schema(`{"type":"object","properties":{"q":{"type":"string"}}}`), Strict: litellm.StrictEnabled}
 	schema := &litellm.ResponseFormat{Type: litellm.ResponseFormatJSONSchema, JSONSchema: &litellm.JSONSchema{Name: "answer", Description: "d", Schema: litellm.Schema(`{"type":"object"}`), Strict: litellm.StrictEnabled}}
 	cached := &litellm.CacheControl{}
+	own := func(data string) *litellm.ProviderState {
+		return &litellm.ProviderState{Provider: "openai", Model: "gpt-5.1", Data: json.RawMessage(data)}
+	}
+	// A turn of gpt-5.1 with reasoning from other providers mixed in.
+	turn := litellm.Assistant(
+		litellm.ReasoningBlock{Text: "claude", State: &litellm.ProviderState{Provider: "anthropic", Data: json.RawMessage(`{"type":"thinking","signature":"sig"}`)}},
+		litellm.ReasoningBlock{Text: "router", State: &litellm.ProviderState{Provider: "openrouter", Data: json.RawMessage(`[{"type":"reasoning.text","text":"router"}]`)}},
+		litellm.ReasoningBlock{Text: "summary", Summary: true, State: own(`{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"enc"}`)},
+		litellm.TextBlock{Text: "call", State: own(`{"id":"msg_1","phase":"commentary"}`)},
+		litellm.TextBlock{Text: "ing", State: own(`{"id":"msg_1","phase":"commentary"}`)},
+		litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`), State: own(`{"id":"fc_1"}`)},
+	)
 	tests := []struct {
 		name   string
 		req    litellm.Request
@@ -28,14 +40,7 @@ func TestBuildResponsesRequest(t *testing.T) {
 				litellm.System("be brief"),
 				litellm.System("be kind"),
 				litellm.User(litellm.Text("look"), litellm.ImageBlock{URL: "https://x.test/a.png", Detail: "low"}, litellm.ImageBlock{Data: []byte("png"), MIME: "image/png"}, litellm.ImageBlock{FileURI: "file-1"}),
-				litellm.Assistant(
-					// Reasoning from other providers has no Responses item.
-					litellm.ReasoningBlock{Text: "claude", Signature: "sig"},
-					litellm.ReasoningBlock{Text: "router", Extra: json.RawMessage(`[{"type":"reasoning.text","text":"router"}]`)},
-					litellm.ReasoningBlock{Text: "summary", Summary: true, Extra: json.RawMessage(`{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"enc"}`)},
-					litellm.Text("calling"),
-					litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
-				),
+				turn,
 				litellm.ToolResultText("call_1", "result"),
 			},
 			Tools:          []litellm.Tool{lookup, {Name: "ping"}},
@@ -52,8 +57,8 @@ func TestBuildResponsesRequest(t *testing.T) {
 					{"type":"input_image","image_url":"data:image/png;base64,cG5n"},
 					{"type":"input_image","file_id":"file-1"}]},
 				{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"enc"},
-				{"type":"message","role":"assistant","content":[{"type":"output_text","text":"calling"}]},
-				{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}"},
+				{"type":"message","role":"assistant","id":"msg_1","phase":"commentary","content":[{"type":"output_text","text":"call"},{"type":"output_text","text":"ing"}]},
+				{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}"},
 				{"type":"function_call_output","call_id":"call_1","output":"result"}],
 			"tools":[
 				{"type":"function","name":"lookup","description":"Lookup.","parameters":{"type":"object","properties":{"q":{"type":"string"}}},"strict":true},
@@ -61,6 +66,32 @@ func TestBuildResponsesRequest(t *testing.T) {
 			"tool_choice":{"type":"function","name":"lookup"},
 			"text":{"format":{"type":"json_schema","name":"answer","description":"d","schema":{"type":"object"},"strict":true}},
 			"reasoning":{"effort":"high","summary":"auto"}}`,
+	}, {
+		// Another model would reject the reasoning, and ids without it.
+		name: "turn of another model is plain content",
+		req:  litellm.Request{Model: "gpt-5.2", Messages: []litellm.Message{turn}},
+		want: `{"model":"gpt-5.2","input":[
+			{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"call"}]},
+			{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"ing"}]},
+			{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}"}]}`,
+	}, {
+		// A text id naming a non-message item must not be joined into it.
+		name: "text state naming a function call item",
+		req: litellm.Request{Model: "gpt-5.1", Messages: []litellm.Message{litellm.Assistant(
+			litellm.ReasoningBlock{State: own(`{"type":"reasoning","id":"rs_1"}`)},
+			litellm.ToolUseBlock{ID: "call_1", Name: "f", Arguments: json.RawMessage(`{}`), State: own(`{"id":"fc_1"}`)},
+			litellm.TextBlock{Text: "x", State: own(`{"id":"fc_1"}`)},
+		)}},
+		want: `{"model":"gpt-5.1","input":[
+			{"type":"reasoning","id":"rs_1"},
+			{"type":"function_call","id":"fc_1","call_id":"call_1","name":"f","arguments":"{}"},
+			{"type":"message","role":"assistant","id":"fc_1","content":[{"type":"output_text","text":"x"}]}]}`,
+	}, {
+		name: "later system messages stay in place",
+		req:  litellm.Request{Model: "m", Messages: []litellm.Message{litellm.System("a"), litellm.UserText("hi"), litellm.System("b")}},
+		want: `{"model":"m","instructions":"a","input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},
+			{"type":"message","role":"developer","content":[{"type":"input_text","text":"b"}]}]}`,
 	}, {
 		// Instructions cannot carry a breakpoint, and only input content has one.
 		name: "cache breakpoints",
@@ -132,6 +163,9 @@ func TestConvertResponsesResponse(t *testing.T) {
 		rawText   = `{"id":"rs_2","type":"reasoning","summary":[],"content":[{"type":"reasoning_text","text":"raw"}]}`
 		citation  = `{"type":"url_citation","url":"https://example.com","title":"t"}`
 	)
+	state := func(data string) *litellm.ProviderState {
+		return &litellm.ProviderState{Provider: "openai", Model: "req-model", Data: json.RawMessage(data)}
+	}
 	tests := []struct {
 		name, body string
 		want       litellm.Response
@@ -139,14 +173,17 @@ func TestConvertResponsesResponse(t *testing.T) {
 		name: "blocks in output order",
 		body: `{"model":"gpt-5.1","status":"completed","output":[` + reasoning + `,
 			{"type":"web_search_call","id":"ws_1","status":"completed"},
-			{"type":"message","content":[{"type":"output_text","text":"hi","annotations":[` + citation + `],"logprobs":[{"token":"hi"}]}]},
-			{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}"}],
+			{"type":"message","id":"msg_1","phase":"final_answer","content":[{"type":"output_text","text":"hi","annotations":[` + citation + `],"logprobs":[{"token":"hi"}]}]},
+			{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}"}],
 			"usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8,"input_tokens_details":{"cached_tokens":2},"output_tokens_details":{"reasoning_tokens":1}}}`,
 		want: litellm.Response{
 			Blocks: []litellm.Block{
-				litellm.ReasoningBlock{Text: "a\nb", Summary: true, Extra: json.RawMessage(reasoning)},
-				litellm.TextBlock{Text: "hi", Annotations: []litellm.Annotation{{Type: "url_citation", URL: "https://example.com", Extra: json.RawMessage(citation)}}, Logprobs: json.RawMessage(`[{"token":"hi"}]`)},
-				litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
+				litellm.ReasoningBlock{Text: "a\nb", Summary: true, State: state(reasoning)},
+				litellm.TextBlock{
+					Text: "hi", Annotations: []litellm.Annotation{{Type: "url_citation", URL: "https://example.com", Extra: json.RawMessage(citation)}}, Logprobs: json.RawMessage(`[{"token":"hi"}]`),
+					State: state(`{"id":"msg_1","phase":"final_answer"}`),
+				},
+				litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`), State: state(`{"id":"fc_1"}`)},
 			},
 			Usage:        litellm.Usage{InputTokens: new(5), OutputTokens: new(3), TotalTokens: new(8), CacheReadTokens: new(2), ReasoningTokens: new(1)},
 			Model:        "gpt-5.1",
@@ -156,7 +193,7 @@ func TestConvertResponsesResponse(t *testing.T) {
 		name: "raw reasoning text and refusal",
 		body: `{"status":"completed","output":[` + rawText + `,{"type":"message","content":[{"type":"refusal","refusal":"no"}]}]}`,
 		want: litellm.Response{
-			Blocks:       []litellm.Block{litellm.ReasoningBlock{Text: "raw", Extra: json.RawMessage(rawText)}, litellm.TextBlock{Text: "no"}},
+			Blocks:       []litellm.Block{litellm.ReasoningBlock{Text: "raw", State: state(rawText)}, litellm.TextBlock{Text: "no"}},
 			Model:        "req-model",
 			FinishReason: litellm.FinishReasonSafety, FinishReasonRaw: "completed",
 		},
@@ -189,6 +226,24 @@ func TestConvertResponsesResponse(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Output replayed to the model that produced it reproduces the output items.
+func TestResponsesOutputReplaysAsInput(t *testing.T) {
+	const output = `[
+		{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"enc"},
+		{"type":"message","id":"msg_1","phase":"commentary","role":"assistant","content":[{"type":"output_text","text":"a"},{"type":"output_text","text":"b"}]},
+		{"type":"function_call","id":"fc_1","call_id":"call_1","name":"f","arguments":"{}"}]`
+	var parsed responsesResponse
+	if err := json.Unmarshal([]byte(`{"status":"completed","output":`+output+`}`), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	history := []litellm.Message{litellm.Assistant(convertResponsesResponse(&parsed, "gpt-5.1").Blocks...)}
+	body, err := buildResponsesRequest(&litellm.Request{Model: "gpt-5.1", Messages: history}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertJSON(t, body, `{"model":"gpt-5.1","input":`+output+`}`)
 }
 
 func TestResponsesChat(t *testing.T) {

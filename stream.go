@@ -45,7 +45,7 @@ type ToolUseDelta struct {
 }
 
 // BlockEnd closes a block. Providers set Block only to deliver metadata that
-// arrives late (signatures, redacted data, annotations, provider extras): its
+// arrives late (State, annotations, logprobs, a tool's id and name): its
 // non-empty metadata fields replace the started ones, while its text and
 // arguments are ignored. Streams read through Handle, Collect or a Client
 // deliver the completed block instead.
@@ -461,8 +461,8 @@ func mergeBlockMetadata(block, final Block) (Block, error) {
 		if f.Logprobs != nil {
 			b.Logprobs = f.Logprobs
 		}
-		if f.Signature != "" {
-			b.Signature = f.Signature
+		if f.State != nil {
+			b.State = f.State
 		}
 		return b, nil
 	case ReasoningBlock:
@@ -470,14 +470,8 @@ func mergeBlockMetadata(block, final Block) (Block, error) {
 		if !ok {
 			break
 		}
-		if f.Signature != "" {
-			b.Signature = f.Signature
-		}
-		if f.Redacted != nil {
-			b.Redacted = f.Redacted
-		}
-		if f.Extra != nil {
-			b.Extra = f.Extra
+		if f.State != nil {
+			b.State = f.State
 		}
 		return b, nil
 	case ToolUseBlock:
@@ -491,8 +485,8 @@ func mergeBlockMetadata(block, final Block) (Block, error) {
 		if f.Name != "" {
 			b.Name = f.Name
 		}
-		if f.Signature != "" {
-			b.Signature = f.Signature
+		if f.State != nil {
+			b.State = f.State
 		}
 		return b, nil
 	}

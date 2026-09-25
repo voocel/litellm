@@ -25,7 +25,7 @@ func (p *Provider) convertResponse(resp *chatResponse, req *litellm.Request) (*l
 	choice := resp.Choices[0]
 	out.FinishReason = wire.FinishReason(choice.FinishReason)
 	out.FinishReasonRaw = choice.FinishReason
-	if block, ok := p.reasoningBlock(choice.Message.Fields); ok {
+	if block, ok := p.reasoningBlock(choice.Message.Fields, req.Model); ok {
 		out.Blocks = append(out.Blocks, block)
 	}
 	blocks, refused, err := contentBlocks(choice.Message.Content)
@@ -51,19 +51,19 @@ func (p *Provider) convertResponse(resp *chatResponse, req *litellm.Request) (*l
 }
 
 // reasoningBlock reads the first non-empty reasoning field the spec names.
-// reasoning_details is also kept verbatim as Extra for replay.
-func (p *Provider) reasoningBlock(message map[string]json.RawMessage) (litellm.ReasoningBlock, bool) {
+// reasoning_details is also kept verbatim as the State.
+func (p *Provider) reasoningBlock(message map[string]json.RawMessage, model string) (litellm.ReasoningBlock, bool) {
 	var block litellm.ReasoningBlock
 	for _, field := range p.spec.ReasoningFields {
 		raw := message[field]
 		if field == "reasoning_details" && len(raw) > 0 && string(raw) != "null" {
-			block.Extra = append(json.RawMessage(nil), raw...)
+			block.State = wire.NewState(p.spec.Name, model, append(json.RawMessage(nil), raw...))
 		}
 		if block.Text == "" {
 			block.Text = reasoningText(raw)
 		}
 	}
-	return block, block.Text != "" || len(block.Extra) > 0
+	return block, block.Text != "" || block.State != nil
 }
 
 // reasoningText accepts a string, an object with text or summary, or an array

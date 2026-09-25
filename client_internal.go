@@ -93,8 +93,8 @@ func validateMessages(messages []Message) error {
 				if !utf8.ValidString(b.Text) {
 					return NewError("", ErrorTypeValidation, fmt.Sprintf("messages[%d]: text block must be valid UTF-8", i), nil)
 				}
-				if !utf8.ValidString(b.Signature) {
-					return NewError("", ErrorTypeValidation, fmt.Sprintf("messages[%d]: text block signature must be valid UTF-8", i), nil)
+				if err := validateState(i, b.State); err != nil {
+					return err
 				}
 			case ImageBlock:
 				if err := validateImageUTF8(i, b); err != nil {
@@ -107,8 +107,8 @@ func validateMessages(messages []Message) error {
 				if !utf8.ValidString(b.Text) {
 					return NewError("", ErrorTypeValidation, fmt.Sprintf("messages[%d]: reasoning block text must be valid UTF-8", i), nil)
 				}
-				if !utf8.ValidString(b.Signature) {
-					return NewError("", ErrorTypeValidation, fmt.Sprintf("messages[%d]: reasoning block signature must be valid UTF-8", i), nil)
+				if err := validateState(i, b.State); err != nil {
+					return err
 				}
 			case ToolReferenceBlock:
 				return NewError("", ErrorTypeValidation, fmt.Sprintf("messages[%d]: tool reference block is only valid inside tool result content", i), nil)
@@ -128,8 +128,8 @@ func validateMessages(messages []Message) error {
 				if !utf8.ValidString(b.Name) {
 					return NewError("", ErrorTypeValidation, fmt.Sprintf("messages[%d]: tool use %q name must be valid UTF-8", i, b.ID), nil)
 				}
-				if !utf8.ValidString(b.Signature) {
-					return NewError("", ErrorTypeValidation, fmt.Sprintf("messages[%d]: tool use %q signature must be valid UTF-8", i, b.ID), nil)
+				if err := validateState(i, b.State); err != nil {
+					return err
 				}
 			case ToolResultBlock:
 				if msg.Role != RoleTool {
@@ -148,6 +148,20 @@ func validateMessages(messages []Message) error {
 				return NewError("", ErrorTypeValidation, fmt.Sprintf("messages[%d]: unsupported block %T", i, block), nil)
 			}
 		}
+	}
+	return nil
+}
+
+func validateState(messageIndex int, state *ProviderState) error {
+	switch {
+	case state == nil:
+		return nil
+	case state.Provider == "":
+		return NewError("", ErrorTypeValidation, fmt.Sprintf("messages[%d]: provider state missing provider", messageIndex), nil)
+	case !utf8.ValidString(state.Provider) || !utf8.ValidString(state.Model):
+		return NewError("", ErrorTypeValidation, fmt.Sprintf("messages[%d]: provider state must be valid UTF-8", messageIndex), nil)
+	case !json.Valid(state.Data):
+		return NewError("", ErrorTypeValidation, fmt.Sprintf("messages[%d]: provider state data must be valid JSON", messageIndex), nil)
 	}
 	return nil
 }
@@ -313,6 +327,7 @@ func cloneBlock(block Block) Block {
 		for i := range b.Annotations {
 			b.Annotations[i].Extra = cloneBytes(b.Annotations[i].Extra)
 		}
+		b.State = cloneState(b.State)
 		b.Cache = cloneCacheControl(b.Cache)
 		return b
 	case ImageBlock:
@@ -320,12 +335,12 @@ func cloneBlock(block Block) Block {
 		b.Cache = cloneCacheControl(b.Cache)
 		return b
 	case ReasoningBlock:
-		b.Redacted = cloneBytes(b.Redacted)
-		b.Extra = cloneBytes(b.Extra)
+		b.State = cloneState(b.State)
 		b.Cache = cloneCacheControl(b.Cache)
 		return b
 	case ToolUseBlock:
 		b.Arguments = cloneBytes(b.Arguments)
+		b.State = cloneState(b.State)
 		b.Cache = cloneCacheControl(b.Cache)
 		return b
 	case ToolResultBlock:
@@ -390,6 +405,15 @@ func cloneThinking(thinking *Thinking) *Thinking {
 	}
 	out := *thinking
 	out.BudgetTokens = clonePtr(thinking.BudgetTokens)
+	return &out
+}
+
+func cloneState(state *ProviderState) *ProviderState {
+	if state == nil {
+		return nil
+	}
+	out := *state
+	out.Data = cloneBytes(state.Data)
 	return &out
 }
 

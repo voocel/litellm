@@ -39,6 +39,7 @@ type stream struct {
 	sse        *wire.SSEReader
 	pending    []litellm.Event
 	done       bool
+	requested  string // the requested model, for ProviderState
 	model      string
 	usage      usage
 	finish     litellm.FinishReason
@@ -49,7 +50,7 @@ type stream struct {
 }
 
 func newStream(resp *http.Response, model string) *stream {
-	return &stream{resp: resp, sse: wire.NewSSEReader(resp.Body, "anthropic"), model: model, signatures: make(map[int]string), citations: make(map[int][]json.RawMessage)}
+	return &stream{resp: resp, sse: wire.NewSSEReader(resp.Body, "anthropic"), requested: model, model: model, signatures: make(map[int]string), citations: make(map[int][]json.RawMessage)}
 }
 
 func (s *stream) Next() (event litellm.Event, err error) {
@@ -108,13 +109,13 @@ func (s *stream) events(events []litellm.Event, e streamEvent, raw json.RawMessa
 		}
 	case "message_stop":
 		s.done = true
-		events = s.blocks.CloseAll(events, nil)
+		events = s.blocks.CloseAll(events, s.final)
 		return append(events, litellm.DoneEvent{FinishReason: s.finish, FinishReasonRaw: s.finishRaw, Provider: "anthropic", Model: s.model}), nil
 	case "content_block_start":
 		if e.ContentBlock == nil {
 			return events, nil
 		}
-		block, ok := convertContent(*e.ContentBlock)
+		block, ok := convertContent(*e.ContentBlock, s.requested)
 		if !ok {
 			events = append(events, litellm.WarningEvent{Warning: unsupportedBlock(e.ContentBlock.Type)})
 			break
@@ -151,15 +152,7 @@ func (s *stream) events(events []litellm.Event, e streamEvent, raw json.RawMessa
 		}
 	case "content_block_stop":
 		if _, ok := s.blocks.Index(e.Index); ok {
-			// Signatures and citations arrive as deltas and are delivered here.
-			var final litellm.Block
-			if signature := s.signatures[e.Index]; signature != "" {
-				final = litellm.ReasoningBlock{Signature: signature}
-			}
-			if citations := s.citations[e.Index]; len(citations) > 0 {
-				final = litellm.TextBlock{Annotations: annotations(citations)}
-			}
-			return s.blocks.Close(events, e.Index, final), nil
+			return s.blocks.Close(events, e.Index, s.final(e.Index)), nil
 		}
 	case "ping":
 		return events, nil
@@ -170,6 +163,18 @@ func (s *stream) events(events []litellm.Event, e streamEvent, raw json.RawMessa
 		return nil, wire.StreamError("anthropic", e.Error.Type, "stream error: "+e.Error.Message)
 	}
 	return append(events, litellm.ProviderEvent{Name: e.Type, Raw: raw}), nil
+}
+
+// final returns the late metadata of the block at a native index: signatures
+// and citations arrive as deltas.
+func (s *stream) final(index int) litellm.Block {
+	if signature := s.signatures[index]; signature != "" {
+		return litellm.ReasoningBlock{State: reasoningState(s.requested, "thinking", signature, "")}
+	}
+	if citations := s.citations[index]; len(citations) > 0 {
+		return litellm.TextBlock{Annotations: annotations(citations)}
+	}
+	return nil
 }
 
 // mergeUsage folds a cumulative usage snapshot; an explicit zero overwrites.

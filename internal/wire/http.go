@@ -13,8 +13,8 @@ import (
 	"github.com/voocel/litellm"
 )
 
-// maxErrorBody bounds how much of a failed response is read into the error.
-const maxErrorBody = 1 << 20
+// MaxErrorBody bounds how much of a failed response is read into the error.
+const MaxErrorBody = 1 << 20
 
 // Do sends req. A transport failure becomes a network error and a non-2xx
 // response an HTTP error with its body closed. On success the caller owns
@@ -26,7 +26,7 @@ func Do(client litellm.HTTPClient, req *http.Request, provider, operation string
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, MaxErrorBody))
 		return nil, HTTPError(provider, resp.StatusCode, resp.Header, string(data))
 	}
 	return resp, nil
