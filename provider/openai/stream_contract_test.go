@@ -1,39 +1,53 @@
 package openai
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/internal/testgolden"
 )
 
-func TestResponsesContentSnapshotMatchesCompleteResponse(t *testing.T) {
-	const finalPart = `{"type":"output_text","text":"hello","annotations":[{"type":"url_citation","url":"https://example.com","title":"source"}],"logprobs":[{"token":"hello","logprob":-0.1}]}`
-	var complete responsesResponse
-	if err := json.Unmarshal([]byte(`{"model":"m","status":"completed","output":[{"type":"message","content":[`+finalPart+`,{"type":"output_text","text":""}]}]}`), &complete); err != nil {
+// A stream aggregates to the response its response.completed event carries,
+// including metadata that only content_part.done and output_item.done deliver.
+func TestResponsesStreamMatchesCompleteResponse(t *testing.T) {
+	fixture := testgolden.ReadFixtureString(t, "../../testdata/openai/responses_stream.sse")
+	var completed struct {
+		Response responsesResponse `json:"response"`
+	}
+	last := fixture[strings.LastIndex(fixture, "data: ")+len("data: "):]
+	if err := json.Unmarshal([]byte(last), &completed); err != nil {
 		t.Fatal(err)
 	}
-	want, err := convertResponsesResponse(&complete, "m")
+	want := convertResponsesResponse(&completed.Response, "m")
+
+	p, got := testProvider(t, Config{API: APIResponses}, fixture)
+	stream, err := p.Stream(context.Background(), &litellm.Request{Model: "m", Messages: []litellm.Message{litellm.UserText("hi")}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream := newResponsesStream(streamResponse(strings.Join([]string{
-		`data: {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""},"sequence_number":1}`,
-		`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"hello","sequence_number":2}`,
-		`data: {"type":"response.content_part.done","output_index":0,"content_index":0,"part":` + finalPart + `,"sequence_number":3}`,
-		`data: {"type":"response.content_part.added","output_index":0,"content_index":1,"part":{"type":"output_text","text":""},"sequence_number":4}`,
-		`data: {"type":"response.content_part.done","output_index":0,"content_index":1,"part":{"type":"output_text","text":""},"sequence_number":5}`,
-		`data: {"type":"response.completed","response":{"model":"m","status":"completed","usage":{}},"sequence_number":6}`,
-		``,
-	}, "\n")), "m")
 	defer stream.Close()
-	got, err := litellm.Collect(stream)
+	var ended []litellm.Block
+	resp, err := litellm.Handle(stream, func(event litellm.Event) error {
+		if end, ok := event.(litellm.BlockEnd); ok {
+			ended = append(ended, end.Block)
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("stream=%#v\ncomplete=%#v\nstream blocks=%#v\ncomplete blocks=%#v", got, want, got.Blocks, want.Blocks)
+	if !reflect.DeepEqual(resp, want) {
+		t.Fatalf("stream response:\n%#v\ncomplete response:\n%#v", resp, want)
 	}
+	if !reflect.DeepEqual(ended, want.Blocks) {
+		t.Fatalf("BlockEnd blocks:\n%#v\nwant:\n%#v", ended, want.Blocks)
+	}
+	if got.req.Header.Get("Accept") != "text/event-stream" {
+		t.Fatalf("Accept = %q", got.req.Header.Get("Accept"))
+	}
+	assertJSON(t, got.body, `{"model":"m","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
 }

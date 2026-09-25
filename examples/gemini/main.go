@@ -17,10 +17,14 @@ func main() {
 		mode = os.Args[1]
 	}
 
-	client, err := gemini.NewClient(gemini.Config{
+	provider, err := gemini.New(gemini.Config{
 		APIKey:  os.Getenv("GEMINI_API_KEY"),
 		BaseURL: os.Getenv("GEMINI_BASE_URL"),
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	client, err := litellm.New(provider)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -49,7 +53,7 @@ func runChat(ctx context.Context, client *litellm.Client) {
 		Messages: []litellm.Message{
 			litellm.UserText("Explain multimodal prompts in one sentence."),
 		},
-		MaxTokens: litellm.IntPtr(256),
+		MaxTokens: new(256),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -58,14 +62,13 @@ func runChat(ctx context.Context, client *litellm.Client) {
 }
 
 func runStream(ctx context.Context, client *litellm.Client) {
-	printer := exampleutil.StreamPrinter{}
-	resp, err := client.StreamWith(ctx, litellm.Request{
+	resp, err := exampleutil.Stream(ctx, client, litellm.Request{
 		Model: model(),
 		Messages: []litellm.Message{
 			litellm.UserText("Explain multimodal prompts in one sentence."),
 		},
-		MaxTokens: litellm.IntPtr(256),
-	}, printer.Handler())
+		MaxTokens: new(256),
+	})
 	if err != nil {
 		log.Fatal(err)
 	}

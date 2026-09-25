@@ -7,17 +7,17 @@ import (
 	"time"
 )
 
-// CallInfo describes the caller's request before defaults and validation.
-// Request is an isolated snapshot, not an opportunity to modify the invocation.
+// CallInfo describes the caller's request before validation. Request is a
+// snapshot shared by all observers: read it, never modify it.
 type CallInfo struct {
 	Provider  string
-	Operation string
-	Model     string
 	Streaming bool
 	StartedAt time.Time
 	Request   *Request
 }
 
+// CallStatus is how an invocation ended. CallClosed means the caller closed a
+// stream before it finished.
 type CallStatus string
 
 const (
@@ -28,9 +28,7 @@ const (
 )
 
 // CallResult describes SDK execution, not errors in application consumer callbacks.
-// Streaming Response contains metadata by default; blocks and refusal text are
-// included only for StreamContentObserver opt-in. Captured content may be partial
-// on failure or early Close. A later resource cleanup
+// Response may be partial on failure or early Close. A later resource cleanup
 // error does not revise an already completed invocation; Close returns that error.
 type CallResult struct {
 	Status   CallStatus
@@ -48,14 +46,18 @@ type Observer interface {
 	Start(context.Context, CallInfo) (context.Context, CallObserver)
 }
 
+// ObserverFunc adapts a function to Observer.
 type ObserverFunc func(context.Context, CallInfo) (context.Context, CallObserver)
 
+// Start calls f.
 func (f ObserverFunc) Start(ctx context.Context, info CallInfo) (context.Context, CallObserver) {
 	return f(ctx, info)
 }
 
-// CallObserver belongs to one invocation. Events are isolated snapshots. Warnings
-// from Chat are delivered as WarningEvent. End runs exactly once; observers end in
+// CallObserver belongs to one invocation. Events and the Response are snapshots
+// shared by all observers and isolated from the caller: read, never modify.
+// OnEvent receives stream events as they arrive, and Chat warnings as
+// WarningEvent. End runs exactly once; observers end in
 // reverse registration order so nested observation scopes unwind correctly.
 // Streams must be consumed to termination or explicitly closed; cancellation
 // alone does not run callbacks in a background goroutine.
@@ -64,32 +66,7 @@ type CallObserver interface {
 	End(CallResult)
 }
 
-// StreamContentObserver explicitly requests complete or partial streamed content
-// in End. Otherwise streaming results contain only response metadata.
-type StreamContentObserver interface {
-	CallObserver
-	CaptureStreamContent() bool
-}
-
-type CallObserverFuncs struct {
-	CaptureContent bool
-	OnEventFunc    func(Event)
-	EndFunc        func(CallResult)
-}
-
-func (o CallObserverFuncs) CaptureStreamContent() bool { return o.CaptureContent }
-
-func (o CallObserverFuncs) OnEvent(e Event) {
-	if o.OnEventFunc != nil {
-		o.OnEventFunc(e)
-	}
-}
-func (o CallObserverFuncs) End(r CallResult) {
-	if o.EndFunc != nil {
-		o.EndFunc(r)
-	}
-}
-
+// WithObservers adds observers, skipping nil ones.
 func WithObservers(observers ...Observer) ClientOption {
 	return func(c *Client) error {
 		for _, observer := range observers {
@@ -102,37 +79,35 @@ func WithObservers(observers ...Observer) ClientOption {
 }
 
 type callObservation struct {
-	started        time.Time
-	observers      []CallObserver
-	ended          bool
-	captureContent bool
-	streaming      bool
+	started   time.Time
+	observers []CallObserver
+	ended     bool
 }
 
 func (c *Client) startCall(ctx context.Context, req Request, streaming bool) (context.Context, *callObservation) {
-	call := &callObservation{started: time.Now(), streaming: streaming}
-	operation := "chat"
-	if streaming {
-		operation = "stream"
+	call := &callObservation{started: time.Now()}
+	if len(c.observers) == 0 {
+		return ctx, call
 	}
+	info := CallInfo{Provider: c.ProviderName(), Streaming: streaming, StartedAt: call.started, Request: cloneRequest(req)}
 	for _, observer := range c.observers {
 		var active CallObserver
-		ctx, active = observer.Start(ctx, CallInfo{
-			Provider: c.ProviderName(), Operation: operation, Model: req.Model,
-			Streaming: streaming, StartedAt: call.started, Request: cloneRequest(req),
-		})
+		ctx, active = observer.Start(ctx, info)
 		if active != nil {
 			call.observers = append(call.observers, active)
-			if content, ok := active.(StreamContentObserver); ok && content.CaptureStreamContent() {
-				call.captureContent = true
-			}
 		}
 	}
 	return ctx, call
 }
+
+// Observers share one snapshot per event, isolated from the caller's copy.
 func (c *callObservation) event(e Event) {
+	if len(c.observers) == 0 {
+		return
+	}
+	e = cloneEvent(e)
 	for _, observer := range c.observers {
-		observer.OnEvent(cloneEvent(e))
+		observer.OnEvent(e)
 	}
 }
 func (c *callObservation) end(status CallStatus, resp *Response, err error) {
@@ -141,16 +116,9 @@ func (c *callObservation) end(status CallStatus, resp *Response, err error) {
 	}
 	c.ended = true
 	duration := time.Since(c.started)
+	result := CallResult{Status: status, Response: cloneResponse(resp), Err: err, Duration: duration}
 	for i := len(c.observers) - 1; i >= 0; i-- {
-		source := resp
-		content, captures := c.observers[i].(StreamContentObserver)
-		if c.streaming && source != nil && (!captures || !content.CaptureStreamContent()) {
-			metadata := *source
-			metadata.Blocks, metadata.Refusal = nil, ""
-			source = &metadata
-		}
-		snapshot := cloneResponse(source)
-		c.observers[i].End(CallResult{Status: status, Response: snapshot, Err: err, Duration: duration})
+		c.observers[i].End(result)
 	}
 }
 func callStatus(err error) CallStatus {
@@ -177,7 +145,7 @@ type observedStream struct {
 	closeErr error
 }
 
-func (s *observedStream) eventCollector() *EventCollector { return streamCollector(s.inner) }
+func (s *observedStream) eventCollector() *collector { return streamCollector(s.inner) }
 func (s *observedStream) finish(status CallStatus, err error) {
 	if s.call.ended {
 		return

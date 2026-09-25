@@ -17,10 +17,14 @@ func main() {
 		mode = os.Args[1]
 	}
 
-	client, err := minimax.NewClient(minimax.Config{
+	provider, err := minimax.New(minimax.Config{
 		APIKey:  os.Getenv("MINIMAX_API_KEY"),
 		BaseURL: os.Getenv("MINIMAX_BASE_URL"),
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	client, err := litellm.New(provider)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -49,7 +53,7 @@ func runChat(ctx context.Context, client *litellm.Client) {
 		Messages: []litellm.Message{
 			litellm.UserText("Explain MiniMax in one sentence."),
 		},
-		MaxTokens: litellm.IntPtr(256),
+		MaxTokens: new(256),
 		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled},
 	})
 	if err != nil {
@@ -62,15 +66,14 @@ func runChat(ctx context.Context, client *litellm.Client) {
 }
 
 func runStream(ctx context.Context, client *litellm.Client) {
-	printer := exampleutil.StreamPrinter{}
-	resp, err := client.StreamWith(ctx, litellm.Request{
+	resp, err := exampleutil.Stream(ctx, client, litellm.Request{
 		Model: model(),
 		Messages: []litellm.Message{
 			litellm.UserText("Explain MiniMax in one sentence."),
 		},
-		MaxTokens: litellm.IntPtr(256),
+		MaxTokens: new(256),
 		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled},
-	}, printer.Handler())
+	})
 	if err != nil {
 		log.Fatal(err)
 	}

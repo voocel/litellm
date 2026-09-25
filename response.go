@@ -2,12 +2,11 @@ package litellm
 
 import "encoding/json"
 
+// Response is a complete model reply. Providers set Raw to the vendor body of
+// a non-streaming reply; the Client keeps it only with WithCaptureRawResponse.
 type Response struct {
 	Blocks []Block
 	Usage  Usage
-	// Refusal preserves the model's explicit refusal text. Refusals also map to
-	// FinishReasonSafety so callers do not mistake an empty response for a parse failure.
-	Refusal string
 
 	Model    string
 	Provider string
@@ -18,13 +17,7 @@ type Response struct {
 	Raw             json.RawMessage
 }
 
-func CaptureRawResponse(req *Request, resp *Response, raw []byte) {
-	if req == nil || resp == nil || !req.captureRawResponse {
-		return
-	}
-	resp.Raw = json.RawMessage(cloneBytes(raw))
-}
-
+// Text concatenates the text blocks.
 func (r *Response) Text() string {
 	if r == nil {
 		return ""
@@ -38,6 +31,7 @@ func (r *Response) Text() string {
 	return out
 }
 
+// ToolCalls returns the tool use blocks in order.
 func (r *Response) ToolCalls() []ToolUseBlock {
 	if r == nil {
 		return nil
@@ -51,6 +45,7 @@ func (r *Response) ToolCalls() []ToolUseBlock {
 	return calls
 }
 
+// Reasoning concatenates the reasoning block texts.
 func (r *Response) Reasoning() string {
 	if r == nil {
 		return ""
@@ -74,8 +69,31 @@ type Usage struct {
 	ReasoningTokens  *int
 	CacheReadTokens  *int
 	CacheWriteTokens *int
-	Provider         string
-	Model            string
+}
+
+// Input returns InputTokens and whether it is known.
+func (u Usage) Input() (int, bool) { return tokenCount(u.InputTokens) }
+
+// Output returns OutputTokens and whether it is known.
+func (u Usage) Output() (int, bool) { return tokenCount(u.OutputTokens) }
+
+// Total returns TotalTokens and whether it is known.
+func (u Usage) Total() (int, bool) { return tokenCount(u.TotalTokens) }
+
+// Reasoning returns ReasoningTokens and whether it is known.
+func (u Usage) Reasoning() (int, bool) { return tokenCount(u.ReasoningTokens) }
+
+// CacheRead returns CacheReadTokens and whether it is known.
+func (u Usage) CacheRead() (int, bool) { return tokenCount(u.CacheReadTokens) }
+
+// CacheWrite returns CacheWriteTokens and whether it is known.
+func (u Usage) CacheWrite() (int, bool) { return tokenCount(u.CacheWriteTokens) }
+
+func tokenCount(count *int) (int, bool) {
+	if count == nil {
+		return 0, false
+	}
+	return *count, true
 }
 
 // HasTokens reports whether any token count is known, including a known zero.
@@ -86,27 +104,17 @@ func (u Usage) HasTokens() bool {
 
 // Clone returns an independent copy of the reported counts.
 func (u Usage) Clone() Usage {
-	u.InputTokens = cloneIntPtr(u.InputTokens)
-	u.OutputTokens = cloneIntPtr(u.OutputTokens)
-	u.TotalTokens = cloneIntPtr(u.TotalTokens)
-	u.ReasoningTokens = cloneIntPtr(u.ReasoningTokens)
-	u.CacheReadTokens = cloneIntPtr(u.CacheReadTokens)
-	u.CacheWriteTokens = cloneIntPtr(u.CacheWriteTokens)
+	u.InputTokens = clonePtr(u.InputTokens)
+	u.OutputTokens = clonePtr(u.OutputTokens)
+	u.TotalTokens = clonePtr(u.TotalTokens)
+	u.ReasoningTokens = clonePtr(u.ReasoningTokens)
+	u.CacheReadTokens = clonePtr(u.CacheReadTokens)
+	u.CacheWriteTokens = clonePtr(u.CacheWriteTokens)
 	return u
 }
 
-func (u *Usage) StampModel(provider, model string) {
-	if u == nil || !u.HasTokens() {
-		return
-	}
-	if u.Provider == "" {
-		u.Provider = provider
-	}
-	if u.Model == "" {
-		u.Model = model
-	}
-}
-
+// FinishReason is a normalized stop reason; FinishReasonRaw keeps the vendor
+// value. Empty means the vendor reported none.
 type FinishReason string
 
 const (
@@ -114,36 +122,15 @@ const (
 	FinishReasonLength   FinishReason = "length"
 	FinishReasonToolCall FinishReason = "tool_calls"
 	FinishReasonError    FinishReason = "error"
-	FinishReasonSafety   FinishReason = "safety"
+	// FinishReasonSafety also covers explicit refusals; the refusal text, if
+	// any, is an ordinary TextBlock.
+	FinishReasonSafety FinishReason = "safety"
+	// FinishReasonOther is a reported reason without a normalized equivalent.
+	FinishReasonOther FinishReason = "other"
 )
 
-func NormalizeFinishReason(raw string) FinishReason {
-	switch raw {
-	case "stop", "end_turn", "STOP", "stop_sequence":
-		return FinishReasonStop
-	case "length", "max_tokens", "max_output_tokens", "MAX_TOKENS", "model_context_window_exceeded":
-		return FinishReasonLength
-	case "tool_calls", "tool_use", "FUNCTION_CALLING":
-		return FinishReasonToolCall
-	case "completed":
-		return FinishReasonStop
-	case "incomplete":
-		return FinishReasonLength
-	case "safety", "SAFETY", "content_filter", "content_filtered", "guardrail_intervened", "refusal", "RECITATION", "sensitive", "BLOCKLIST",
-		"PROHIBITED_CONTENT", "SPII", "LANGUAGE", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT",
-		"IMAGE_RECITATION":
-		return FinishReasonSafety
-	case "failed", "error", "cancelled", "canceled", "insufficient_system_resource", "network_error",
-		"MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL", "TOO_MANY_TOOL_CALLS", "malformed_model_output", "malformed_tool_use", "OTHER",
-		"IMAGE_OTHER", "NO_IMAGE", "MISSING_THOUGHT_SIGNATURE":
-		return FinishReasonError
-	case "":
-		return ""
-	default:
-		return FinishReason(raw)
-	}
-}
-
+// Warning reports a non-fatal issue, such as dropped content or a generated ID.
+// Code has the form "<source>.<snake_case>", such as "litellm.tool_arguments_invalid".
 type Warning struct {
 	Code     string
 	Provider string

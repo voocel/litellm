@@ -1,7 +1,7 @@
 package litellm
 
 import (
-	"context"
+	"reflect"
 	"testing"
 )
 
@@ -10,64 +10,34 @@ type capabilityProvider struct {
 	caps Capabilities
 }
 
-func (p capabilityProvider) Capabilities(string) Capabilities {
-	return p.caps
-}
-
-func TestGetCapabilitiesFallback(t *testing.T) {
-	caps := GetCapabilities(&testProvider{name: "test"}, "model")
-	if caps.Provider != "test" || caps.Model != "model" {
-		t.Fatalf("caps = %+v", caps)
-	}
-	if caps.Thinking.Supported != SupportUnknown {
-		t.Fatalf("thinking support = %v, want unknown", caps.Thinking.Supported)
-	}
-}
-
-func TestGetCapabilitiesFillsProviderAndModel(t *testing.T) {
-	provider := capabilityProvider{
-		testProvider: testProvider{name: "test"},
-		caps: Capabilities{
-			Thinking: ThinkingCapabilities{Supported: SupportYes},
-		},
-	}
-	caps := GetCapabilities(&provider, "model")
-	if caps.Provider != "test" || caps.Model != "model" {
-		t.Fatalf("caps = %+v", caps)
-	}
-	if caps.Thinking.Supported != SupportYes {
-		t.Fatalf("thinking support = %v, want yes", caps.Thinking.Supported)
-	}
-}
+func (p *capabilityProvider) Capabilities() Capabilities { return p.caps }
 
 func TestClientCapabilities(t *testing.T) {
 	provider := &capabilityProvider{
 		testProvider: testProvider{name: "test"},
-		caps: Capabilities{
-			Thinking: ThinkingCapabilities{Supported: SupportYes},
-		},
+		caps:         Capabilities{Thinking: true, ProviderOptions: []string{"a", "b"}},
 	}
 	client, err := New(provider)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatal(err)
 	}
-	caps := client.Capabilities("model")
-	if caps.Provider != "test" || caps.Model != "model" || caps.Thinking.Supported != SupportYes {
+	caps, ok := client.Capabilities()
+	if !ok || !reflect.DeepEqual(caps, provider.caps) {
 		t.Fatalf("caps = %+v", caps)
 	}
-}
-
-func TestThinkingCapabilitiesSupportsEffort(t *testing.T) {
-	caps := ThinkingCapabilities{Efforts: []string{"low", "high"}}
-	if !caps.SupportsEffort("high") || caps.SupportsEffort("max") {
-		t.Fatalf("effort support mismatch")
+	caps.ProviderOptions[0] = "mutated"
+	if provider.caps.ProviderOptions[0] != "a" {
+		t.Fatal("Capabilities shares the provider's option list")
 	}
-}
 
-func (p capabilityProvider) Chat(context.Context, *Request) (*Response, error) {
-	return nil, nil
-}
-
-func (p capabilityProvider) Stream(context.Context, *Request) (Stream, error) {
-	return nil, nil
+	plain, err := New(&testProvider{name: "plain"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nilClient *Client
+	for name, client := range map[string]*Client{"plain provider": plain, "nil client": nilClient} {
+		if caps, ok := client.Capabilities(); ok || !reflect.DeepEqual(caps, Capabilities{}) {
+			t.Errorf("%s: caps = %+v, %v; want unknown", name, caps, ok)
+		}
+	}
 }

@@ -12,7 +12,6 @@ import (
 
 // Observer is immutable after construction and may observe concurrent calls.
 // Each Start owns its span; no global call registry or content collector is used.
-// WithCaptureContent explicitly requests stream aggregation from the core.
 type Observer struct {
 	tracer         trace.Tracer
 	captureContent bool
@@ -21,6 +20,7 @@ type Observer struct {
 
 var _ litellm.Observer = (*Observer)(nil)
 
+// Start implements litellm.Observer, starting one span per call.
 func (o *Observer) Start(ctx context.Context, info litellm.CallInfo) (next context.Context, call litellm.CallObserver) {
 	// Preserve the existing adapter's panic isolation. If setup panics after
 	// creating a span, close it; the SDK still receives its original context.
@@ -35,11 +35,15 @@ func (o *Observer) Start(ctx context.Context, info litellm.CallInfo) (next conte
 			call = nil
 		}
 	}()
-	operation := semanticOperation(info)
+	operation := semanticOperation(info.Provider)
+	var model string
+	if info.Request != nil {
+		model = info.Request.Model
+	}
 	attrs := []attribute.KeyValue{
 		attribute.String(attrProviderName, semanticProvider(info.Provider)),
 		attribute.String(attrOperationName, operation),
-		attribute.String(attrRequestModel, info.Model),
+		attribute.String(attrRequestModel, model),
 	}
 	if info.Streaming {
 		attrs = append(attrs, attribute.Bool(attrRequestStream, true))
@@ -53,8 +57,8 @@ func (o *Observer) Start(ctx context.Context, info litellm.CallInfo) (next conte
 		attrs = append(attrs, o.attrFn(ctx)...)
 	}
 	name := operation
-	if info.Model != "" {
-		name += " " + info.Model
+	if model != "" {
+		name += " " + model
 	}
 	next, span = o.tracer.Start(ctx, name, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attrs...))
 	return next, &observation{span: span, captureContent: o.captureContent}
@@ -64,8 +68,6 @@ type observation struct {
 	span           trace.Span
 	captureContent bool
 }
-
-func (o *observation) CaptureStreamContent() bool { return o.captureContent }
 
 func (o *observation) OnEvent(litellm.Event) {}
 func (o *observation) End(result litellm.CallResult) {

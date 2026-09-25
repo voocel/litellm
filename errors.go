@@ -1,14 +1,15 @@
 package litellm
 
 import (
+	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
+	"time"
 )
 
+// ErrorType classifies an Error.
 type ErrorType string
 
 const (
@@ -26,242 +27,142 @@ const (
 	ErrorTypeContentFilter   ErrorType = "content_filter"
 )
 
-type LiteLLMError struct {
+// Error is the error type returned by the client and all providers.
+type Error struct {
 	Type       ErrorType
 	Code       string
 	Message    string
 	Provider   string
-	Model      string
 	StatusCode int
 	// Temporary describes a potentially transient failure, not permission to replay
 	// a request. The provider may already have processed or billed the operation.
 	Temporary bool
-	// RetryAfter is the server-suggested delay in seconds; zero means unspecified.
-	RetryAfter int
+	// RetryAfter is the server-suggested delay; zero means unspecified.
+	RetryAfter time.Duration
 	Cause      error
 }
 
-func (e *LiteLLMError) Error() string {
+// Error renders "provider: code: message". Messages carry no provider prefix.
+func (e *Error) Error() string {
 	msg := strings.TrimSpace(e.Message)
-	if e.Code != "" && msg != "" {
-		return e.Code + ": " + msg
-	}
-	if msg != "" && shouldShowCause(e) {
-		if cause := strings.TrimSpace(e.Cause.Error()); cause != "" && cause != msg {
-			return msg + ": " + cause
-		}
-	}
-	if msg != "" {
-		return msg
-	}
-	if e.Code != "" {
-		return e.Code
-	}
-	if e.StatusCode != 0 {
-		message := fmt.Sprintf("HTTP %d", e.StatusCode)
-		if e.Provider != "" {
-			message = e.Provider + ": " + message
-		}
+	switch {
+	case e.Code != "" && msg != "":
+		msg = e.Code + ": " + msg
+	case msg == "" && e.Code != "":
+		msg = e.Code
+	case msg == "" && e.StatusCode != 0:
+		msg = fmt.Sprintf("HTTP %d", e.StatusCode)
 		if e.Type != "" {
-			message += " (" + string(e.Type) + ")"
+			msg += " (" + string(e.Type) + ")"
 		}
-		return message
+	case msg == "":
+		msg = cmp.Or(string(e.Type), "litellm error")
 	}
-	if e.Type != "" {
-		return string(e.Type)
+	if shouldShowCause(e) {
+		if cause := strings.TrimSpace(e.Cause.Error()); cause != "" && !strings.Contains(msg, cause) {
+			msg += ": " + cause
+		}
 	}
-	return "litellm error"
+	if e.Provider != "" {
+		msg = e.Provider + ": " + msg
+	}
+	return msg
 }
 
-func shouldShowCause(e *LiteLLMError) bool {
+func shouldShowCause(e *Error) bool {
 	if e == nil || e.Cause == nil {
 		return false
 	}
 	return e.Type == ErrorTypeNetwork || e.Type == ErrorTypeTimeout
 }
 
-func (e *LiteLLMError) Unwrap() error {
+// Unwrap returns Cause.
+func (e *Error) Unwrap() error {
 	return e.Cause
 }
 
-func NewError(errorType ErrorType, message string) *LiteLLMError {
-	return &LiteLLMError{Type: errorType, Message: message, Temporary: isTemporaryByType(errorType)}
+// NewError builds an error of the given type. provider may be empty and cause
+// nil; Temporary follows the type.
+func NewError(provider string, errorType ErrorType, message string, cause error) *Error {
+	return &Error{Type: errorType, Provider: provider, Message: message, Cause: cause, Temporary: isTemporaryByType(errorType)}
 }
 
-func NewErrorWithCause(errorType ErrorType, message string, cause error) *LiteLLMError {
-	return &LiteLLMError{Type: errorType, Message: message, Cause: cause, Temporary: isTemporaryByType(errorType)}
-}
-
-func NewProviderError(provider string, errorType ErrorType, message string) *LiteLLMError {
-	return &LiteLLMError{Type: errorType, Provider: provider, Message: message, Temporary: isTemporaryByType(errorType)}
-}
-
-func NewProviderErrorWithCause(provider string, errorType ErrorType, message string, cause error) *LiteLLMError {
-	return &LiteLLMError{Type: errorType, Provider: provider, Message: message, Cause: cause, Temporary: isTemporaryByType(errorType)}
-}
-
-func NewHTTPError(provider string, statusCode int, message string) *LiteLLMError {
-	code, message := parseHTTPErrorMessage(message)
-	errorType := classifyHTTPError(statusCode)
-	// Content moderation rejections are deterministic: the same payload will be
-	// rejected again, so retrying is futile. Providers signal them with vendor
-	// error codes rather than a common status (proxies often rewrite it to a
-	// retryable 429/5xx), hence the detection is by code, not by status.
-	if isContentFilterError(code, message) {
-		errorType = ErrorTypeContentFilter
-	}
-	return &LiteLLMError{
-		Type:       errorType,
-		Code:       code,
-		Provider:   provider,
-		Message:    message,
-		StatusCode: statusCode,
-		Temporary:  isTemporaryHTTPError(statusCode, errorType),
-	}
-}
-
-func parseHTTPErrorMessage(body string) (string, string) {
-	body = strings.TrimSpace(body)
-	if body == "" {
-		return "", ""
-	}
-
-	var payload struct {
-		Error any `json:"error"`
-	}
-	if err := json.Unmarshal([]byte(body), &payload); err != nil || payload.Error == nil {
-		return "", body
-	}
-
-	switch e := payload.Error.(type) {
-	case string:
-		return "", strings.TrimSpace(e)
-	case map[string]any:
-		code := stringField(e, "code")
-		msg := stringField(e, "message")
-		// Aggregator gateways (OpenRouter) wrap the upstream provider's real
-		// error under error.metadata: message is a generic "Provider returned
-		// error" while metadata.raw carries the actual reason (unsupported
-		// response_format, context overflow, ...). Dropping raw makes such
-		// failures undiagnosable, so surface it with the serving provider name.
-		if meta, ok := e["metadata"].(map[string]any); ok {
-			if raw := stringField(meta, "raw"); raw != "" {
-				if pn := stringField(meta, "provider_name"); pn != "" {
-					raw = pn + ": " + raw
-				}
-				if msg == "" {
-					msg = raw
-				} else {
-					msg += " — " + raw
-				}
-			}
-		}
-		if msg == "" {
-			msg = body
-		}
-		return code, msg
-	default:
-		return "", body
-	}
-}
-
-func stringField(m map[string]any, key string) string {
-	v, ok := m[key].(string)
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(v)
-}
-
-func NewAuthError(provider, message string) *LiteLLMError {
-	return NewProviderError(provider, ErrorTypeAuth, message)
-}
-
-func NewValidationError(provider, message string) *LiteLLMError {
-	return NewProviderError(provider, ErrorTypeValidation, message)
-}
-
-func WrapValidationError(provider string, err error) error {
-	if err == nil {
-		return nil
-	}
-	var e *LiteLLMError
-	if errors.As(err, &e) {
-		if e.Provider == "" {
-			copy := *e
-			copy.Provider = provider
-			return &copy
-		}
-		return err
-	}
-	return NewProviderErrorWithCause(provider, ErrorTypeValidation, err.Error(), err)
-}
-
-func NewRateLimitError(provider, message string, retryAfter int) *LiteLLMError {
-	return &LiteLLMError{
-		Type:       ErrorTypeRateLimit,
-		Provider:   provider,
-		Message:    message,
-		Temporary:  true,
-		RetryAfter: retryAfter,
-	}
-}
-
-func NewModelError(provider, model, message string) *LiteLLMError {
-	return &LiteLLMError{Type: ErrorTypeModel, Provider: provider, Model: model, Message: message}
-}
-
-func NewNetworkError(provider, message string, cause error) *LiteLLMError {
+// NewNetworkError builds a transport error. Context cancellation is a
+// non-temporary network error and a deadline a timeout; other causes are
+// temporary.
+func NewNetworkError(provider, message string, cause error) *Error {
 	if errors.Is(cause, context.Canceled) {
-		return &LiteLLMError{Type: ErrorTypeNetwork, Provider: provider, Message: message, Cause: cause, Temporary: false}
+		return &Error{Type: ErrorTypeNetwork, Provider: provider, Message: message, Cause: cause, Temporary: false}
 	}
 	if errors.Is(cause, context.DeadlineExceeded) {
-		return &LiteLLMError{Type: ErrorTypeTimeout, Provider: provider, Message: message, Cause: cause, Temporary: false}
+		return &Error{Type: ErrorTypeTimeout, Provider: provider, Message: message, Cause: cause, Temporary: false}
 	}
-	return &LiteLLMError{Type: ErrorTypeNetwork, Provider: provider, Message: message, Cause: cause, Temporary: true}
+	return &Error{Type: ErrorTypeNetwork, Provider: provider, Message: message, Cause: cause, Temporary: true}
 }
 
-func NewTimeoutError(provider, message string) *LiteLLMError {
-	return &LiteLLMError{Type: ErrorTypeTimeout, Provider: provider, Message: message, Temporary: true}
-}
+// IsAuthError reports whether err wraps an *Error of type ErrorTypeAuth.
+func IsAuthError(err error) bool { return isErrorType(err, ErrorTypeAuth) }
 
-func IsAuthError(err error) bool            { return isErrorType(err, ErrorTypeAuth) }
-func IsRateLimitError(err error) bool       { return isErrorType(err, ErrorTypeRateLimit) }
-func IsNetworkError(err error) bool         { return isErrorType(err, ErrorTypeNetwork) }
-func IsValidationError(err error) bool      { return isErrorType(err, ErrorTypeValidation) }
-func IsProviderError(err error) bool        { return isErrorType(err, ErrorTypeProvider) }
-func IsTimeoutError(err error) bool         { return isErrorType(err, ErrorTypeTimeout) }
-func IsModelError(err error) bool           { return isErrorType(err, ErrorTypeModel) }
+// IsRateLimitError reports whether err wraps an *Error of type ErrorTypeRateLimit.
+func IsRateLimitError(err error) bool { return isErrorType(err, ErrorTypeRateLimit) }
+
+// IsNetworkError reports whether err wraps an *Error of type ErrorTypeNetwork.
+func IsNetworkError(err error) bool { return isErrorType(err, ErrorTypeNetwork) }
+
+// IsValidationError reports whether err wraps an *Error of type ErrorTypeValidation.
+func IsValidationError(err error) bool { return isErrorType(err, ErrorTypeValidation) }
+
+// IsProviderError reports whether err wraps an *Error of type ErrorTypeProvider.
+func IsProviderError(err error) bool { return isErrorType(err, ErrorTypeProvider) }
+
+// IsTimeoutError reports whether err wraps an *Error of type ErrorTypeTimeout.
+func IsTimeoutError(err error) bool { return isErrorType(err, ErrorTypeTimeout) }
+
+// IsModelError reports whether err wraps an *Error of type ErrorTypeModel.
+func IsModelError(err error) bool { return isErrorType(err, ErrorTypeModel) }
+
+// IsContextOverflowError reports whether err wraps an *Error of type ErrorTypeContextOverflow.
 func IsContextOverflowError(err error) bool { return isErrorType(err, ErrorTypeContextOverflow) }
-func IsOverloadedError(err error) bool      { return isErrorType(err, ErrorTypeOverloaded) }
-func IsContentFilterError(err error) bool   { return isErrorType(err, ErrorTypeContentFilter) }
+
+// IsOverloadedError reports whether err wraps an *Error of type ErrorTypeOverloaded.
+func IsOverloadedError(err error) bool { return isErrorType(err, ErrorTypeOverloaded) }
+
+// IsContentFilterError reports whether err wraps an *Error of type ErrorTypeContentFilter.
+func IsContentFilterError(err error) bool { return isErrorType(err, ErrorTypeContentFilter) }
+
+// IsQuotaError reports whether err wraps an *Error of type ErrorTypeQuota.
+func IsQuotaError(err error) bool { return isErrorType(err, ErrorTypeQuota) }
+
+// IsInternalError reports whether err wraps an *Error of type ErrorTypeInternal.
+func IsInternalError(err error) bool { return isErrorType(err, ErrorTypeInternal) }
 
 // IsTemporaryError reports whether the failure may resolve over time. It does
 // not establish that repeating the operation is safe, even before any output.
 func IsTemporaryError(err error) bool {
-	var e *LiteLLMError
+	var e *Error
 	return errors.As(err, &e) && e.Temporary
 }
 
-func GetRetryAfter(err error) int {
-	var e *LiteLLMError
+// RetryAfter returns the server-suggested delay carried by err, or zero.
+func RetryAfter(err error) time.Duration {
+	var e *Error
 	if errors.As(err, &e) {
 		return e.RetryAfter
 	}
 	return 0
 }
 
-func WrapError(err error, provider string) error {
+// WrapError attributes err to provider. Existing *Error values keep their type
+// and gain the provider when unset; context cancellation and deadlines become
+// network and timeout errors; anything else becomes a fallback-typed error.
+func WrapError(provider string, fallback ErrorType, err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return NewNetworkError(provider, err.Error(), err)
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return NewNetworkError(provider, err.Error(), err)
-	}
-	var e *LiteLLMError
+	var e *Error
 	if errors.As(err, &e) {
 		if e.Provider == "" {
 			copy := *e
@@ -270,85 +171,17 @@ func WrapError(err error, provider string) error {
 		}
 		return err
 	}
-	return NewProviderErrorWithCause(provider, ErrorTypeProvider, err.Error(), err)
+	return NewError(provider, fallback, err.Error(), err)
 }
 
 func isErrorType(err error, errorType ErrorType) bool {
-	var e *LiteLLMError
+	var e *Error
 	return errors.As(err, &e) && e.Type == errorType
-}
-
-// contentFilterTokens are stable vendor error codes for content moderation
-// rejections: Azure (content_filter), OpenAI (content_policy_violation;
-// invalid_prompt on reasoning models), Zhipu-style gateways
-// (sensitive_words_detected), DashScope/Qwen (data_inspection_failed in
-// OpenAI-compat mode, InternalError.Algo.DataInspectionFailed natively).
-// Anthropic has no dedicated code — its block is a generic
-// invalid_request_error whose only marker is the fixed message
-// "Output blocked by content filtering policy", hence a message token.
-// Matched case-insensitively as substrings of the parsed error code and
-// message; misses just fall back to status-based classification.
-var contentFilterTokens = []string{
-	"content_filter",
-	"content_policy",
-	"sensitive_words",
-	"data_inspection_failed",
-	"datainspectionfailed",
-	"invalid_prompt",
-	"content filtering policy",
-}
-
-func isContentFilterError(code, message string) bool {
-	haystack := strings.ToLower(code + " " + message)
-	for _, token := range contentFilterTokens {
-		if strings.Contains(haystack, token) {
-			return true
-		}
-	}
-	return false
-}
-
-func classifyHTTPError(statusCode int) ErrorType {
-	switch {
-	case statusCode == http.StatusUnauthorized, statusCode == http.StatusForbidden:
-		return ErrorTypeAuth
-	case statusCode == http.StatusTooManyRequests:
-		return ErrorTypeRateLimit
-	case statusCode == http.StatusPaymentRequired:
-		return ErrorTypeQuota
-	case statusCode == http.StatusNotFound:
-		return ErrorTypeModel
-	case statusCode == http.StatusRequestTimeout:
-		return ErrorTypeTimeout
-	case statusCode == http.StatusBadRequest:
-		return ErrorTypeValidation
-	case statusCode == 529:
-		return ErrorTypeOverloaded
-	case statusCode >= 500:
-		return ErrorTypeProvider
-	default:
-		return ErrorTypeProvider
-	}
 }
 
 func isTemporaryByType(errorType ErrorType) bool {
 	switch errorType {
 	case ErrorTypeNetwork, ErrorTypeTimeout, ErrorTypeRateLimit, ErrorTypeOverloaded:
-		return true
-	default:
-		return false
-	}
-}
-
-// A provider error without an HTTP status has no known recovery semantics.
-func isTemporaryHTTPError(status int, kind ErrorType) bool {
-	if kind == ErrorTypeContentFilter {
-		return false
-	}
-	switch status {
-	case http.StatusRequestTimeout, http.StatusTooManyRequests,
-		http.StatusInternalServerError, http.StatusBadGateway,
-		http.StatusServiceUnavailable, http.StatusGatewayTimeout, 529:
 		return true
 	default:
 		return false

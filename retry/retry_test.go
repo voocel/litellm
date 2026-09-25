@@ -13,7 +13,7 @@ import (
 
 func TestTransportRetriesCompleteRetryableResponses(t *testing.T) {
 	var attempts int
-	transport := NewTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := newTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		attempts++
 		if attempts == 1 {
 			return response(http.StatusTooManyRequests, "slow down"), nil
@@ -45,7 +45,7 @@ func TestTransportRetriesCompleteRetryableResponses(t *testing.T) {
 func TestTransportDoesNotRetryNetworkErrors(t *testing.T) {
 	boom := errors.New("boom")
 	var attempts int
-	transport := NewTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := newTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		attempts++
 		return nil, boom
 	}), &Policy{MaxAttempts: 3, InitialDelay: time.Nanosecond})
@@ -65,7 +65,7 @@ func TestTransportDoesNotRetryNetworkErrors(t *testing.T) {
 
 func TestTransportRetryAfterRespectsContext(t *testing.T) {
 	var attempts int
-	transport := NewTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := newTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		attempts++
 		resp := response(http.StatusTooManyRequests, "slow down")
 		resp.Header.Set("Retry-After", "30")
@@ -87,9 +87,9 @@ func TestTransportRetryAfterRespectsContext(t *testing.T) {
 	}
 }
 
-func TestTransportRejectsNonReplayableBodyOnRetry(t *testing.T) {
+func TestTransportReturnsResponseForNonReplayableBody(t *testing.T) {
 	var attempts int
-	transport := NewTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := newTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		attempts++
 		return response(http.StatusServiceUnavailable, "retry"), nil
 	}), &Policy{MaxAttempts: 2, InitialDelay: time.Nanosecond})
@@ -98,10 +98,11 @@ func TestTransportRejectsNonReplayableBodyOnRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	_, err = transport.RoundTrip(req)
-	if err == nil || !strings.Contains(err.Error(), "not replayable") {
-		t.Fatalf("expected non-replayable body error, got %v", err)
+	resp, err := transport.RoundTrip(req)
+	if err != nil || resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("resp = %v, err = %v; want the original 503", resp, err)
 	}
+	resp.Body.Close()
 	if attempts != 1 {
 		t.Fatalf("attempts = %d, want 1", attempts)
 	}
@@ -124,7 +125,7 @@ func response(status int, body string) *http.Response {
 func TestTransportDoesNotReplayInterruptedSuccessfulResponse(t *testing.T) {
 	boom := errors.New("stream interrupted")
 	attempts := 0
-	transport := NewTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := newTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		attempts++
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: &failingBody{err: boom}}, nil
 	}), &Policy{MaxAttempts: 3, InitialDelay: time.Nanosecond})

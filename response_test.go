@@ -2,40 +2,15 @@ package litellm
 
 import "testing"
 
-func TestNormalizeFinishReasonPreservesProviderContracts(t *testing.T) {
-	tests := []struct {
-		raw  string
-		want FinishReason
-	}{
-		{raw: "stop", want: FinishReasonStop},
-		{raw: "end_turn", want: FinishReasonStop},
-		{raw: "pause_turn", want: FinishReason("pause_turn")},
-		{raw: "STOP", want: FinishReasonStop},
-		{raw: "length", want: FinishReasonLength},
-		{raw: "max_tokens", want: FinishReasonLength},
-		{raw: "max_output_tokens", want: FinishReasonLength},
-		{raw: "model_context_window_exceeded", want: FinishReasonLength},
-		{raw: "tool_use", want: FinishReasonToolCall},
-		{raw: "FUNCTION_CALLING", want: FinishReasonToolCall},
-		{raw: "content_filter", want: FinishReasonSafety},
-		{raw: "content_filtered", want: FinishReasonSafety},
-		{raw: "guardrail_intervened", want: FinishReasonSafety},
-		{raw: "refusal", want: FinishReasonSafety},
-		{raw: "RECITATION", want: FinishReasonSafety},
-		{raw: "PROHIBITED_CONTENT", want: FinishReasonSafety},
-		{raw: "IMAGE_SAFETY", want: FinishReasonSafety},
-		{raw: "MALFORMED_FUNCTION_CALL", want: FinishReasonError},
-		{raw: "malformed_model_output", want: FinishReasonError},
-		{raw: "malformed_tool_use", want: FinishReasonError},
-		{raw: "UNEXPECTED_TOOL_CALL", want: FinishReasonError},
-		{raw: "MISSING_THOUGHT_SIGNATURE", want: FinishReasonError},
-		{raw: "insufficient_system_resource", want: FinishReasonError},
-		{raw: "provider_specific", want: FinishReason("provider_specific")},
+func TestUsageAccessorsDistinguishUnknownFromZero(t *testing.T) {
+	u := Usage{InputTokens: new(0), OutputTokens: new(7)}
+	if n, ok := u.Input(); n != 0 || !ok {
+		t.Fatalf("Input() = %d, %v; want known zero", n, ok)
 	}
-
-	for _, tt := range tests {
-		if got := NormalizeFinishReason(tt.raw); got != tt.want {
-			t.Fatalf("NormalizeFinishReason(%q) = %q, want %q", tt.raw, got, tt.want)
-		}
+	if n, ok := u.Output(); n != 7 || !ok {
+		t.Fatalf("Output() = %d, %v", n, ok)
+	}
+	if _, ok := u.CacheRead(); ok {
+		t.Fatal("CacheRead() reported an unknown count as known")
 	}
 }

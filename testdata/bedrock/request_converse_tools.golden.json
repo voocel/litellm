@@ -88,12 +88,6 @@
           "name": "lookup",
           "strict": true
         }
-      },
-      {
-        "cachePoint": {
-          "ttl": "1h",
-          "type": "default"
-        }
       }
     ]
   }

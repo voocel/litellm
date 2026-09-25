@@ -7,9 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/voocel/litellm/retry"
 )
 
 func TestSignRequestSetsSigV4Headers(t *testing.T) {
@@ -21,8 +18,7 @@ func TestSignRequestSetsSigV4Headers(t *testing.T) {
 		AccessKeyID:     "AKID",
 		SecretAccessKey: "SECRET",
 		SessionToken:    "SESSION",
-		Region:          "us-west-2",
-	})
+	}, "us-west-2")
 	if err != nil {
 		t.Fatalf("signRequest: %v", err)
 	}
@@ -71,56 +67,32 @@ func TestRuntimeURLEscapesModelIDAsSinglePathSegment(t *testing.T) {
 	}
 }
 
-func TestSigningTransportSignsEachRetryAttempt(t *testing.T) {
-	credentials := &countingCredentials{
-		credentials: Credentials{
-			AccessKeyID:     "AKID",
-			SecretAccessKey: "SECRET",
-			Region:          "us-west-2",
-		},
-	}
-	var attempts int
-	var authHeaders []string
+func TestSigningTransportResolvesCredentialsPerRequest(t *testing.T) {
+	credentials := &countingCredentials{credentials: Credentials{AccessKeyID: "AKID", SecretAccessKey: "SECRET"}}
+	var signed int
 	base := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		attempts++
-		auth := req.Header.Get("Authorization")
-		if !strings.Contains(auth, "AWS4-HMAC-SHA256 Credential=AKID/") {
-			t.Fatalf("missing auth on attempt %d: %s", attempts, auth)
+		if strings.Contains(req.Header.Get("Authorization"), "AWS4-HMAC-SHA256 Credential=AKID/") {
+			signed++
 		}
-		authHeaders = append(authHeaders, auth)
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			t.Fatalf("read body: %v", err)
-		}
-		if string(body) != `{}` {
+		if body, _ := io.ReadAll(req.Body); string(body) != `{}` {
 			t.Fatalf("body = %q", body)
-		}
-		if attempts == 1 {
-			return &http.Response{StatusCode: http.StatusTooManyRequests, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("retry"))}, nil
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("ok"))}, nil
 	})
-	transport := retry.NewTransport(SigningTransport(credentials, "us-west-2", base), &retry.Policy{
-		MaxAttempts:  2,
-		InitialDelay: time.Nanosecond,
-	})
-	req, err := http.NewRequest(http.MethodPost, "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude/converse", bytes.NewReader([]byte(`{}`)))
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
+	transport := newSigningTransport(credentials, "us-west-2", base)
+	for range 2 {
+		req, err := http.NewRequest(http.MethodPost, "https://bedrock-runtime.us-west-2.amazonaws.com/model/m/converse", bytes.NewReader([]byte(`{}`)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := transport.RoundTrip(req)
+		if err != nil {
+			t.Fatalf("RoundTrip: %v", err)
+		}
+		resp.Body.Close()
 	}
-	resp, err := transport.RoundTrip(req)
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	defer resp.Body.Close()
-	if attempts != 2 {
-		t.Fatalf("attempts = %d, want 2", attempts)
-	}
-	if credentials.calls != 2 {
-		t.Fatalf("credential calls = %d, want 2", credentials.calls)
-	}
-	if len(authHeaders) != 2 {
-		t.Fatalf("auth headers = %d, want 2", len(authHeaders))
+	if signed != 2 || credentials.calls != 2 {
+		t.Fatalf("signed = %d, credential calls = %d, want 2 each", signed, credentials.calls)
 	}
 }
 
@@ -133,7 +105,7 @@ func TestSigningTransportClosesOriginalRequestBody(t *testing.T) {
 		req.Body.Close()
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("ok"))}, nil
 	})
-	transport := SigningTransport(StaticCredentials("AKID", "SECRET", ""), "us-west-2", base)
+	transport := newSigningTransport(StaticCredentials("AKID", "SECRET", ""), "us-west-2", base)
 	req, err := http.NewRequest(http.MethodPost, "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude/converse", body)
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)

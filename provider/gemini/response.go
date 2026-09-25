@@ -3,116 +3,110 @@ package gemini
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync/atomic"
 
 	"github.com/voocel/litellm"
-	"github.com/voocel/litellm/internal/tokenusage"
+	"github.com/voocel/litellm/internal/wire"
 )
 
 var generatedToolCallSeq atomic.Uint64
 
-func convertResponse(resp *response, req *litellm.Request) (*litellm.Response, error) {
-	if resp == nil {
-		return nil, fmt.Errorf("gemini: response cannot be nil")
-	}
-	if resp.PromptFeedback != nil {
-		return nil, promptFeedbackError(resp.PromptFeedback)
-	}
-	out := &litellm.Response{
-		Provider: "gemini",
-	}
-	if req != nil {
-		out.Model = req.Model
-	}
+// convertResponse maps the first candidate. A blocked prompt or candidate is
+// a Response with its finish reason, not an error.
+func convertResponse(resp *response, model string) *litellm.Response {
+	out := &litellm.Response{Provider: "gemini", Model: model}
 	if resp.UsageMetadata != nil {
-		out.Usage = convertUsage(resp.UsageMetadata, out.Model)
+		out.Usage = convertUsage(resp.UsageMetadata)
 	}
 	if len(resp.Candidates) == 0 {
-		return out, nil
+		if resp.PromptFeedback != nil && resp.PromptFeedback.BlockReason != "" {
+			out.FinishReason, out.FinishReasonRaw = wire.FinishReason(resp.PromptFeedback.BlockReason), resp.PromptFeedback.BlockReason
+		}
+		return out
 	}
 	candidate := resp.Candidates[0]
-	if len(candidate.Content.Parts) == 0 && candidate.FinishReason != "" && candidate.FinishReason != "STOP" {
-		return nil, candidateFinishError(candidate)
-	}
-	out.FinishReason = litellm.NormalizeFinishReason(candidate.FinishReason)
-	for _, part := range candidate.Content.Parts {
-		if part.Text != "" {
-			if part.Thought != nil && *part.Thought {
-				if thinkingEnabled(req) {
-					out.Blocks = append(out.Blocks, litellm.ReasoningBlock{Text: part.Text, Signature: part.ThoughtSignature})
+	var toolCalls bool
+	for _, p := range candidate.Content.Parts {
+		switch b := partBlock(p).(type) {
+		case litellm.TextBlock:
+			if last, ok := lastBlock[litellm.TextBlock](out.Blocks); ok {
+				last.Text += b.Text
+				out.Blocks[len(out.Blocks)-1] = last
+				continue
+			}
+			out.Blocks = append(out.Blocks, b)
+		case litellm.ReasoningBlock:
+			if last, ok := lastBlock[litellm.ReasoningBlock](out.Blocks); ok {
+				last.Text += b.Text
+				if b.Signature != "" {
+					last.Signature = b.Signature
 				}
-			} else {
-				out.Blocks = append(out.Blocks, litellm.TextBlock{Text: part.Text})
+				out.Blocks[len(out.Blocks)-1] = last
+				continue
 			}
-		}
-		if part.FunctionCall != nil {
-			args, err := json.Marshal(part.FunctionCall.Args)
-			if err != nil {
-				return nil, fmt.Errorf("gemini: marshal function call %q arguments: %w", part.FunctionCall.Name, err)
+			out.Blocks = append(out.Blocks, b)
+		case litellm.ToolUseBlock:
+			if p.FunctionCall.ID == "" {
+				out.Warnings = append(out.Warnings, generatedIDWarning(b))
 			}
-			id := part.FunctionCall.ID
-			if id == "" {
-				id = fmt.Sprintf("call_%d", generatedToolCallSeq.Add(1))
-				out.Warnings = append(out.Warnings, generatedToolCallIDWarning(part.FunctionCall.Name, id))
-			}
-			out.Blocks = append(out.Blocks, litellm.ToolUseBlock{
-				ID:        id,
-				Name:      part.FunctionCall.Name,
-				Arguments: args,
-				Signature: part.ThoughtSignature,
-			})
+			out.Blocks = append(out.Blocks, b)
+			toolCalls = true
 		}
 	}
-	return out, nil
+	out.FinishReason, out.FinishReasonRaw = finishReason(candidate.FinishReason, toolCalls), candidate.FinishReason
+	return out
 }
 
-func generatedToolCallIDWarning(name, id string) litellm.Warning {
-	message := fmt.Sprintf("Gemini function call %q was missing id; generated %q", name, id)
-	return litellm.Warning{
-		Code:     "gemini.tool_call_id_synthesized",
-		Provider: "gemini",
-		Message:  message,
-	}
-}
-
-func thinkingEnabled(req *litellm.Request) bool {
-	return req == nil || req.Thinking == nil || req.Thinking.Mode != litellm.ThinkingDisabled
-}
-
-func formatSafetyRatings(ratings []safetyRating) string {
-	if len(ratings) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(ratings))
-	for _, rating := range ratings {
-		if rating.Category == "" && rating.Probability == "" && !rating.Blocked {
-			continue
+// partBlock maps one part. Adjacent text or thought parts form one block, so
+// callers merge them; a function call without an id gets a generated one.
+func partBlock(p part) litellm.Block {
+	switch {
+	case p.FunctionCall != nil:
+		id := p.FunctionCall.ID
+		if id == "" {
+			id = fmt.Sprintf("call_%d", generatedToolCallSeq.Add(1))
 		}
-		item := rating.Category
-		if rating.Probability != "" {
-			if item != "" {
-				item += "="
-			}
-			item += rating.Probability
+		args := p.FunctionCall.Args
+		if len(args) == 0 {
+			args = json.RawMessage("{}") // args is optional on the wire
 		}
-		if rating.Blocked {
-			if item != "" {
-				item += ","
-			}
-			item += "blocked"
-		}
-		parts = append(parts, item)
+		return litellm.ToolUseBlock{ID: id, Name: p.FunctionCall.Name, Arguments: args, Signature: p.ThoughtSignature}
+	case p.Thought:
+		return litellm.ReasoningBlock{Text: p.Text, Signature: p.ThoughtSignature}
+	case p.Text != "":
+		return litellm.TextBlock{Text: p.Text}
 	}
-	return strings.Join(parts, "; ")
+	return nil
 }
 
-func convertUsage(u *usageMetadata, model string) litellm.Usage {
+func lastBlock[T litellm.Block](blocks []litellm.Block) (T, bool) {
+	var zero T
+	if len(blocks) == 0 {
+		return zero, false
+	}
+	last, ok := blocks[len(blocks)-1].(T)
+	return last, ok
+}
+
+func generatedIDWarning(tool litellm.ToolUseBlock) litellm.Warning {
+	return litellm.Warning{Code: "gemini.tool_call_id_generated", Provider: "gemini", Message: fmt.Sprintf("function call %q had no id; generated %q", tool.Name, tool.ID)}
+}
+
+// finishReason reports tool calls: Gemini ends function-call turns with STOP.
+func finishReason(raw string, toolCalls bool) litellm.FinishReason {
+	finish := wire.FinishReason(raw)
+	if finish == litellm.FinishReasonStop && toolCalls {
+		return litellm.FinishReasonToolCall
+	}
+	return finish
+}
+
+func convertUsage(u *usageMetadata) litellm.Usage {
 	return litellm.Usage{
 		InputTokens:     u.PromptTokenCount,
-		OutputTokens:    tokenusage.AddDetails(u.CandidatesTokenCount, u.ThoughtsTokenCount),
-		ReasoningTokens: u.ThoughtsTokenCount, TotalTokens: u.TotalTokenCount,
+		OutputTokens:    wire.AddTokenDetails(u.CandidatesTokenCount, u.ThoughtsTokenCount),
+		ReasoningTokens: u.ThoughtsTokenCount,
+		TotalTokens:     u.TotalTokenCount,
 		CacheReadTokens: u.CachedContentTokenCount,
-		Provider:        "gemini", Model: model,
 	}
 }

@@ -3,452 +3,251 @@ package bedrock
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"math"
+	"slices"
 	"strings"
 
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/internal/claude"
+	"github.com/voocel/litellm/internal/wire"
 )
 
-const ProviderOptionCacheRetention = "cache_retention"
+// ProviderOptions are native Converse fields copied into the body. An option
+// naming a generated object is merged into it, so model-specific fields go
+// under "additionalModelRequestFields".
+const (
+	ProviderOptionAdditionalModelRequestFields      = "additionalModelRequestFields"
+	ProviderOptionAdditionalModelResponseFieldPaths = "additionalModelResponseFieldPaths"
+	ProviderOptionGuardrailConfig                   = "guardrailConfig"
+	ProviderOptionPerformanceConfig                 = "performanceConfig"
+	ProviderOptionPromptVariables                   = "promptVariables"
+	ProviderOptionRequestMetadata                   = "requestMetadata"
+)
 
-func (p *Provider) buildRequest(req *litellm.Request) (*request, error) {
-	if err := validateSampling(req.Temperature, req.TopP); err != nil {
+var providerOptions = []string{
+	ProviderOptionAdditionalModelRequestFields, ProviderOptionAdditionalModelResponseFieldPaths,
+	ProviderOptionGuardrailConfig, ProviderOptionPerformanceConfig, ProviderOptionPromptVariables,
+	ProviderOptionRequestMetadata,
+}
+
+func sortedOptions() []string {
+	out := slices.Clone(providerOptions)
+	slices.Sort(out)
+	return out
+}
+
+// buildRequest maps Thinking in Anthropic's format through
+// additionalModelRequestFields; other model families set their own fields
+// with that option.
+func buildRequest(req *litellm.Request) ([]byte, error) {
+	opts, err := req.ProviderOptions.Decode()
+	if err != nil {
 		return nil, err
 	}
-	if len(req.ProviderOptions) > 0 {
-		if err := validateProviderOptions(req.ProviderOptions); err != nil {
-			return nil, err
-		}
+	if err := wire.CheckOptions(opts, providerOptions); err != nil {
+		return nil, err
 	}
-	out := &request{}
+	out := &request{InferenceConfig: convertInference(req)}
 	if err := convertMessages(out, req.Messages); err != nil {
 		return nil, err
 	}
-	inference := convertInference(req)
-	out.InferenceConfig = inference
-	if err := applyThinking(out, req); err != nil {
+	if thinking := claude.Thinking(req.Thinking); thinking != nil {
+		out.AdditionalModelRequestFields = map[string]any{"thinking": thinking}
+		if thinking.Effort != "" {
+			out.AdditionalModelRequestFields["output_config"] = map[string]any{"effort": thinking.Effort}
+		}
+	}
+	if out.OutputConfig, err = convertOutputConfig(req.ResponseFormat); err != nil {
 		return nil, err
 	}
-	output, err := convertOutputConfig(req.ResponseFormat)
-	if err != nil {
-		return nil, err
-	}
-	out.OutputConfig = output
 	if len(req.Tools) > 0 {
-		toolChoice, disableTools, err := convertToolChoice(req.ToolChoice)
-		if err != nil {
+		if out.ToolConfig, err = convertToolConfig(req); err != nil {
 			return nil, err
 		}
-		if !disableTools {
-			tools, err := convertTools(req.Tools)
-			if err != nil {
-				return nil, err
-			}
-			out.ToolConfig = &toolConfig{Tools: tools, ToolChoice: toolChoice}
+	}
+	return wire.MarshalBody(out, opts)
+}
+
+// convertToolConfig expresses ToolChoiceNone by omitting the tools. Converse
+// has no "none" choice and requires tools whenever history holds tool blocks.
+func convertToolConfig(req *litellm.Request) (*toolConfig, error) {
+	choice := req.ToolChoice
+	if choice != nil && choice.Mode == litellm.ToolChoiceNone {
+		if hasToolBlocks(req.Messages) {
+			return nil, errors.New("tool_choice none cannot be expressed when history contains tool calls")
 		}
+		return nil, nil
 	}
-	cp, err := cachePointFromRequest(req)
-	if err != nil {
-		return nil, err
+	out := &toolConfig{}
+	for _, t := range req.Tools {
+		spec := &toolSpec{Name: t.Name, Description: t.Description, InputSchema: inputSchema{JSON: json.RawMessage(`{"type":"object"}`)}}
+		if len(t.Parameters) > 0 {
+			spec.InputSchema.JSON = json.RawMessage(t.Parameters)
+		}
+		if strict, ok := t.Strict.Value(); ok {
+			spec.Strict = &strict
+		}
+		out.Tools = append(out.Tools, tool{ToolSpec: spec})
 	}
-	if cp != nil {
-		applyCachePoints(out, cp)
+	switch {
+	case choice == nil:
+	case choice.Name != "":
+		out.ToolChoice = map[string]any{"tool": map[string]any{"name": choice.Name}}
+	case choice.Mode == litellm.ToolChoiceRequired:
+		out.ToolChoice = map[string]any{"any": map[string]any{}}
+	default:
+		out.ToolChoice = map[string]any{"auto": map[string]any{}}
 	}
 	return out, nil
 }
 
-func convertToolChoice(choice *litellm.ToolChoice) (any, bool, error) {
-	if err := choice.Validate(); err != nil {
-		return nil, false, err
-	}
-	if choice == nil {
-		return nil, false, nil
-	}
-	if choice.Name != "" {
-		return map[string]any{"tool": map[string]any{"name": choice.Name}}, false, nil
-	}
-	switch choice.Mode {
-	case litellm.ToolChoiceNone:
-		return nil, true, nil
-	case litellm.ToolChoiceRequired:
-		return map[string]any{"any": map[string]any{}}, false, nil
-	default:
-		return map[string]any{"auto": map[string]any{}}, false, nil
-	}
-}
-
-func validateProviderOptions(rawOptions litellm.ProviderOptions) error {
-	options, err := rawOptions.Decode()
-	if err != nil {
-		return err
-	}
-
-	for key, value := range options {
-		switch key {
-		case ProviderOptionCacheRetention:
-			if _, ok := value.(string); !ok {
-				return fmt.Errorf("bedrock: provider option %q must be string", key)
+func hasToolBlocks(messages []litellm.Message) bool {
+	for _, msg := range messages {
+		for _, block := range msg.Blocks {
+			switch block.(type) {
+			case litellm.ToolUseBlock, litellm.ToolResultBlock:
+				return true
 			}
-		default:
-			return fmt.Errorf("bedrock: unsupported provider option %q", key)
 		}
 	}
-	return nil
+	return false
 }
 
 func convertMessages(out *request, messages []litellm.Message) error {
 	for i, msg := range messages {
-		switch msg.Role {
-		case litellm.RoleSystem:
-			blocks, err := convertSystemBlocks(msg.Blocks)
-			if err != nil {
-				return fmt.Errorf("bedrock: messages[%d]: %w", i, err)
+		if msg.Role == litellm.RoleSystem {
+			for _, block := range msg.Blocks {
+				text, ok := block.(litellm.TextBlock)
+				if !ok {
+					return fmt.Errorf("messages[%d]: system only supports text blocks, got %T", i, block)
+				}
+				out.System = append(out.System, content{Text: text.Text})
+				if text.Cache != nil {
+					out.System = append(out.System, content{CachePoint: convertCache(text.Cache)})
+				}
 			}
-			out.System = append(out.System, blocks...)
-		case litellm.RoleUser:
-			blocks, err := convertContentBlocks(msg.Blocks)
-			if err != nil {
-				return fmt.Errorf("bedrock: messages[%d]: %w", i, err)
-			}
-			out.Messages = append(out.Messages, message{Role: "user", Content: blocks})
-		case litellm.RoleAssistant:
-			blocks, err := convertAssistantBlocks(msg.Blocks)
-			if err != nil {
-				return fmt.Errorf("bedrock: messages[%d]: %w", i, err)
-			}
-			out.Messages = append(out.Messages, message{Role: "assistant", Content: blocks})
-		case litellm.RoleTool:
-			blocks, err := convertToolResultBlocks(msg.Blocks)
-			if err != nil {
-				return fmt.Errorf("bedrock: messages[%d]: %w", i, err)
-			}
-			out.Messages = append(out.Messages, message{Role: "user", Content: blocks})
-		default:
-			return fmt.Errorf("bedrock: unsupported role %q", msg.Role)
+			continue
 		}
+		blocks, err := convertBlocks(msg.Blocks)
+		if err != nil {
+			return fmt.Errorf("messages[%d]: %w", i, err)
+		}
+		role := "user"
+		if msg.Role == litellm.RoleAssistant {
+			role = "assistant"
+		}
+		// Roles must alternate, and parallel tool results share one user turn.
+		if n := len(out.Messages); n > 0 && out.Messages[n-1].Role == role {
+			out.Messages[n-1].Content = append(out.Messages[n-1].Content, blocks...)
+			continue
+		}
+		out.Messages = append(out.Messages, message{Role: role, Content: blocks})
 	}
 	return nil
 }
 
-func convertSystemBlocks(blocks []litellm.Block) ([]systemContent, error) {
-	out := make([]systemContent, 0, len(blocks))
-	for _, block := range blocks {
-		switch b := block.(type) {
-		case litellm.TextBlock:
-			out = append(out, systemContent{Text: b.Text})
-		default:
-			return nil, fmt.Errorf("system only supports text blocks, got %T", block)
-		}
-	}
-	return out, nil
-}
-
-func convertContentBlocks(blocks []litellm.Block) ([]content, error) {
+// convertBlocks maps blocks; a cache breakpoint becomes a cachePoint after
+// its block.
+func convertBlocks(blocks []litellm.Block) ([]content, error) {
 	out := make([]content, 0, len(blocks))
 	for _, block := range blocks {
+		var c content
+		var cache *litellm.CacheControl
 		switch b := block.(type) {
 		case litellm.TextBlock:
-			out = append(out, content{Text: b.Text})
+			c, cache = content{Text: b.Text}, b.Cache
 		case litellm.ImageBlock:
-			image, err := convertImage(b)
+			img, err := convertImage(b)
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, content{Image: image})
-		default:
-			return nil, fmt.Errorf("unsupported user block %T", block)
-		}
-	}
-	return out, nil
-}
-
-func convertAssistantBlocks(blocks []litellm.Block) ([]content, error) {
-	out := make([]content, 0, len(blocks))
-	for _, block := range blocks {
-		switch b := block.(type) {
-		case litellm.TextBlock:
-			out = append(out, content{Text: b.Text})
+			c, cache = content{Image: img}, b.Cache
 		case litellm.ReasoningBlock:
-			out = append(out, convertReasoningContent(b))
-		case litellm.ToolUseBlock:
-			var input any = map[string]any{}
-			if len(b.Arguments) > 0 {
-				if err := json.Unmarshal(b.Arguments, &input); err != nil {
-					return nil, fmt.Errorf("tool use %q arguments must be JSON: %w", b.ID, err)
-				}
+			c, cache = content{ReasoningContent: &reasoningContent{ReasoningText: &reasoningText{Text: b.Text, Signature: b.Signature}}}, b.Cache
+			if len(b.Redacted) > 0 {
+				c = content{ReasoningContent: &reasoningContent{RedactedContent: b.Redacted}}
 			}
-			out = append(out, content{ToolUse: &toolUse{ToolUseID: b.ID, Name: b.Name, Input: input}})
+		case litellm.ToolUseBlock:
+			input := json.RawMessage("{}")
+			if len(b.Arguments) > 0 {
+				var object map[string]json.RawMessage
+				if json.Unmarshal(b.Arguments, &object) != nil || object == nil {
+					return nil, fmt.Errorf("tool use %q arguments must be a JSON object", b.ID)
+				}
+				input = json.RawMessage(b.Arguments)
+			}
+			c, cache = content{ToolUse: &toolUse{ToolUseID: b.ID, Name: b.Name, Input: input}}, b.Cache
+		case litellm.ToolResultBlock:
+			result := &toolResult{ToolUseID: b.ToolUseID}
+			if b.IsError {
+				result.Status = "error"
+			}
+			for _, child := range b.Content {
+				text, ok := child.(litellm.TextBlock)
+				if !ok {
+					return nil, fmt.Errorf("tool results only support text content, got %T", child)
+				}
+				result.Content = append(result.Content, content{Text: text.Text})
+			}
+			c, cache = content{ToolResult: result}, b.Cache
 		default:
-			return nil, fmt.Errorf("unsupported assistant block %T", block)
+			return nil, fmt.Errorf("unsupported block %T", block)
+		}
+		out = append(out, c)
+		if cache != nil {
+			out = append(out, content{CachePoint: convertCache(cache)})
 		}
 	}
 	return out, nil
 }
 
-func convertReasoningContent(block litellm.ReasoningBlock) content {
-	if len(block.Redacted) > 0 {
-		return content{ReasoningContent: &reasoningContent{RedactedContent: append([]byte(nil), block.Redacted...)}}
-	}
-	return content{ReasoningContent: &reasoningContent{ReasoningText: &reasoningText{
-		Text:      block.Text,
-		Signature: block.Signature,
-	}}}
+func convertCache(cache *litellm.CacheControl) *cachePoint {
+	return &cachePoint{Type: "default", TTL: cache.TTL}
 }
 
-func convertToolResultBlocks(blocks []litellm.Block) ([]content, error) {
-	out := make([]content, 0, len(blocks))
-	for _, block := range blocks {
-		result, ok := block.(litellm.ToolResultBlock)
-		if !ok {
-			return nil, fmt.Errorf("tool role only supports ToolResultBlock, got %T", block)
-		}
-		children, err := convertToolResultContent(result.Content)
-		if err != nil {
-			return nil, err
-		}
-		tr := &toolResult{ToolUseID: result.ToolUseID, Content: children}
-		if result.IsError {
-			tr.Status = "error"
-		}
-		out = append(out, content{ToolResult: tr})
-	}
-	return out, nil
-}
-
-func convertToolResultContent(blocks []litellm.Block) ([]content, error) {
-	out := make([]content, 0, len(blocks))
-	for _, block := range blocks {
-		switch b := block.(type) {
-		case litellm.TextBlock:
-			out = append(out, content{Text: b.Text})
-		default:
-			return nil, fmt.Errorf("Bedrock tool result only supports text blocks, got %T", block)
-		}
-	}
-	return out, nil
-}
-
+// convertImage sends bytes; Converse takes a data URL's payload but not
+// remote URLs.
 func convertImage(block litellm.ImageBlock) (*image, error) {
-	var format string
-	var data []byte
-	switch {
-	case len(block.Data) > 0:
-		if block.MIME == "" {
-			return nil, fmt.Errorf("inline image MIME is required")
-		}
-		format = strings.TrimPrefix(block.MIME, "image/")
-		data = block.Data
-	case block.URL != "":
-		mime, encoded, ok := parseDataURL(block.URL)
+	mime, data := block.MIME, block.Data
+	if len(data) == 0 {
+		dataMIME, encoded, ok := wire.ParseDataURL(block.URL)
 		if !ok {
-			return nil, fmt.Errorf("Bedrock image URL must be a data URL or inline data")
+			return nil, errors.New("image requires inline data or a data URL")
 		}
-		format = strings.TrimPrefix(mime, "image/")
 		decoded, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
-			return nil, fmt.Errorf("Bedrock image data URL must be base64: %w", err)
+			return nil, fmt.Errorf("image data URL must be base64: %w", err)
 		}
-		data = decoded
-	default:
-		return nil, fmt.Errorf("image requires inline data or data URL")
+		mime, data = dataMIME, decoded
 	}
-	if format == "" {
-		return nil, fmt.Errorf("image MIME must identify a format")
+	format, ok := strings.CutPrefix(mime, "image/")
+	if !ok || format == "" {
+		return nil, fmt.Errorf("image MIME %q must be image/<format>", mime)
 	}
-	return &image{Format: format, Source: imageSource{Bytes: base64.StdEncoding.EncodeToString(data)}}, nil
+	return &image{Format: format, Source: imageSource{Bytes: data}}, nil
 }
 
 func convertInference(req *litellm.Request) *inferenceConfig {
 	if req.MaxTokens == nil && req.Temperature == nil && req.TopP == nil && len(req.Stop) == 0 {
 		return nil
 	}
-	out := &inferenceConfig{Temperature: req.Temperature, TopP: req.TopP, StopSequences: append([]string(nil), req.Stop...)}
-	if req.MaxTokens != nil {
-		out.MaxTokens = *req.MaxTokens
-	}
-	return out
-}
-
-func applyThinking(out *request, req *litellm.Request) error {
-	if err := req.Thinking.Validate(); err != nil {
-		return fmt.Errorf("bedrock: %w", err)
-	}
-	if req.Thinking == nil || req.Thinking.Mode == litellm.ThinkingUnspecified {
-		return nil
-	}
-	if !strings.Contains(strings.ToLower(req.Model), "claude") {
-		return fmt.Errorf("bedrock: thinking is only supported for Claude models")
-	}
-	if req.Thinking.IncludeOutput {
-		return fmt.Errorf("bedrock: include_output is not configurable for Claude thinking")
-	}
-	thinking, effort, err := anthropicThinking(req.Thinking)
-	if err != nil {
-		return err
-	}
-	if out.AdditionalModelRequestFields == nil {
-		out.AdditionalModelRequestFields = map[string]any{}
-	}
-	out.AdditionalModelRequestFields["thinking"] = thinking
-	if effort != "" {
-		out.AdditionalModelRequestFields["output_config"] = map[string]any{"effort": effort}
-	}
-	return nil
-}
-
-func anthropicThinking(thinking *litellm.Thinking) (map[string]any, string, error) {
-	if thinking.Mode == litellm.ThinkingDisabled {
-		return map[string]any{"type": "disabled"}, "", nil
-	}
-	if thinking.Mode != litellm.ThinkingEnabled {
-		return nil, "", fmt.Errorf("bedrock: unsupported thinking mode %d", thinking.Mode)
-	}
-	if thinking.BudgetTokens != nil {
-		return nil, "", fmt.Errorf("bedrock: budget_tokens is not supported; use effort with adaptive thinking")
-	}
-	effort, err := anthropicAdaptiveEffort(thinking.Effort)
-	if err != nil {
-		return nil, "", err
-	}
-	return map[string]any{"type": "adaptive"}, effort, nil
-}
-
-func anthropicAdaptiveEffort(effort string) (string, error) {
-	effort = strings.ToLower(strings.TrimSpace(effort))
-	switch effort {
-	case "", "low", "medium", "high", "xhigh", "max":
-		return effort, nil
-	}
-	return "", fmt.Errorf("bedrock: unsupported adaptive thinking effort %q", effort)
-}
-
-func convertTools(tools []litellm.Tool) ([]tool, error) {
-	out := make([]tool, 0, len(tools))
-	for _, t := range tools {
-		var schema any = map[string]any{"type": "object"}
-		if len(t.Parameters) > 0 {
-			var decoded any
-			if err := json.Unmarshal(t.Parameters, &decoded); err != nil {
-				return nil, fmt.Errorf("bedrock: tool %q parameters must be valid JSON: %w", t.Name, err)
-			}
-			schema = decoded
-		}
-		var strict *bool
-		if t.Strict == litellm.StrictEnabled {
-			strict = litellm.Bool(true)
-		} else if t.Strict == litellm.StrictDisabled {
-			strict = litellm.Bool(false)
-		}
-		out = append(out, tool{ToolSpec: &toolSpec{
-			Name:        t.Name,
-			Description: t.Description,
-			Strict:      strict,
-			InputSchema: map[string]any{"json": schema},
-		}})
-	}
-	return out, nil
+	return &inferenceConfig{MaxTokens: req.MaxTokens, Temperature: req.Temperature, TopP: req.TopP, StopSequences: req.Stop}
 }
 
 func convertOutputConfig(format *litellm.ResponseFormat) (*outputConfig, error) {
-	if format == nil || format.Type == litellm.ResponseFormatText {
+	if format == nil {
 		return nil, nil
 	}
-	var schema any
-	name := ""
-	description := ""
 	switch format.Type {
-	case litellm.ResponseFormatJSONObject:
-		return nil, fmt.Errorf("bedrock: json_object cannot satisfy structured output schema requirements; use json_schema")
-	case litellm.ResponseFormatJSONSchema:
-		if format.JSONSchema == nil {
-			return nil, fmt.Errorf("bedrock: json schema response format requires schema")
-		}
-		name = format.JSONSchema.Name
-		description = format.JSONSchema.Description
-		if err := json.Unmarshal(format.JSONSchema.Schema, &schema); err != nil {
-			return nil, fmt.Errorf("bedrock: response schema must be valid JSON: %w", err)
-		}
-	default:
-		return nil, fmt.Errorf("bedrock: unsupported response format %q", format.Type)
-	}
-	data, err := json.Marshal(schema)
-	if err != nil {
-		return nil, fmt.Errorf("bedrock: marshal response schema: %w", err)
-	}
-	return &outputConfig{TextFormat: &textFormat{Type: "json_schema", Structure: textFormatStructure{JSONSchema: jsonSchema{
-		Name:        name,
-		Description: description,
-		Schema:      string(data),
-	}}}}, nil
-}
-
-func cachePointFromRequest(req *litellm.Request) (*cachePoint, error) {
-	retention := ""
-	if req.Cache != nil {
-		if req.Cache.Placement != "" && req.Cache.Placement != litellm.CachePlacementPrefix {
-			return nil, fmt.Errorf("bedrock: unsupported cache placement %q", req.Cache.Placement)
-		}
-		retention = req.Cache.Retention
-	}
-	if raw, ok := req.ProviderOptions[ProviderOptionCacheRetention]; ok {
-		var value string
-		if err := json.Unmarshal(raw, &value); err != nil {
-			return nil, fmt.Errorf("bedrock: cache_retention must be string: %w", err)
-		}
-		if value != "" {
-			retention = value
-		}
-	}
-	switch strings.ToLower(strings.TrimSpace(retention)) {
-	case "", "none":
+	case "", litellm.ResponseFormatText:
 		return nil, nil
-	case "long", "1h":
-		return &cachePoint{Type: "default", TTL: "1h"}, nil
-	case "short", "5m":
-		return &cachePoint{Type: "default"}, nil
+	case litellm.ResponseFormatJSONSchema:
+		schema := jsonSchema{Name: format.JSONSchema.Name, Description: format.JSONSchema.Description, Schema: string(format.JSONSchema.Schema)}
+		return &outputConfig{TextFormat: &textFormat{Type: "json_schema", Structure: textFormatStructure{JSONSchema: schema}}}, nil
+	case litellm.ResponseFormatJSONObject:
+		return nil, errors.New("response_format json_object has no Converse equivalent; use json_schema")
 	default:
-		return nil, fmt.Errorf("bedrock: unsupported cache retention %q", retention)
+		return nil, fmt.Errorf("unsupported response format %q", format.Type)
 	}
-}
-
-func applyCachePoints(req *request, cp *cachePoint) {
-	if len(req.System) > 0 {
-		req.System = append(req.System, systemContent{CachePoint: cp})
-	}
-	for i := len(req.Messages) - 1; i >= 0; i-- {
-		if req.Messages[i].Role == "user" && len(req.Messages[i].Content) > 0 {
-			req.Messages[i].Content = append(req.Messages[i].Content, content{CachePoint: cp})
-			break
-		}
-	}
-	if req.ToolConfig != nil && len(req.ToolConfig.Tools) > 0 {
-		req.ToolConfig.Tools = append(req.ToolConfig.Tools, tool{CachePoint: cp})
-	}
-}
-
-func parseDataURL(url string) (mimeType, data string, ok bool) {
-	rest, found := strings.CutPrefix(url, "data:")
-	if !found {
-		return "", "", false
-	}
-	semi := strings.IndexByte(rest, ';')
-	if semi < 0 {
-		return "", "", false
-	}
-	mimeType = rest[:semi]
-	if data, ok = strings.CutPrefix(rest[semi+1:], "base64,"); ok {
-		return mimeType, data, true
-	}
-	return "", "", false
-}
-
-func validateSampling(temperature, topP *float64) error {
-	if temperature != nil && (math.IsNaN(*temperature) || *temperature < 0 || *temperature > 1) {
-		return fmt.Errorf("bedrock: temperature must be between 0 and 1")
-	}
-	if topP != nil && (math.IsNaN(*topP) || *topP < 0 || *topP > 1) {
-		return fmt.Errorf("bedrock: top_p must be between 0 and 1")
-	}
-	return nil
 }

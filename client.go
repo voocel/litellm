@@ -3,25 +3,24 @@ package litellm
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 )
 
+// Client runs requests through a Provider. It copies and validates each
+// request, attributes errors to the provider, and notifies Observers. A Client
+// is safe for concurrent use.
 type Client struct {
 	provider           Provider
 	observers          []Observer
-	defaults           *RequestDefaults
 	captureRawResponse bool
 	streamIdleTimeout  time.Duration
 }
 
-type RequestDefaults struct {
-	MaxTokens   *int
-	Temperature *float64
-	TopP        *float64
-}
-
+// ClientOption configures a Client.
 type ClientOption func(*Client) error
 
+// New returns a Client for provider.
 func New(provider Provider, opts ...ClientOption) (*Client, error) {
 	if provider == nil {
 		return nil, fmt.Errorf("provider cannot be nil")
@@ -35,13 +34,7 @@ func New(provider Provider, opts ...ClientOption) (*Client, error) {
 	return client, nil
 }
 
-func WithDefaults(defaults RequestDefaults) ClientOption {
-	return func(c *Client) error {
-		c.defaults = &RequestDefaults{MaxTokens: cloneIntPtr(defaults.MaxTokens), Temperature: cloneFloat64Ptr(defaults.Temperature), TopP: cloneFloat64Ptr(defaults.TopP)}
-		return nil
-	}
-}
-
+// WithCaptureRawResponse keeps the raw vendor body in Response.Raw.
 func WithCaptureRawResponse(enabled bool) ClientOption {
 	return func(c *Client) error {
 		c.captureRawResponse = enabled
@@ -49,6 +42,8 @@ func WithCaptureRawResponse(enabled bool) ClientOption {
 	}
 }
 
+// WithStreamIdleTimeout fails a stream, with an error IsStreamIdleError
+// reports, when no event arrives for timeout. Zero disables the check.
 func WithStreamIdleTimeout(timeout time.Duration) ClientOption {
 	return func(c *Client) error {
 		if timeout < 0 {
@@ -59,6 +54,7 @@ func WithStreamIdleTimeout(timeout time.Duration) ClientOption {
 	}
 }
 
+// ProviderName returns the provider's Name.
 func (c *Client) ProviderName() string {
 	if c == nil || c.provider == nil {
 		return ""
@@ -66,28 +62,42 @@ func (c *Client) ProviderName() string {
 	return c.provider.Name()
 }
 
-func (c *Client) Capabilities(model string) Capabilities {
+// Capabilities reports what the provider adapter can express on the wire; ok
+// is false when the provider does not implement CapabilityProvider, so the
+// facts are unknown.
+func (c *Client) Capabilities() (caps Capabilities, ok bool) {
 	if c == nil {
-		return Capabilities{Model: model}
+		return Capabilities{}, false
 	}
-	return GetCapabilities(c.provider, model)
+	cp, ok := c.provider.(CapabilityProvider)
+	if !ok {
+		return Capabilities{}, false
+	}
+	caps = cp.Capabilities()
+	caps.ProviderOptions = slices.Clone(caps.ProviderOptions)
+	return caps, true
 }
 
+// Chat sends req and returns the complete response. On error the response
+// may still be returned when the provider produced one.
 func (c *Client) Chat(ctx context.Context, req Request) (*Response, error) {
 	ctx, call := c.startCall(ctx, req, false)
-	prepared, err := c.prepareRequest(req)
+	prepared, err := prepareRequest(req)
 	if err != nil {
 		call.end(callStatus(err), nil, err)
 		return nil, err
 	}
 	resp, err := c.provider.Chat(ctx, prepared)
 	if err != nil {
-		err = WrapError(err, c.provider.Name())
+		err = WrapError(c.provider.Name(), ErrorTypeProvider, err)
 	}
 	if err == nil {
 		err = validateResponse(resp, c.provider.Name(), prepared.Model)
 	}
 	if resp != nil {
+		if !c.captureRawResponse {
+			resp.Raw = nil
+		}
 		finalizeResponse(resp, c.provider.Name(), prepared.Model)
 		for _, warning := range resp.Warnings {
 			call.event(WarningEvent{Warning: warning})
@@ -97,10 +107,12 @@ func (c *Client) Chat(ctx context.Context, req Request) (*Response, error) {
 	return resp, err
 }
 
+// Stream sends req and returns its event stream, which the caller must Close.
+// Consume it with Next, Handle or Collect.
 func (c *Client) Stream(ctx context.Context, req Request) (Stream, error) {
 	streamCtx, cancel := context.WithCancel(ctx)
 	streamCtx, call := c.startCall(streamCtx, req, true)
-	prepared, err := c.prepareRequest(req)
+	prepared, err := prepareRequest(req)
 	if err != nil {
 		call.end(callStatus(err), nil, err)
 		cancel()
@@ -108,9 +120,9 @@ func (c *Client) Stream(ctx context.Context, req Request) (Stream, error) {
 	}
 	stream, err := c.provider.Stream(streamCtx, prepared)
 	if err != nil {
-		err = WrapError(err, c.provider.Name())
+		err = WrapError(c.provider.Name(), ErrorTypeProvider, err)
 	} else if stream == nil {
-		err = NewProviderError(c.provider.Name(), ErrorTypeInternal, "provider returned nil stream without error")
+		err = NewError(c.provider.Name(), ErrorTypeInternal, "provider returned nil stream without error", nil)
 	}
 	if err != nil {
 		call.end(callStatus(err), nil, err)
@@ -118,82 +130,31 @@ func (c *Client) Stream(ctx context.Context, req Request) (Stream, error) {
 		return nil, err
 	}
 	stream = newValidatedStream(c.provider.Name(), prepared.Model, stream)
-	if call.captureContent {
-		streamCollector(stream).discardContent = false
-	}
 	stream = newStreamIdleWatchdog(stream, cancel, c.streamIdleTimeout, c.provider.Name())
 	return &observedStream{ctx: streamCtx, cancel: cancel, call: call, inner: stream}, nil
 }
 
-// StreamText opens a stream for req and invokes fn for each text content delta,
-// returning the aggregated Response. It is the simplest way to stream answer
-// text to a UI or writer. It creates and closes the stream for you; use
-// Client.Stream directly when you need the raw event stream.
-func (c *Client) StreamText(ctx context.Context, req Request, fn func(string) error) (resp *Response, err error) {
-	stream, err := c.Stream(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if closeErr := stream.Close(); err == nil && closeErr != nil {
-			err = closeErr
-		}
-	}()
-	return HandleText(stream, fn)
-}
-
-// StreamWith opens a stream for req and dispatches its deltas to handler's
-// callbacks, returning the aggregated Response. Use it to stream reasoning and
-// answer text separately without a type switch. For full event fidelity, use
-// Client.Stream with Handle.
-func (c *Client) StreamWith(ctx context.Context, req Request, handler StreamHandler) (resp *Response, err error) {
-	stream, err := c.Stream(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if closeErr := stream.Close(); err == nil && closeErr != nil {
-			err = closeErr
-		}
-	}()
-	return HandleWith(stream, handler)
-}
-
+// ListModels lists the provider's models; it fails with a validation error
+// when the provider is not a ModelLister.
 func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	if c == nil || c.provider == nil {
-		return nil, NewError(ErrorTypeValidation, "client has no provider")
+		return nil, NewError("", ErrorTypeValidation, "client has no provider", nil)
 	}
 	lister, ok := c.provider.(ModelLister)
 	if !ok {
-		return nil, NewProviderError(c.provider.Name(), ErrorTypeValidation, fmt.Sprintf("%s provider does not support model listing", c.provider.Name()))
+		return nil, NewError(c.provider.Name(), ErrorTypeValidation, fmt.Sprintf("%s provider does not support model listing", c.provider.Name()), nil)
 	}
 	models, err := lister.ListModels(ctx)
 	if err != nil {
-		return nil, WrapError(err, c.provider.Name())
+		return nil, WrapError(c.provider.Name(), ErrorTypeProvider, err)
 	}
 	return models, nil
 }
 
-func (c *Client) prepareRequest(req Request) (*Request, error) {
+func prepareRequest(req Request) (*Request, error) {
 	prepared := cloneRequest(req)
-	if c.defaults != nil {
-		applyDefaults(prepared, *c.defaults)
-	}
-	prepared.captureRawResponse = c.captureRawResponse
 	if err := validateRequest(prepared); err != nil {
 		return nil, err
 	}
 	return prepared, nil
-}
-
-func applyDefaults(req *Request, defaults RequestDefaults) {
-	if req.MaxTokens == nil && defaults.MaxTokens != nil {
-		req.MaxTokens = IntPtr(*defaults.MaxTokens)
-	}
-	if req.Temperature == nil && defaults.Temperature != nil {
-		req.Temperature = Float64Ptr(*defaults.Temperature)
-	}
-	if req.TopP == nil && defaults.TopP != nil {
-		req.TopP = Float64Ptr(*defaults.TopP)
-	}
 }

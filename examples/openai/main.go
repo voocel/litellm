@@ -17,10 +17,14 @@ func main() {
 		mode = os.Args[1]
 	}
 
-	client, err := openai.NewClient(openai.Config{
+	provider, err := openai.New(openai.Config{
 		APIKey:  os.Getenv("OPENAI_API_KEY"),
 		BaseURL: os.Getenv("OPENAI_BASE_URL"),
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	client, err := litellm.New(provider)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -50,7 +54,7 @@ func runChat(ctx context.Context, client *litellm.Client) {
 			litellm.System("You are concise."),
 			litellm.UserText("Explain Go interfaces in one sentence."),
 		},
-		MaxTokens: litellm.IntPtr(120),
+		MaxTokens: new(120),
 		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "low"},
 	})
 	if err != nil {
@@ -60,16 +64,15 @@ func runChat(ctx context.Context, client *litellm.Client) {
 }
 
 func runStream(ctx context.Context, client *litellm.Client) {
-	printer := exampleutil.StreamPrinter{}
-	resp, err := client.StreamWith(ctx, litellm.Request{
+	resp, err := exampleutil.Stream(ctx, client, litellm.Request{
 		Model: model(),
 		Messages: []litellm.Message{
 			litellm.System("You are concise."),
 			litellm.UserText("Explain Go interfaces in one sentence."),
 		},
-		MaxTokens: litellm.IntPtr(120),
+		MaxTokens: new(120),
 		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "low"},
-	}, printer.Handler())
+	})
 	if err != nil {
 		log.Fatal(err)
 	}

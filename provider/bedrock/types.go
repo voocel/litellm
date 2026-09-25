@@ -1,8 +1,10 @@
 package bedrock
 
+import "encoding/json"
+
 type request struct {
 	Messages                     []message        `json:"messages"`
-	System                       []systemContent  `json:"system,omitempty"`
+	System                       []content        `json:"system,omitempty"`
 	InferenceConfig              *inferenceConfig `json:"inferenceConfig,omitempty"`
 	ToolConfig                   *toolConfig      `json:"toolConfig,omitempty"`
 	OutputConfig                 *outputConfig    `json:"outputConfig,omitempty"`
@@ -44,13 +46,13 @@ type image struct {
 }
 
 type imageSource struct {
-	Bytes string `json:"bytes,omitempty"`
+	Bytes []byte `json:"bytes,omitempty"`
 }
 
 type toolUse struct {
-	ToolUseID string `json:"toolUseId"`
-	Name      string `json:"name"`
-	Input     any    `json:"input"`
+	ToolUseID string          `json:"toolUseId"`
+	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
 }
 
 type toolResult struct {
@@ -59,13 +61,8 @@ type toolResult struct {
 	Status    string    `json:"status,omitempty"`
 }
 
-type systemContent struct {
-	Text       string      `json:"text,omitempty"`
-	CachePoint *cachePoint `json:"cachePoint,omitempty"`
-}
-
 type inferenceConfig struct {
-	MaxTokens     int      `json:"maxTokens,omitempty"`
+	MaxTokens     *int     `json:"maxTokens,omitempty"`
 	Temperature   *float64 `json:"temperature,omitempty"`
 	TopP          *float64 `json:"topP,omitempty"`
 	StopSequences []string `json:"stopSequences,omitempty"`
@@ -77,15 +74,18 @@ type toolConfig struct {
 }
 
 type tool struct {
-	ToolSpec   *toolSpec   `json:"toolSpec,omitempty"`
-	CachePoint *cachePoint `json:"cachePoint,omitempty"`
+	ToolSpec *toolSpec `json:"toolSpec,omitempty"`
 }
 
 type toolSpec struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Strict      *bool  `json:"strict,omitempty"`
-	InputSchema any    `json:"inputSchema"`
+	Name        string      `json:"name"`
+	Description string      `json:"description,omitempty"`
+	Strict      *bool       `json:"strict,omitempty"`
+	InputSchema inputSchema `json:"inputSchema"`
+}
+
+type inputSchema struct {
+	JSON json.RawMessage `json:"json"`
 }
 
 type outputConfig struct {

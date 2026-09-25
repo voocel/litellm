@@ -4,38 +4,59 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
-	"strings"
+	"errors"
+	"hash/crc32"
 	"testing"
 
 	"github.com/voocel/litellm/internal/testgolden"
 )
 
-func TestReadEventStreamMessageReadsPayload(t *testing.T) {
+// testdata/bedrock/*.bin are encoded by aws-sdk-go-v2 aws/protocol/eventstream
+// (v1.7.20) with the headers and bare payloads Bedrock ConverseStream sends.
+func TestReadEventStreamMessageReadsHeadersAndPayload(t *testing.T) {
 	reader := bufio.NewReader(bytes.NewReader(testgolden.ReadFixture(t, "../../testdata/bedrock/eventstream.bin")))
-	payload, err := readEventStreamMessage(reader)
+	if _, err := readEventStreamMessage(reader); err != nil {
+		t.Fatalf("read messageStart: %v", err)
+	}
+	msg, err := readEventStreamMessage(reader)
 	if err != nil {
 		t.Fatalf("readEventStreamMessage: %v", err)
 	}
-	if string(payload) != `{"contentBlockDelta":{"contentBlockIndex":0,"delta":{"text":"hel"}}}` {
-		t.Fatalf("payload = %s", payload)
+	if msg.headers[":message-type"] != "event" || msg.headers[":event-type"] != "contentBlockDelta" {
+		t.Fatalf("headers = %v", msg.headers)
+	}
+	if string(msg.payload) != `{"contentBlockIndex":0,"delta":{"text":"hel"},"p":"abcdefgh"}` {
+		t.Fatalf("payload = %s", msg.payload)
 	}
 }
 
-func TestReadEventStreamMessageRejectsInvalidLength(t *testing.T) {
-	var frame [12]byte
-	binary.BigEndian.PutUint32(frame[0:4], 15)
-	_, err := readEventStreamMessage(bufio.NewReader(bytes.NewReader(frame[:])))
-	if err == nil || !strings.Contains(err.Error(), "invalid message length") {
-		t.Fatalf("expected invalid message length, got %v", err)
+func TestReadEventStreamMessageRejectsCorruptFrames(t *testing.T) {
+	valid := testgolden.ReadFixture(t, "../../testdata/bedrock/eventstream.bin")
+	flipped := func(offset int) []byte {
+		frame := append([]byte(nil), valid...)
+		frame[offset] ^= 0xff
+		return frame
+	}
+	tests := map[string][]byte{
+		"prelude checksum": flipped(0),
+		"message checksum": flipped(12),
+		"message length":   prelude(15, 0),
+		"headers length":   append(prelude(16, 1), 0, 0, 0, 0),
+	}
+	for name, frame := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := readEventStreamMessage(bufio.NewReader(bytes.NewReader(frame)))
+			if !errors.Is(err, errInvalidFrame) {
+				t.Fatalf("err = %v, want errInvalidFrame", err)
+			}
+		})
 	}
 }
 
-func TestReadEventStreamMessageRejectsInvalidHeadersLength(t *testing.T) {
-	var frame [16]byte
-	binary.BigEndian.PutUint32(frame[0:4], 16)
-	binary.BigEndian.PutUint32(frame[4:8], 1)
-	_, err := readEventStreamMessage(bufio.NewReader(bytes.NewReader(frame[:])))
-	if err == nil || !strings.Contains(err.Error(), "invalid headers length") {
-		t.Fatalf("expected invalid headers length, got %v", err)
-	}
+func prelude(totalLength, headersLength uint32) []byte {
+	b := make([]byte, 12)
+	binary.BigEndian.PutUint32(b[0:4], totalLength)
+	binary.BigEndian.PutUint32(b[4:8], headersLength)
+	binary.BigEndian.PutUint32(b[8:12], crc32.ChecksumIEEE(b[:8]))
+	return b
 }

@@ -3,28 +3,53 @@ package gemini
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"math"
-	"strconv"
+	"slices"
 	"strings"
 
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/internal/wire"
 )
 
-const thoughtSignaturePlaceholder = "skip_thought_signature_validator"
+// SkipThoughtSignatureValidator is the placeholder Gemini accepts as the
+// Signature of a function call that did not come from Gemini, for example
+// when a conversation moves from another provider.
+const SkipThoughtSignatureValidator = "skip_thought_signature_validator"
 
+// ProviderOptions are native request fields copied into the body. An option
+// naming a generated object or array is merged into or appended to it, e.g.
+// {"topK": 40} under "generationConfig" or [{"googleSearch": {}}] under
+// "tools".
 const (
-	ProviderOptionSafetySettings = "safety_settings"
-	ProviderOptionTopK           = "top_k"
-	ProviderOptionCandidateCount = "candidate_count"
+	ProviderOptionSafetySettings   = "safetySettings"
+	ProviderOptionGenerationConfig = "generationConfig"
+	ProviderOptionTools            = "tools"
+	ProviderOptionToolConfig       = "toolConfig"
+	ProviderOptionCachedContent    = "cachedContent"
 )
 
-func (p *Provider) buildRequest(req *litellm.Request) (*request, error) {
-	if err := validateSampling(req.Temperature, req.TopP); err != nil {
+var providerOptions = []string{
+	ProviderOptionSafetySettings, ProviderOptionGenerationConfig, ProviderOptionTools,
+	ProviderOptionToolConfig, ProviderOptionCachedContent,
+}
+
+func sortedOptions() []string {
+	out := slices.Clone(providerOptions)
+	slices.Sort(out)
+	return out
+}
+
+func buildRequest(req *litellm.Request) ([]byte, error) {
+	opts, err := req.ProviderOptions.Decode()
+	if err != nil {
+		return nil, err
+	}
+	if err := wire.CheckOptions(opts, providerOptions); err != nil {
 		return nil, err
 	}
 	out := &request{}
-	contents, system, err := convertMessages(req.Model, req.Messages)
+	contents, system, err := convertMessages(req.Messages)
 	if err != nil {
 		return nil, err
 	}
@@ -32,152 +57,57 @@ func (p *Provider) buildRequest(req *litellm.Request) (*request, error) {
 	if len(system) > 0 {
 		out.SystemInstruction = &content{Parts: system}
 	}
-	generation, err := convertGenerationConfig(req)
-	if err != nil {
-		return nil, err
-	}
-	out.GenerationConfig = generation
-	if err := applyProviderOptions(out, req.ProviderOptions); err != nil {
+	if out.GenerationConfig, err = convertGenerationConfig(req); err != nil {
 		return nil, err
 	}
 	if len(req.Tools) > 0 {
-		converted, strict, err := convertTools(req.Tools)
+		declarations, strict, err := convertTools(req.Tools)
 		if err != nil {
 			return nil, err
 		}
-		out.Tools = converted
-		out.ToolConfig, err = convertToolChoice(req.ToolChoice, strict)
-		if err != nil {
-			return nil, err
-		}
+		out.Tools = []tool{{FunctionDeclarations: declarations}}
+		out.ToolConfig = convertToolChoice(req.ToolChoice, strict)
 	}
-	return out, nil
+	return wire.MarshalBody(out, opts)
 }
 
-func applyProviderOptions(out *request, rawOptions litellm.ProviderOptions) error {
-	options, err := rawOptions.Decode()
-	if err != nil {
-		return err
-	}
-
-	for key, value := range options {
-		switch key {
-		case ProviderOptionSafetySettings:
-			settings, err := safetySettings(value)
-			if err != nil {
-				return err
-			}
-			out.SafetySettings = settings
-		case ProviderOptionTopK:
-			topK, err := intOption("gemini", key, value)
-			if err != nil {
-				return err
-			}
-			if out.GenerationConfig == nil {
-				out.GenerationConfig = &generationConfig{}
-			}
-			out.GenerationConfig.TopK = &topK
-		case ProviderOptionCandidateCount:
-			count, err := intOption("gemini", key, value)
-			if err != nil {
-				return err
-			}
-			if out.GenerationConfig == nil {
-				out.GenerationConfig = &generationConfig{}
-			}
-			out.GenerationConfig.CandidateCount = &count
-		default:
-			return fmt.Errorf("gemini: unsupported provider option %q", key)
-		}
-	}
-	return nil
-}
-
-func safetySettings(raw any) ([]safetySetting, error) {
-	data, err := json.Marshal(raw)
-	if err != nil {
-		return nil, fmt.Errorf("gemini: marshal safety settings: %w", err)
-	}
-	var settings []safetySetting
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return nil, fmt.Errorf("gemini: provider option %q must be safety setting array: %w", ProviderOptionSafetySettings, err)
-	}
-	for i, setting := range settings {
-		if setting.Category == "" || setting.Threshold == "" {
-			return nil, fmt.Errorf("gemini: safety_settings[%d] requires category and threshold", i)
-		}
-	}
-	return settings, nil
-}
-
-func intOption(provider, key string, value any) (int, error) {
-	switch v := value.(type) {
-	case int:
-		return v, nil
-	case int32:
-		return int(v), nil
-	case int64:
-		return int(v), nil
-	case float64:
-		if v != float64(int(v)) {
-			return 0, fmt.Errorf("%s: provider option %q must be integer", provider, key)
-		}
-		return int(v), nil
-	case json.Number:
-		n, err := strconv.Atoi(string(v))
-		if err != nil {
-			return 0, fmt.Errorf("%s: provider option %q must be integer", provider, key)
-		}
-		return n, nil
-	default:
-		return 0, fmt.Errorf("%s: provider option %q must be integer", provider, key)
-	}
-}
-
-func convertMessages(model string, messages []litellm.Message) ([]content, []part, error) {
+func convertMessages(messages []litellm.Message) ([]content, []part, error) {
 	out := make([]content, 0, len(messages))
-	system := make([]part, 0)
-	callNames := make(map[string]string)
+	var system []part
+	// Function responses name their call; the name comes from the tool use.
+	names := make(map[string]string)
 	for i, msg := range messages {
+		var parts []part
+		var err error
+		role := "user"
 		switch msg.Role {
 		case litellm.RoleSystem:
-			parts, err := convertContentBlocks(msg.Blocks)
-			if err != nil {
-				return nil, nil, fmt.Errorf("gemini: messages[%d]: %w", i, err)
-			}
+			parts, err = convertBlocks(msg.Blocks, names)
 			system = append(system, parts...)
-		case litellm.RoleUser:
-			parts, err := convertContentBlocks(msg.Blocks)
 			if err != nil {
-				return nil, nil, fmt.Errorf("gemini: messages[%d]: %w", i, err)
+				return nil, nil, fmt.Errorf("messages[%d]: %w", i, err)
 			}
-			if len(parts) > 0 {
-				out = append(out, content{Role: "user", Parts: parts})
-			}
+			continue
 		case litellm.RoleAssistant:
-			parts, err := convertAssistantBlocks(model, msg.Blocks, callNames)
-			if err != nil {
-				return nil, nil, fmt.Errorf("gemini: messages[%d]: %w", i, err)
-			}
-			if len(parts) > 0 {
-				out = append(out, content{Role: "model", Parts: parts})
-			}
-		case litellm.RoleTool:
-			parts, err := convertToolResultBlocks(msg.Blocks, callNames)
-			if err != nil {
-				return nil, nil, fmt.Errorf("gemini: messages[%d]: %w", i, err)
-			}
-			if len(parts) > 0 {
-				out = append(out, content{Role: "user", Parts: parts})
-			}
-		default:
-			return nil, nil, fmt.Errorf("gemini: unsupported role %q", msg.Role)
+			role = "model"
 		}
+		if parts, err = convertBlocks(msg.Blocks, names); err != nil {
+			return nil, nil, fmt.Errorf("messages[%d]: %w", i, err)
+		}
+		if len(parts) == 0 {
+			continue
+		}
+		// Responses to parallel calls must share one turn.
+		if n := len(out); n > 0 && out[n-1].Role == role {
+			out[n-1].Parts = append(out[n-1].Parts, parts...)
+			continue
+		}
+		out = append(out, content{Role: role, Parts: parts})
 	}
 	return out, system, nil
 }
 
-func convertContentBlocks(blocks []litellm.Block) ([]part, error) {
+func convertBlocks(blocks []litellm.Block, names map[string]string) ([]part, error) {
 	out := make([]part, 0, len(blocks))
 	for _, block := range blocks {
 		switch b := block.(type) {
@@ -191,6 +121,31 @@ func convertContentBlocks(blocks []litellm.Block) ([]part, error) {
 				return nil, err
 			}
 			out = append(out, converted)
+		case litellm.ReasoningBlock:
+			if b.Text != "" || b.Signature != "" {
+				out = append(out, part{Text: b.Text, Thought: true, ThoughtSignature: b.Signature})
+			}
+		case litellm.ToolUseBlock:
+			args := json.RawMessage("{}")
+			if len(b.Arguments) > 0 {
+				var object map[string]json.RawMessage
+				if json.Unmarshal(b.Arguments, &object) != nil || object == nil {
+					return nil, fmt.Errorf("tool use %q arguments must be a JSON object", b.ID)
+				}
+				args = json.RawMessage(b.Arguments)
+			}
+			names[b.ID] = b.Name
+			out = append(out, part{FunctionCall: &functionCall{ID: b.ID, Name: b.Name, Args: args}, ThoughtSignature: b.Signature})
+		case litellm.ToolResultBlock:
+			name, ok := names[b.ToolUseID]
+			if !ok {
+				return nil, fmt.Errorf("tool result %q has no preceding tool use", b.ToolUseID)
+			}
+			response, err := toolResponse(b)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, part{FunctionResponse: &functionResponse{ID: b.ToolUseID, Name: name, Response: response}})
 		default:
 			return nil, fmt.Errorf("unsupported block %T", block)
 		}
@@ -198,303 +153,130 @@ func convertContentBlocks(blocks []litellm.Block) ([]part, error) {
 	return out, nil
 }
 
-func convertAssistantBlocks(model string, blocks []litellm.Block, callNames map[string]string) ([]part, error) {
-	out := make([]part, 0, len(blocks))
-	callIndex := 0
-	for _, block := range blocks {
-		switch b := block.(type) {
-		case litellm.TextBlock:
-			if b.Text != "" {
-				out = append(out, part{Text: b.Text})
-			}
-		case litellm.ReasoningBlock:
-			if b.Text != "" {
-				out = append(out, part{Text: b.Text, Thought: litellm.Bool(true), ThoughtSignature: b.Signature})
-			}
-		case litellm.ToolUseBlock:
-			var args map[string]any
-			if err := json.Unmarshal(b.Arguments, &args); err != nil {
-				return nil, fmt.Errorf("tool use %q arguments must be JSON object: %w", b.ID, err)
-			}
-			callNames[b.ID] = b.Name
-			converted := part{
-				FunctionCall: &functionCall{
-					ID:   b.ID,
-					Name: b.Name,
-					Args: args,
-				},
-			}
-			switch {
-			case b.Signature != "":
-				converted.ThoughtSignature = b.Signature
-			case callIndex == 0 && usesThinkingLevel(model):
-				converted.ThoughtSignature = thoughtSignaturePlaceholder
-			}
-			callIndex++
-			out = append(out, converted)
-		default:
-			return nil, fmt.Errorf("unsupported assistant block %T", block)
-		}
-	}
-	return out, nil
-}
-
-func convertToolResultBlocks(blocks []litellm.Block, callNames map[string]string) ([]part, error) {
-	out := make([]part, 0, len(blocks))
-	for _, block := range blocks {
-		result, ok := block.(litellm.ToolResultBlock)
+// toolResponse wraps the result text as the object Gemini requires: a JSON
+// object is sent as is, other text under "result", or "error" on failure.
+func toolResponse(result litellm.ToolResultBlock) (json.RawMessage, error) {
+	var texts []string
+	for _, block := range result.Content {
+		text, ok := block.(litellm.TextBlock)
 		if !ok {
-			return nil, fmt.Errorf("tool role only supports ToolResultBlock, got %T", block)
+			return nil, fmt.Errorf("tool results only support text content, got %T", block)
 		}
-		name := callNames[result.ToolUseID]
-		if name == "" {
-			return nil, fmt.Errorf("tool result %q has no preceding tool use name", result.ToolUseID)
-		}
-		response, err := toolResultObject(result)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, part{FunctionResponse: &functionResponse{
-			ID:       result.ToolUseID,
-			Name:     name,
-			Response: response,
-		}})
+		texts = append(texts, text.Text)
 	}
-	return out, nil
-}
-
-func toolResultObject(result litellm.ToolResultBlock) (map[string]any, error) {
-	if len(result.Content) == 0 {
-		if result.IsError {
-			return map[string]any{"error": "tool execution failed"}, nil
-		}
-		return map[string]any{}, nil
-	}
-	if len(result.Content) != 1 {
-		return nil, fmt.Errorf("Gemini tool result only supports a single text block")
-	}
-	text, ok := result.Content[0].(litellm.TextBlock)
-	if !ok {
-		return nil, fmt.Errorf("Gemini tool result only supports text content, got %T", result.Content[0])
-	}
-	var obj map[string]any
-	if err := json.Unmarshal([]byte(text.Text), &obj); err == nil && obj != nil {
-		return obj, nil
+	text := strings.Join(texts, "\n")
+	var object map[string]json.RawMessage
+	if json.Unmarshal([]byte(text), &object) == nil && object != nil {
+		return json.RawMessage(text), nil
 	}
 	key := "result"
 	if result.IsError {
 		key = "error"
 	}
-	return map[string]any{key: text.Text}, nil
+	return json.Marshal(map[string]string{key: text})
 }
 
 func convertImage(block litellm.ImageBlock) (part, error) {
 	switch {
 	case len(block.Data) > 0:
 		if block.MIME == "" {
-			return part{}, fmt.Errorf("inline image MIME is required")
+			return part{}, errors.New("inline image requires MIME")
 		}
-		return part{InlineData: &inlineData{
-			MimeType: block.MIME,
-			Data:     base64.StdEncoding.EncodeToString(block.Data),
-		}}, nil
+		return part{InlineData: &inlineData{MimeType: block.MIME, Data: base64.StdEncoding.EncodeToString(block.Data)}}, nil
 	case block.URL != "":
-		if mime, data, ok := parseDataURL(block.URL); ok {
+		if mime, data, ok := wire.ParseDataURL(block.URL); ok {
 			return part{InlineData: &inlineData{MimeType: mime, Data: data}}, nil
 		}
-		return part{FileData: &fileData{MimeType: inferMimeType(block.URL), FileURI: block.URL}}, nil
+		return part{FileData: &fileData{MimeType: block.MIME, FileURI: block.URL}}, nil
 	case block.FileURI != "":
 		return part{FileData: &fileData{MimeType: block.MIME, FileURI: block.FileURI}}, nil
 	default:
-		return part{}, fmt.Errorf("image requires URL, data, or file URI")
+		return part{}, errors.New("image requires URL, data or file URI")
 	}
 }
 
 func convertGenerationConfig(req *litellm.Request) (*generationConfig, error) {
-	if req.MaxTokens == nil && req.Temperature == nil && req.TopP == nil && len(req.Stop) == 0 && req.ResponseFormat == nil && req.Thinking == nil {
-		return nil, nil
-	}
 	out := &generationConfig{
 		Temperature:     req.Temperature,
 		MaxOutputTokens: req.MaxTokens,
 		TopP:            req.TopP,
-		StopSequences:   append([]string(nil), req.Stop...),
+		StopSequences:   req.Stop,
+		ThinkingConfig:  convertThinking(req.Thinking),
 	}
-	if err := req.Thinking.Validate(); err != nil {
-		return nil, fmt.Errorf("gemini: %w", err)
-	}
-	if req.Thinking != nil && req.Thinking.Mode != litellm.ThinkingUnspecified {
-		tc, err := convertThinkingConfig(req.Model, req.Thinking)
-		if err != nil {
-			return nil, err
-		}
-		out.ThinkingConfig = tc
-	}
-	if req.ResponseFormat != nil {
-		switch req.ResponseFormat.Type {
+	if format := req.ResponseFormat; format != nil {
+		switch format.Type {
+		case "", litellm.ResponseFormatText:
 		case litellm.ResponseFormatJSONObject:
 			out.ResponseMimeType = "application/json"
 		case litellm.ResponseFormatJSONSchema:
-			if req.ResponseFormat.JSONSchema == nil {
-				return nil, fmt.Errorf("gemini: json schema response format requires schema")
-			}
-			var schema any
-			if err := json.Unmarshal(req.ResponseFormat.JSONSchema.Schema, &schema); err != nil {
-				return nil, fmt.Errorf("gemini: response schema must be valid JSON: %w", err)
-			}
 			out.ResponseMimeType = "application/json"
-			out.ResponseSchema = schema
-		case litellm.ResponseFormatText:
+			if len(format.JSONSchema.Schema) > 0 {
+				out.ResponseSchema = json.RawMessage(format.JSONSchema.Schema)
+			}
 		default:
-			return nil, fmt.Errorf("gemini: unsupported response format %q", req.ResponseFormat.Type)
+			return nil, fmt.Errorf("unsupported response format %q", format.Type)
 		}
+	}
+	if out.Temperature == nil && out.MaxOutputTokens == nil && out.TopP == nil && len(out.StopSequences) == 0 &&
+		out.ThinkingConfig == nil && out.ResponseMimeType == "" {
+		return nil, nil
 	}
 	return out, nil
 }
 
-func convertTools(tools []litellm.Tool) ([]tool, bool, error) {
-	out := tool{FunctionDeclarations: make([]functionDeclaration, 0, len(tools))}
-	strict := false
-	disabled := false
-	for _, t := range tools {
-		switch t.Strict {
-		case litellm.StrictEnabled:
-			strict = true
-		case litellm.StrictDisabled:
-			disabled = true
-		}
-		if strict && disabled {
-			return nil, false, fmt.Errorf("gemini: strict schema cannot be enabled and disabled in the same request")
-		}
-		var params map[string]any
-		if len(t.Parameters) > 0 {
-			if err := json.Unmarshal(t.Parameters, &params); err != nil {
-				return nil, false, fmt.Errorf("gemini: tool %q parameters must be object schema: %w", t.Name, err)
-			}
-		}
-		out.FunctionDeclarations = append(out.FunctionDeclarations, functionDeclaration{
-			Name:                 t.Name,
-			Description:          t.Description,
-			ParametersJSONSchema: params,
-		})
+// convertThinking maps Effort to thinkingLevel, BudgetTokens to
+// thinkingBudget and ThinkingDisabled to a zero budget.
+func convertThinking(thinking *litellm.Thinking) *thinkingConfig {
+	if thinking == nil {
+		return nil
 	}
-	return []tool{out}, strict, nil
+	if thinking.Mode == litellm.ThinkingDisabled {
+		return &thinkingConfig{ThinkingBudget: new(0)}
+	}
+	out := &thinkingConfig{ThinkingLevel: thinking.Effort, ThinkingBudget: thinking.BudgetTokens}
+	if thinking.IncludeOutput {
+		out.IncludeThoughts = true
+	}
+	return out
 }
 
-func convertToolChoice(choice *litellm.ToolChoice, strict bool) (*toolConfig, error) {
-	if err := choice.Validate(); err != nil {
-		return nil, err
+// convertTools reports whether strict validation was requested. Gemini
+// validates all calls or none, so tools cannot mix strict settings.
+func convertTools(tools []litellm.Tool) ([]functionDeclaration, bool, error) {
+	out := make([]functionDeclaration, 0, len(tools))
+	var enabled, disabled bool
+	for _, t := range tools {
+		enabled = enabled || t.Strict == litellm.StrictEnabled
+		disabled = disabled || t.Strict == litellm.StrictDisabled
+		declaration := functionDeclaration{Name: t.Name, Description: t.Description}
+		if len(t.Parameters) > 0 {
+			declaration.ParametersJSONSchema = json.RawMessage(t.Parameters)
+		}
+		out = append(out, declaration)
 	}
+	if enabled && disabled {
+		return nil, false, errors.New("tools cannot mix strict and non-strict schemas")
+	}
+	return out, enabled, nil
+}
+
+func convertToolChoice(choice *litellm.ToolChoice, strict bool) *toolConfig {
 	var mode string
 	var allowed []string
-	if choice != nil {
-		if choice.Name != "" {
-			mode = "ANY"
-			allowed = []string{choice.Name}
-		} else {
-			mode = strings.ToUpper(string(choice.Mode))
-			if choice.Mode == litellm.ToolChoiceRequired {
-				mode = "ANY"
-			}
-		}
+	switch {
+	case choice == nil:
+	case choice.Name != "":
+		mode, allowed = "ANY", []string{choice.Name}
+	case choice.Mode == litellm.ToolChoiceRequired:
+		mode = "ANY"
+	default:
+		mode = strings.ToUpper(string(choice.Mode))
 	}
 	if strict && (mode == "" || mode == "AUTO") {
 		mode = "VALIDATED"
 	}
 	if mode == "" {
-		return nil, nil
+		return nil
 	}
-	return &toolConfig{FunctionCallingConfig: &functionCallingConfig{Mode: mode, AllowedFunctionNames: allowed}}, nil
-}
-
-func usesThinkingLevel(model string) bool {
-	model = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "models/")
-	version, ok := strings.CutPrefix(model, "gemini-")
-	if !ok {
-		return false
-	}
-	if end := strings.IndexAny(version, ".-"); end >= 0 {
-		version = version[:end]
-	}
-	major, err := strconv.Atoi(version)
-	return err == nil && major >= 3
-}
-
-func convertThinkingConfig(model string, thinking *litellm.Thinking) (*thinkingConfig, error) {
-	if !usesThinkingLevel(model) {
-		return nil, fmt.Errorf("gemini: thinking is not supported for %s", model)
-	}
-	if thinking.Mode == litellm.ThinkingDisabled {
-		return nil, fmt.Errorf("gemini: thinking cannot be disabled for %s", model)
-	}
-	if thinking.Mode != litellm.ThinkingEnabled {
-		return nil, fmt.Errorf("gemini: unsupported thinking mode %d", thinking.Mode)
-	}
-	tc := &thinkingConfig{}
-	if thinking.IncludeOutput {
-		include := true
-		tc.IncludeThoughts = &include
-	}
-	if thinking.BudgetTokens != nil {
-		return nil, fmt.Errorf("gemini: budget_tokens is not supported for %s; use effort", model)
-	}
-	level := strings.ToLower(strings.TrimSpace(thinking.Effort))
-	switch level {
-	case "", "minimal", "low", "medium", "high":
-	default:
-		return nil, fmt.Errorf("gemini: thinking effort %q is not supported for %s", thinking.Effort, model)
-	}
-	tc.ThinkingLevel = level
-	return tc, nil
-}
-
-func parseDataURL(url string) (mimeType, data string, ok bool) {
-	rest, found := strings.CutPrefix(url, "data:")
-	if !found {
-		return "", "", false
-	}
-	semi := strings.IndexByte(rest, ';')
-	if semi < 0 {
-		return "", "", false
-	}
-	mimeType = rest[:semi]
-	if data, ok = strings.CutPrefix(rest[semi+1:], "base64,"); ok {
-		return mimeType, data, true
-	}
-	return "", "", false
-}
-
-func inferMimeType(url string) string {
-	if i := strings.IndexAny(url, "?#"); i >= 0 {
-		url = url[:i]
-	}
-	url = strings.ToLower(url)
-	switch {
-	case strings.HasSuffix(url, ".jpg"), strings.HasSuffix(url, ".jpeg"):
-		return "image/jpeg"
-	case strings.HasSuffix(url, ".png"):
-		return "image/png"
-	case strings.HasSuffix(url, ".gif"):
-		return "image/gif"
-	case strings.HasSuffix(url, ".webp"):
-		return "image/webp"
-	case strings.HasSuffix(url, ".heic"):
-		return "image/heic"
-	case strings.HasSuffix(url, ".heif"):
-		return "image/heif"
-	case strings.HasSuffix(url, ".bmp"):
-		return "image/bmp"
-	default:
-		return ""
-	}
-}
-
-func validateSampling(temperature, topP *float64) error {
-	if temperature != nil && (math.IsNaN(*temperature) || *temperature < 0 || *temperature > 2) {
-		return fmt.Errorf("gemini: temperature must be between 0 and 2")
-	}
-	if topP != nil && (math.IsNaN(*topP) || *topP < 0 || *topP > 1) {
-		return fmt.Errorf("gemini: top_p must be between 0 and 1")
-	}
-	return nil
+	return &toolConfig{FunctionCallingConfig: &functionCallingConfig{Mode: mode, AllowedFunctionNames: allowed}}
 }

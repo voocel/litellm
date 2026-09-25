@@ -17,7 +17,11 @@ func main() {
 		mode = os.Args[1]
 	}
 
-	client, err := ollama.NewClient(ollama.Config{})
+	provider, err := ollama.New(ollama.Config{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	client, err := litellm.New(provider)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -54,13 +58,12 @@ func runChat(ctx context.Context, client *litellm.Client) {
 }
 
 func runStream(ctx context.Context, client *litellm.Client) {
-	printer := exampleutil.StreamPrinter{}
-	resp, err := client.StreamWith(ctx, litellm.Request{
+	resp, err := exampleutil.Stream(ctx, client, litellm.Request{
 		Model: model(),
 		Messages: []litellm.Message{
 			litellm.UserText("Write a haiku about Go programming."),
 		},
-	}, printer.Handler())
+	})
 	if err != nil {
 		log.Fatal(err)
 	}

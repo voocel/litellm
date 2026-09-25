@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 )
 
+// Role identifies the author of a Message.
 type Role string
 
 const (
@@ -16,10 +17,15 @@ const (
 	RoleTool      Role = "tool"
 )
 
+// Block is one piece of message content. The implementations are TextBlock,
+// ImageBlock, ReasoningBlock, ToolUseBlock, ToolResultBlock and
+// ToolReferenceBlock.
 type Block interface {
 	isBlock()
 }
 
+// Annotation is a citation attached to text. Extra keeps the vendor entry
+// verbatim.
 type Annotation struct {
 	Type  string
 	Text  string
@@ -27,6 +33,7 @@ type Annotation struct {
 	Extra json.RawMessage
 }
 
+// TextBlock is plain text. Annotations and Logprobs are response metadata.
 type TextBlock struct {
 	Text        string
 	Annotations []Annotation
@@ -34,6 +41,8 @@ type TextBlock struct {
 	Cache       *CacheControl
 }
 
+// ImageBlock is an image. Set one source: URL, Data with MIME, or FileURI, a
+// vendor file reference. Detail is sent where the wire format has it.
 type ImageBlock struct {
 	URL     string
 	Data    []byte
@@ -43,6 +52,9 @@ type ImageBlock struct {
 	Cache   *CacheControl
 }
 
+// ReasoningBlock is model reasoning. Summary marks Text as a summary rather
+// than the full reasoning. Signature, Redacted (encrypted reasoning) and Extra
+// (the vendor item verbatim) are kept for replay to the same provider.
 type ReasoningBlock struct {
 	Text      string
 	Summary   bool
@@ -52,15 +64,18 @@ type ReasoningBlock struct {
 	Cache     *CacheControl
 }
 
+// ToolUseBlock is a tool call from the assistant. Arguments is the JSON the
+// model produced. Signature is an opaque vendor token kept for replay.
 type ToolUseBlock struct {
 	ID        string
 	Name      string
 	Arguments json.RawMessage
 	Signature string
-	Extra     json.RawMessage
 	Cache     *CacheControl
 }
 
+// ToolResultBlock answers the ToolUseBlock with ID ToolUseID. Content holds
+// TextBlock, ImageBlock or ToolReferenceBlock values.
 type ToolResultBlock struct {
 	ToolUseID string
 	Content   []Block
@@ -68,9 +83,10 @@ type ToolResultBlock struct {
 	Cache     *CacheControl
 }
 
+// ToolReferenceBlock names a tool inside tool result content, as returned by a
+// tool search tool.
 type ToolReferenceBlock struct {
 	ToolName string
-	Extra    json.RawMessage
 	Cache    *CacheControl
 }
 
@@ -81,24 +97,31 @@ func (ToolUseBlock) isBlock()       {}
 func (ToolResultBlock) isBlock()    {}
 func (ToolReferenceBlock) isBlock() {}
 
+// Message is one conversation turn.
 type Message struct {
 	Role   Role
 	Blocks []Block
 }
 
+// CacheControl marks a cache breakpoint: the prompt prefix up to and including
+// this block may be cached. TTL is passed to the vendor as is; empty selects
+// the vendor default.
 type CacheControl struct {
-	Type string
-	TTL  string
+	TTL string
 }
 
+// Common CacheControl TTL values.
 const (
-	CacheTypeEphemeral = "ephemeral"
-	CacheTTL5m         = "5m"
-	CacheTTL1h         = "1h"
+	CacheTTL5m = "5m"
+	CacheTTL1h = "1h"
 )
 
+// Schema is a JSON Schema document.
 type Schema json.RawMessage
 
+// SchemaFrom returns v as a Schema. JSON text (Schema, json.RawMessage, []byte
+// or string) is validated and copied; any other value is marshaled. A nil v
+// returns a nil Schema.
 func SchemaFrom(v any) (Schema, error) {
 	switch s := v.(type) {
 	case nil:
@@ -133,6 +156,8 @@ func SchemaFrom(v any) (Schema, error) {
 	}
 }
 
+// StrictMode controls strict schema adherence. StrictDefault leaves the wire
+// flag unset.
 type StrictMode int
 
 const (
@@ -141,6 +166,12 @@ const (
 	StrictDisabled
 )
 
+// Value returns the wire strict flag and whether the mode sets one.
+func (m StrictMode) Value() (strict, set bool) {
+	return m == StrictEnabled, m != StrictDefault
+}
+
+// Tool declares a function the model may call.
 type Tool struct {
 	Name        string
 	Description string
@@ -148,6 +179,7 @@ type Tool struct {
 	Strict      StrictMode
 }
 
+// NewTool builds a Tool, converting parameters with SchemaFrom.
 func NewTool(name, description string, parameters any) (Tool, error) {
 	schema, err := SchemaFrom(parameters)
 	if err != nil {
@@ -163,6 +195,7 @@ type ToolChoice struct {
 	Name string
 }
 
+// ToolChoiceMode is a tool selection policy.
 type ToolChoiceMode string
 
 const (
@@ -171,16 +204,17 @@ const (
 	ToolChoiceRequired ToolChoiceMode = "required"
 )
 
-func (c *ToolChoice) Validate() error {
+// validate reports whether c is well formed. A nil choice is valid.
+func (c *ToolChoice) validate() error {
 	if c == nil {
 		return nil
 	}
 	if c.Name != "" {
 		if c.Mode != "" {
-			return NewError(ErrorTypeValidation, "tool choice mode and name are mutually exclusive")
+			return NewError("", ErrorTypeValidation, "tool choice mode and name are mutually exclusive", nil)
 		}
 		if !utf8.ValidString(c.Name) {
-			return NewError(ErrorTypeValidation, "tool choice name must be valid UTF-8")
+			return NewError("", ErrorTypeValidation, "tool choice name must be valid UTF-8", nil)
 		}
 		return nil
 	}
@@ -188,15 +222,18 @@ func (c *ToolChoice) Validate() error {
 	case ToolChoiceAuto, ToolChoiceNone, ToolChoiceRequired:
 		return nil
 	default:
-		return NewError(ErrorTypeValidation, fmt.Sprintf("unsupported tool choice mode %q", c.Mode))
+		return NewError("", ErrorTypeValidation, fmt.Sprintf("unsupported tool choice mode %q", c.Mode), nil)
 	}
 }
 
+// ResponseFormat constrains the output format. JSONSchema is used with
+// ResponseFormatJSONSchema.
 type ResponseFormat struct {
 	Type       ResponseFormatType
 	JSONSchema *JSONSchema
 }
 
+// ResponseFormatType selects the output format.
 type ResponseFormatType string
 
 const (
@@ -205,6 +242,7 @@ const (
 	ResponseFormatJSONSchema ResponseFormatType = "json_schema"
 )
 
+// JSONSchema is a named schema for structured output.
 type JSONSchema struct {
 	Name        string
 	Description string
@@ -212,6 +250,10 @@ type JSONSchema struct {
 	Strict      StrictMode
 }
 
+// Thinking configures model reasoning. Effort and BudgetTokens are sent as
+// given; which values a model accepts is the vendor's decision. IncludeOutput
+// is a hint to return reasoning where the vendor makes it optional; providers
+// without such a switch ignore it.
 type Thinking struct {
 	Mode          ThinkingMode
 	Effort        string
@@ -219,49 +261,49 @@ type Thinking struct {
 	IncludeOutput bool
 }
 
-func (t *Thinking) HasOptions() bool {
+func (t *Thinking) hasOptions() bool {
 	return t != nil && (t.Effort != "" || t.BudgetTokens != nil || t.IncludeOutput)
 }
 
-func (t *Thinking) Validate() error {
+// validate checks the combination only; vendor values are not checked.
+// A nil Thinking is valid.
+func (t *Thinking) validate() error {
 	if t == nil {
 		return nil
 	}
 	if !utf8.ValidString(t.Effort) {
-		return NewError(ErrorTypeValidation, "thinking effort must be valid UTF-8")
+		return NewError("", ErrorTypeValidation, "thinking effort must be valid UTF-8", nil)
 	}
-	if t.Mode == ThinkingUnspecified && t.HasOptions() {
-		return NewError(ErrorTypeValidation, "thinking mode must be enabled or disabled when thinking options are set")
+	switch t.Mode {
+	case ThinkingEnabled:
+	case ThinkingDisabled:
+		if t.hasOptions() {
+			return NewError("", ErrorTypeValidation, "thinking options cannot be set when thinking is disabled", nil)
+		}
+	default:
+		return NewError("", ErrorTypeValidation, fmt.Sprintf("unknown thinking mode %d", t.Mode), nil)
 	}
-	if t.Mode == ThinkingDisabled && t.HasOptions() {
-		return NewError(ErrorTypeValidation, "thinking options cannot be set when thinking is disabled")
+	if t.BudgetTokens != nil && *t.BudgetTokens <= 0 {
+		return NewError("", ErrorTypeValidation, "thinking budget_tokens must be positive", nil)
 	}
 	return nil
 }
 
+// ThinkingMode is ThinkingEnabled by default; a nil *Thinking leaves thinking
+// to the vendor default.
 type ThinkingMode int
 
 const (
-	ThinkingUnspecified ThinkingMode = iota
+	ThinkingEnabled ThinkingMode = iota
 	ThinkingDisabled
-	ThinkingEnabled
-)
-
-type CachePolicy struct {
-	Retention string
-	Placement CachePlacement
-}
-
-type CachePlacement string
-
-const (
-	CachePlacementPrefix CachePlacement = "prefix"
 )
 
 // ProviderOptions contains JSON values owned by the request. Use NewProviderOptions
 // or Set to encode Go values; the client copies each value before observation or execution.
 type ProviderOptions map[string]json.RawMessage
 
+// Request is a provider-neutral chat request. Nil pointers and empty fields
+// are omitted from the wire, leaving the vendor default.
 type Request struct {
 	Model    string
 	Messages []Message
@@ -276,15 +318,8 @@ type Request struct {
 
 	ResponseFormat *ResponseFormat
 	Thinking       *Thinking
-	Cache          *CachePolicy
 
 	ProviderOptions ProviderOptions
-
-	captureRawResponse bool
-}
-
-func (r *Request) CaptureRawResponse() bool {
-	return r != nil && r.captureRawResponse
 }
 
 func cloneBytes(b []byte) []byte {
@@ -311,28 +346,28 @@ func NewProviderOptions(values map[string]any) (ProviderOptions, error) {
 // Set encodes a value into an initialized options map.
 func (o ProviderOptions) Set(key string, value any) error {
 	if o == nil {
-		return NewError(ErrorTypeValidation, "provider options map is nil")
+		return NewError("", ErrorTypeValidation, "provider options map is nil", nil)
 	}
 	if !utf8.ValidString(key) {
-		return NewError(ErrorTypeValidation, "provider option key must be valid UTF-8")
+		return NewError("", ErrorTypeValidation, "provider option key must be valid UTF-8", nil)
 	}
 	data, err := json.Marshal(value)
 	if err != nil {
-		return NewErrorWithCause(ErrorTypeValidation, fmt.Sprintf("provider option %q: %v", key, err), err)
+		return NewError("", ErrorTypeValidation, fmt.Sprintf("provider option %q: %v", key, err), err)
 	}
 	o[key] = data
 	return nil
 }
 
-// Validate checks raw JSON at the request boundary, including values inserted
+// validate checks raw JSON at the request boundary, including values inserted
 // directly rather than through Set.
-func (o ProviderOptions) Validate() error {
+func (o ProviderOptions) validate() error {
 	for key, value := range o {
 		if !utf8.ValidString(key) {
-			return NewError(ErrorTypeValidation, "provider option key must be valid UTF-8")
+			return NewError("", ErrorTypeValidation, "provider option key must be valid UTF-8", nil)
 		}
 		if !utf8.Valid(value) || !json.Valid(value) {
-			return NewError(ErrorTypeValidation, fmt.Sprintf("provider option %q must be valid UTF-8 JSON", key))
+			return NewError("", ErrorTypeValidation, fmt.Sprintf("provider option %q must be valid UTF-8 JSON", key), nil)
 		}
 	}
 	return nil
@@ -341,7 +376,7 @@ func (o ProviderOptions) Validate() error {
 // Decode gives a provider an independent JSON tree. Numbers remain json.Number
 // to preserve integer precision until the provider validates its wire type.
 func (o ProviderOptions) Decode() (map[string]any, error) {
-	if err := o.Validate(); err != nil {
+	if err := o.validate(); err != nil {
 		return nil, err
 	}
 	if o == nil {
@@ -353,7 +388,7 @@ func (o ProviderOptions) Decode() (map[string]any, error) {
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.UseNumber()
 		if err := decoder.Decode(&value); err != nil {
-			return nil, NewErrorWithCause(ErrorTypeValidation, fmt.Sprintf("provider option %q: %v", key, err), err)
+			return nil, NewError("", ErrorTypeValidation, fmt.Sprintf("provider option %q: %v", key, err), err)
 		}
 		values[key] = value
 	}

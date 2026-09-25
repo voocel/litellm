@@ -1,3 +1,4 @@
+// Package bedrock connects to the Amazon Bedrock Converse API.
 package bedrock
 
 import (
@@ -11,32 +12,31 @@ import (
 	"strings"
 
 	"github.com/voocel/litellm"
-	"github.com/voocel/litellm/retry"
+	"github.com/voocel/litellm/internal/wire"
 )
 
-const defaultRegion = "us-east-1"
-
+// Config configures Converse. HTTPClient, when set, sends the SigV4-signed
+// requests; wrap it with retry.NewHTTPClient to retry.
 type Config struct {
-	Region              string
+	// Region selects the endpoints and signing region, us-east-1 by default.
+	Region string
+	// BaseURL overrides the bedrock-runtime endpoint and ControlPlaneBaseURL
+	// the bedrock endpoint used by ListModels.
 	BaseURL             string
 	ControlPlaneBaseURL string
-	Credentials         CredentialsProvider
-	HTTPClient          HTTPClient
-	Transport           http.RoundTripper
-	Retry               *retry.Policy
+	// Credentials is required and resolved for every request.
+	Credentials CredentialsProvider
+	HTTPClient  litellm.HTTPClient
 }
 
-type HTTPClient interface {
-	Do(*http.Request) (*http.Response, error)
-}
-
+// Credentials are AWS credentials; SessionToken is for temporary ones.
 type Credentials struct {
 	AccessKeyID     string
 	SecretAccessKey string
 	SessionToken    string
-	Region          string
 }
 
+// CredentialsProvider supplies credentials, allowing rotation.
 type CredentialsProvider interface {
 	Credentials(context.Context) (Credentials, error)
 }
@@ -45,6 +45,7 @@ type staticCredentials struct {
 	credentials Credentials
 }
 
+// StaticCredentials returns a CredentialsProvider with fixed credentials.
 func StaticCredentials(accessKeyID, secretAccessKey, sessionToken string) CredentialsProvider {
 	return staticCredentials{credentials: Credentials{
 		AccessKeyID:     accessKeyID,
@@ -57,16 +58,21 @@ func (p staticCredentials) Credentials(context.Context) (Credentials, error) {
 	return p.credentials, nil
 }
 
+const defaultRegion = "us-east-1"
+
+// Provider implements litellm.Provider, litellm.CapabilityProvider and
+// litellm.ModelLister.
 type Provider struct {
 	cfg Config
 }
 
+// New returns a Provider for cfg.
 func New(cfg Config) (*Provider, error) {
 	if cfg.Region == "" {
 		cfg.Region = defaultRegion
 	}
 	if cfg.Credentials == nil {
-		return nil, fmt.Errorf("bedrock: credentials provider is required")
+		return nil, litellm.NewError("bedrock", litellm.ErrorTypeValidation, "credentials provider is required", nil)
 	}
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = fmt.Sprintf("https://bedrock-runtime.%s.amazonaws.com", cfg.Region)
@@ -74,123 +80,81 @@ func New(cfg Config) (*Provider, error) {
 	if cfg.ControlPlaneBaseURL == "" {
 		cfg.ControlPlaneBaseURL = fmt.Sprintf("https://bedrock.%s.amazonaws.com", cfg.Region)
 	}
-	if cfg.HTTPClient != nil && cfg.Transport != nil {
-		return nil, fmt.Errorf("bedrock: HTTPClient and Transport are mutually exclusive")
-	}
-	if cfg.HTTPClient != nil && cfg.Retry != nil {
-		return nil, fmt.Errorf("bedrock: Retry cannot be used with a custom HTTPClient; use Transport so Bedrock can retry above SigV4 signing")
-	}
-	base := cfg.Transport
-	if base == nil {
-		if cfg.HTTPClient != nil {
-			base = clientTransport{client: cfg.HTTPClient}
-		} else {
-			base = http.DefaultTransport
-		}
-	}
-	signed := SigningTransport(cfg.Credentials, cfg.Region, base)
-	cfg.HTTPClient = &http.Client{Transport: retry.NewTransport(signed, cfg.Retry)}
+	cfg.HTTPClient = &http.Client{Transport: newSigningTransport(cfg.Credentials, cfg.Region, clientTransport{client: wire.HTTPClient(cfg.HTTPClient)})}
 	return &Provider{cfg: cfg}, nil
 }
 
-func Factory(cfg Config) (litellm.Provider, error) {
-	return New(cfg)
-}
-
+// Name returns "bedrock".
 func (p *Provider) Name() string {
 	return "bedrock"
 }
 
+// Capabilities reports the static protocol facts.
+func (p *Provider) Capabilities() litellm.Capabilities {
+	return litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true, ThinkingBudget: true, ProviderOptions: sortedOptions()}
+}
+
+// Chat sends a Converse request; Request.Model is the model or inference
+// profile ID.
 func (p *Provider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
-	wire, err := p.buildRequest(req)
+	resp, err := p.post(ctx, req, "converse")
 	if err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
-	}
-	body, err := json.Marshal(wire)
-	if err != nil {
-		return nil, fmt.Errorf("bedrock: marshal request: %w", err)
-	}
-	endpoint, rawPath, err := runtimeEndpoint(p.cfg.BaseURL, req.Model, "converse")
-	if err != nil {
-		return nil, fmt.Errorf("bedrock: create endpoint: %w", err)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("bedrock: create request: %w", err)
-	}
-	httpReq.URL.RawPath = rawPath
-	resp, err := p.cfg.HTTPClient.Do(httpReq)
-	if err != nil {
-		return nil, litellm.NewNetworkError(p.Name(), "request failed", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		return nil, litellm.NewHTTPError(p.Name(), resp.StatusCode, string(data))
-	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, litellm.NewNetworkError(p.Name(), "read response failed", err)
 	}
 	var parsed response
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		return nil, litellm.NewProviderErrorWithCause(p.Name(), litellm.ErrorTypeProvider, "bedrock: decode response", err)
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeProvider, "decode response", err)
 	}
-	out, err := convertResponse(&parsed, req.Model)
-	if err != nil {
-		return nil, litellm.WrapError(err, p.Name())
-	}
-	litellm.CaptureRawResponse(req, out, data)
+	out := convertResponse(&parsed, req.Model)
+	out.Raw = data
 	return out, nil
 }
 
+// Stream sends a ConverseStream request.
 func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.Stream, error) {
-	wire, err := p.buildRequest(req)
+	resp, err := p.post(ctx, req, "converse-stream")
 	if err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
-	}
-	body, err := json.Marshal(wire)
-	if err != nil {
-		return nil, fmt.Errorf("bedrock: marshal stream request: %w", err)
-	}
-	endpoint, rawPath, err := runtimeEndpoint(p.cfg.BaseURL, req.Model, "converse-stream")
-	if err != nil {
-		return nil, fmt.Errorf("bedrock: create stream endpoint: %w", err)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("bedrock: create stream request: %w", err)
-	}
-	httpReq.URL.RawPath = rawPath
-	resp, err := p.cfg.HTTPClient.Do(httpReq)
-	if err != nil {
-		return nil, litellm.NewNetworkError(p.Name(), "stream request failed", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, litellm.NewHTTPError(p.Name(), resp.StatusCode, string(data))
+		return nil, err
 	}
 	return newStream(resp, req.Model), nil
 }
 
+func (p *Provider) post(ctx context.Context, req *litellm.Request, operation string) (*http.Response, error) {
+	body, err := buildRequest(req)
+	if err != nil {
+		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
+	}
+	endpoint, rawPath, err := runtimeEndpoint(p.cfg.BaseURL, req.Model, operation)
+	if err != nil {
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeValidation, "invalid base url", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeInternal, "create request", err)
+	}
+	httpReq.URL.RawPath = rawPath
+	return wire.Do(p.cfg.HTTPClient, httpReq, p.Name(), "request")
+}
+
+// ListModels lists the foundation models in the region.
 func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(p.cfg.ControlPlaneBaseURL, "/")+"/foundation-models", nil)
 	if err != nil {
-		return nil, fmt.Errorf("bedrock: create models request: %w", err)
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeInternal, "create models request", err)
 	}
-	resp, err := p.cfg.HTTPClient.Do(httpReq)
+	resp, err := wire.Do(p.cfg.HTTPClient, httpReq, p.Name(), "models request")
 	if err != nil {
-		return nil, litellm.NewNetworkError(p.Name(), "models request failed", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		return nil, litellm.NewHTTPError(p.Name(), resp.StatusCode, string(data))
-	}
 	var payload modelList
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, litellm.NewProviderErrorWithCause(p.Name(), litellm.ErrorTypeProvider, "bedrock: decode models response", err)
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeProvider, "decode models response", err)
 	}
 	models := make([]litellm.ModelInfo, 0, len(payload.ModelSummaries))
 	for _, item := range payload.ModelSummaries {
@@ -210,7 +174,7 @@ func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) 
 }
 
 type clientTransport struct {
-	client HTTPClient
+	client litellm.HTTPClient
 }
 
 func (t clientTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -229,15 +193,4 @@ func runtimeEndpoint(baseURL, model, operation string) (string, string, error) {
 	endpoint.Path = path
 	endpoint.RawPath = rawPath
 	return endpoint.String(), rawPath, nil
-}
-
-// NewClient builds the provider from cfg and wraps it in a ready *litellm.Client.
-// It is a convenience for the common single-provider case. It calls New(cfg)
-// and then litellm.New(provider, opts...).
-func NewClient(cfg Config, opts ...litellm.ClientOption) (*litellm.Client, error) {
-	p, err := New(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return litellm.New(p, opts...)
 }

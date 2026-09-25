@@ -5,62 +5,91 @@ import (
 	"fmt"
 
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/internal/wire"
 )
 
-type anthropicResponse struct {
-	Content    []anthropicContent `json:"content"`
-	Usage      anthropicUsage     `json:"usage"`
-	Model      string             `json:"model"`
-	StopReason string             `json:"stop_reason"`
+type response struct {
+	Content    []content `json:"content"`
+	Usage      usage     `json:"usage"`
+	Model      string    `json:"model"`
+	StopReason string    `json:"stop_reason"`
 }
 
-type anthropicUsage struct {
+type usage struct {
 	InputTokens              *int `json:"input_tokens"`
 	OutputTokens             *int `json:"output_tokens"`
-	CacheCreationInputTokens *int `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     *int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     *int `json:"cache_read_input_tokens"`
 }
 
-func convertResponse(resp *anthropicResponse, fallbackModel string) (*litellm.Response, error) {
-	if resp == nil {
-		return nil, fmt.Errorf("anthropic: response cannot be nil")
-	}
+func convertResponse(resp *response, model string) *litellm.Response {
 	out := &litellm.Response{
-		Model:           resp.Model,
+		Model:           model,
 		Provider:        "anthropic",
-		FinishReason:    litellm.NormalizeFinishReason(resp.StopReason),
+		FinishReason:    wire.FinishReason(resp.StopReason),
 		FinishReasonRaw: resp.StopReason,
-		Usage:           convertStreamUsage(&resp.Usage, resp.Model),
+		Usage:           convertUsage(resp.Usage),
 	}
-	if out.Model == "" {
-		out.Model = fallbackModel
+	if resp.Model != "" {
+		out.Model = resp.Model
 	}
-	out.Usage.Model = out.Model
-	for _, content := range resp.Content {
-		switch content.Type {
-		case "text":
-			out.Blocks = append(out.Blocks, litellm.TextBlock{Text: content.Text})
-		case "thinking":
-			out.Blocks = append(out.Blocks, litellm.ReasoningBlock{Text: content.Thinking, Signature: content.Signature})
-		case "redacted_thinking":
-			out.Blocks = append(out.Blocks, litellm.ReasoningBlock{Redacted: append([]byte(nil), content.Data...)})
-		case "tool_use":
-			args, err := json.Marshal(content.Input)
-			if err != nil {
-				return nil, fmt.Errorf("anthropic: marshal tool use %q arguments: %w", content.Name, err)
-			}
-			out.Blocks = append(out.Blocks, litellm.ToolUseBlock{
-				ID:        content.ID,
-				Name:      content.Name,
-				Arguments: args,
-			})
-		default:
-			// Beta features (server tools, compaction, fallback blocks, ...)
-			// can add block types this provider does not model; keep the
-			// response usable and surface the drop instead of failing.
-			out.Warnings = append(out.Warnings, warning("anthropic.unsupported_content_block",
-				fmt.Sprintf("dropped unsupported response content block %q", content.Type)))
+	for _, c := range resp.Content {
+		if block, ok := convertContent(c); ok {
+			out.Blocks = append(out.Blocks, block)
+		} else {
+			out.Warnings = append(out.Warnings, unsupportedBlock(c.Type))
 		}
 	}
-	return out, nil
+	return out
+}
+
+// convertContent maps a response content block. Blocks litellm does not model,
+// such as server tool calls, are reported by unsupportedBlock.
+func convertContent(c content) (litellm.Block, bool) {
+	switch c.Type {
+	case "text":
+		return litellm.TextBlock{Text: c.Text, Annotations: annotations(c.Citations)}, true
+	case "thinking":
+		return litellm.ReasoningBlock{Text: c.Thinking, Signature: c.Signature}, true
+	case "redacted_thinking":
+		return litellm.ReasoningBlock{Redacted: []byte(c.Data)}, true
+	case "tool_use":
+		return litellm.ToolUseBlock{ID: c.ID, Name: c.Name, Arguments: c.Input}, true
+	}
+	return nil, false
+}
+
+// annotations maps citations, keeping each verbatim in Extra.
+func annotations(citations []json.RawMessage) []litellm.Annotation {
+	if len(citations) == 0 {
+		return nil
+	}
+	out := make([]litellm.Annotation, 0, len(citations))
+	for _, raw := range citations {
+		var c struct {
+			Type      string `json:"type"`
+			CitedText string `json:"cited_text"`
+			URL       string `json:"url"`
+		}
+		_ = json.Unmarshal(raw, &c)
+		out = append(out, litellm.Annotation{Type: c.Type, Text: c.CitedText, URL: c.URL, Extra: raw})
+	}
+	return out
+}
+
+func unsupportedBlock(blockType string) litellm.Warning {
+	return litellm.Warning{Code: "anthropic.unsupported_block", Provider: "anthropic", Message: fmt.Sprintf("dropped content block %q, which litellm does not model", blockType)}
+}
+
+// convertUsage reports input as the total: Anthropic counts cache reads and
+// writes separately from uncached input.
+func convertUsage(u usage) litellm.Usage {
+	input := wire.AddTokenDetails(u.InputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens)
+	return litellm.Usage{
+		InputTokens:      input,
+		OutputTokens:     u.OutputTokens,
+		TotalTokens:      wire.SumTokens(input, u.OutputTokens),
+		CacheReadTokens:  u.CacheReadInputTokens,
+		CacheWriteTokens: u.CacheCreationInputTokens,
+	}
 }

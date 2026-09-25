@@ -19,16 +19,15 @@ type signingTransport struct {
 	base        http.RoundTripper
 }
 
-func SigningTransport(credentials CredentialsProvider, region string, base http.RoundTripper) http.RoundTripper {
-	if base == nil {
-		base = http.DefaultTransport
-	}
+// newSigningTransport signs each request with SigV4 for region before base
+// sends it.
+func newSigningTransport(credentials CredentialsProvider, region string, base http.RoundTripper) http.RoundTripper {
 	return &signingTransport{credentials: credentials, region: region, base: base}
 }
 
 func (t *signingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.credentials == nil {
-		return nil, fmt.Errorf("bedrock: credentials provider is required")
+		return nil, fmt.Errorf("credentials provider is required")
 	}
 	payload, signedReq, err := replayableRequest(req)
 	if err != nil {
@@ -36,22 +35,16 @@ func (t *signingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 	credentials, err := t.credentials.Credentials(req.Context())
 	if err != nil {
-		return nil, fmt.Errorf("bedrock: resolve credentials: %w", err)
-	}
-	if credentials.Region == "" {
-		credentials.Region = t.region
-	}
-	if credentials.Region == "" {
-		credentials.Region = defaultRegion
+		return nil, fmt.Errorf("resolve credentials: %w", err)
 	}
 	if credentials.AccessKeyID == "" {
-		return nil, fmt.Errorf("bedrock: access key id is required")
+		return nil, fmt.Errorf("access key id is required")
 	}
 	if credentials.SecretAccessKey == "" {
-		return nil, fmt.Errorf("bedrock: secret access key is required")
+		return nil, fmt.Errorf("secret access key is required")
 	}
-	if err := signRequest(signedReq, payload, credentials); err != nil {
-		return nil, fmt.Errorf("bedrock: sign request: %w", err)
+	if err := signRequest(signedReq, payload, credentials, t.region); err != nil {
+		return nil, fmt.Errorf("sign request: %w", err)
 	}
 	return t.base.RoundTrip(signedReq)
 }
@@ -91,7 +84,7 @@ func replayableRequest(req *http.Request) ([]byte, *http.Request, error) {
 	return payload, clone, nil
 }
 
-func signRequest(req *http.Request, payload []byte, credentials Credentials) error {
+func signRequest(req *http.Request, payload []byte, credentials Credentials, region string) error {
 	now := time.Now().UTC()
 	amzDate := now.Format("20060102T150405Z")
 	dateStamp := now.Format("20060102")
@@ -140,7 +133,7 @@ func signRequest(req *http.Request, payload []byte, credentials Credentials) err
 	}, "\n")
 
 	algorithm := "AWS4-HMAC-SHA256"
-	credentialScope := dateStamp + "/" + credentials.Region + "/bedrock/aws4_request"
+	credentialScope := dateStamp + "/" + region + "/bedrock/aws4_request"
 	stringToSign := strings.Join([]string{
 		algorithm,
 		amzDate,
@@ -148,7 +141,7 @@ func signRequest(req *http.Request, payload []byte, credentials Credentials) err
 		sha256Hex([]byte(canonicalRequest)),
 	}, "\n")
 
-	signingKey := signatureKey(credentials.SecretAccessKey, dateStamp, credentials.Region, "bedrock")
+	signingKey := signatureKey(credentials.SecretAccessKey, dateStamp, region, "bedrock")
 	signature := hmacSHA256Hex(signingKey, []byte(stringToSign))
 	req.Header.Set("Authorization", fmt.Sprintf("%s Credential=%s/%s, SignedHeaders=%s, Signature=%s",
 		algorithm, credentials.AccessKeyID, credentialScope, signedHeadersString, signature))

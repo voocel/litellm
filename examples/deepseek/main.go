@@ -26,10 +26,14 @@ func main() {
 		mode = os.Args[1]
 	}
 
-	client, err := deepseek.NewClient(deepseek.Config{
+	provider, err := deepseek.New(deepseek.Config{
 		APIKey:  os.Getenv("DEEPSEEK_API_KEY"),
 		BaseURL: os.Getenv("DEEPSEEK_BASE_URL"),
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	client, err := litellm.New(provider)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -62,7 +66,7 @@ func runChat(ctx context.Context, client *litellm.Client) {
 			litellm.System("You are concise."),
 			litellm.UserText("Explain reasoning models in one sentence."),
 		},
-		MaxTokens: litellm.IntPtr(1024),
+		MaxTokens: new(1024),
 		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
 	})
 	if err != nil {
@@ -76,15 +80,14 @@ func runChat(ctx context.Context, client *litellm.Client) {
 
 // runStream prints streamed text as it arrives, then prints final usage.
 func runStream(ctx context.Context, client *litellm.Client) {
-	printer := exampleutil.StreamPrinter{}
-	resp, err := client.StreamWith(ctx, litellm.Request{
+	resp, err := exampleutil.Stream(ctx, client, litellm.Request{
 		Model: model(),
 		Messages: []litellm.Message{
 			litellm.UserText("Who are you?"),
 		},
-		MaxTokens: litellm.IntPtr(1024),
+		MaxTokens: new(1024),
 		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
-	}, printer.Handler())
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -116,7 +119,7 @@ func runTool(ctx context.Context, client *litellm.Client) {
 		Messages:   messages,
 		Tools:      []litellm.Tool{weather},
 		ToolChoice: &litellm.ToolChoice{Mode: "auto"},
-		MaxTokens:  litellm.IntPtr(256),
+		MaxTokens:  new(256),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -140,7 +143,7 @@ func runTool(ctx context.Context, client *litellm.Client) {
 		Model:     model(),
 		Messages:  messages,
 		Tools:     []litellm.Tool{weather},
-		MaxTokens: litellm.IntPtr(256),
+		MaxTokens: new(256),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -158,7 +161,7 @@ func executeTool(call litellm.ToolUseBlock) string {
 	if city == "" {
 		city = "unknown"
 	}
-	result, _ := litellm.JSONRaw(map[string]any{
+	result, _ := json.Marshal(map[string]any{
 		"city":        city,
 		"temperature": "22°C",
 		"condition":   "sunny",

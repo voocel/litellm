@@ -1,231 +1,116 @@
+// Package anthropic connects to the Anthropic Messages API.
 package anthropic
 
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/voocel/litellm"
-	"github.com/voocel/litellm/retry"
+	"github.com/voocel/litellm/internal/wire"
 )
 
-const (
-	defaultBaseURL   = "https://api.anthropic.com"
-	defaultUserAgent = "litellm-go/0.1"
-)
-
+// Config configures the Messages API client. An API key is required.
 type Config struct {
+	// APIKey authenticates requests; APIKeyFunc, when set, resolves it per
+	// request instead.
 	APIKey     string
 	APIKeyFunc func(context.Context) (string, error)
-	BaseURL    string
-	HTTPClient HTTPClient
-	Transport  http.RoundTripper
-	Retry      *retry.Policy
-	Version    string
-	Beta       string
+	// BaseURL is the API origin, https://api.anthropic.com by default.
+	BaseURL string
+	// HTTPClient sends requests; nil uses http.DefaultClient. Wrap it with
+	// retry.NewHTTPClient to retry.
+	HTTPClient litellm.HTTPClient
 	UserAgent  string
-	Headers    map[string]string
+	// Headers are set after the defaults, so they can override them. Use them
+	// for anthropic-beta, or to change anthropic-version from 2023-06-01.
+	Headers map[string]string
 }
 
-type HTTPClient interface {
-	Do(*http.Request) (*http.Response, error)
-}
-
+// Provider implements litellm.Provider and litellm.CapabilityProvider.
 type Provider struct {
 	cfg Config
 }
 
+// New returns a Provider for cfg.
 func New(cfg Config) (*Provider, error) {
 	if cfg.APIKey == "" && cfg.APIKeyFunc == nil {
-		return nil, fmt.Errorf("anthropic: api key is required")
-	}
-	if cfg.HTTPClient != nil && cfg.Transport != nil {
-		return nil, fmt.Errorf("anthropic: HTTPClient and Transport are mutually exclusive")
-	}
-	if cfg.HTTPClient != nil && cfg.Retry != nil {
-		return nil, fmt.Errorf("anthropic: Retry cannot be used with a custom HTTPClient; use Transport or configure retry on the client")
+		return nil, litellm.NewError("anthropic", litellm.ErrorTypeValidation, "api key is required", nil)
 	}
 	if cfg.BaseURL == "" {
-		cfg.BaseURL = defaultBaseURL
+		cfg.BaseURL = "https://api.anthropic.com"
 	}
-	if cfg.HTTPClient == nil {
-		base := cfg.Transport
-		if base == nil {
-			base = http.DefaultTransport
-		}
-		cfg.HTTPClient = &http.Client{Transport: retry.NewTransport(base, cfg.Retry)}
-	}
-	if cfg.Version == "" {
-		cfg.Version = "2023-06-01"
-	}
+	cfg.HTTPClient = wire.HTTPClient(cfg.HTTPClient)
 	if cfg.UserAgent == "" {
-		cfg.UserAgent = defaultUserAgent
+		cfg.UserAgent = wire.DefaultUserAgent
 	}
 	return &Provider{cfg: cfg}, nil
 }
 
-func Factory(cfg Config) (litellm.Provider, error) {
-	return New(cfg)
-}
-
+// Name returns "anthropic".
 func (p *Provider) Name() string {
 	return "anthropic"
 }
 
+// Capabilities reports the static protocol facts.
+func (p *Provider) Capabilities() litellm.Capabilities {
+	return litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true, ThinkingBudget: true, ProviderOptions: sortedOptions()}
+}
+
+// Chat sends a Messages request.
 func (p *Provider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
-	wire, warnings, err := p.buildRequest(req, false)
-	if err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
-	}
-	body, err := json.Marshal(wire)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.cfg.BaseURL, "/")+"/v1/messages", bytes.NewReader(body))
+	resp, err := p.post(ctx, req, false)
 	if err != nil {
 		return nil, err
 	}
-	if err := p.setHeaders(ctx, httpReq); err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
-	}
-	resp, err := p.cfg.HTTPClient.Do(httpReq)
-	if err != nil {
-		return nil, litellm.NewNetworkError(p.Name(), "request failed", err)
-	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		return nil, litellm.NewHTTPError(p.Name(), resp.StatusCode, string(data))
-	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, litellm.NewNetworkError(p.Name(), "read response failed", err)
 	}
-	var parsed anthropicResponse
+	var parsed response
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		return nil, litellm.NewProviderErrorWithCause(p.Name(), litellm.ErrorTypeProvider, "anthropic: decode response", err)
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeProvider, "decode response", err)
 	}
-	out, err := convertResponse(&parsed, req.Model)
-	if err != nil {
-		return nil, litellm.WrapError(err, p.Name())
-	}
-	out.Warnings = append(warnings, out.Warnings...)
-	litellm.CaptureRawResponse(req, out, data)
+	out := convertResponse(&parsed, req.Model)
+	out.Raw = data
 	return out, nil
 }
 
+// Stream sends a streaming Messages request.
 func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.Stream, error) {
-	wire, warnings, err := p.buildRequest(req, true)
+	resp, err := p.post(ctx, req, true)
 	if err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
+		return nil, err
 	}
-	body, err := json.Marshal(wire)
+	return newStream(resp, req.Model), nil
+}
+
+func (p *Provider) post(ctx context.Context, req *litellm.Request, stream bool) (*http.Response, error) {
+	body, err := buildRequest(req, stream)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic: marshal stream request: %w", err)
+		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.cfg.BaseURL, "/")+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeInternal, "create request", err)
 	}
-	if err := p.setHeaders(ctx, httpReq); err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
-	}
-	httpReq.Header.Set("Accept", "text/event-stream")
-	resp, err := p.cfg.HTTPClient.Do(httpReq)
+	key, err := wire.APIKey(ctx, p.cfg.APIKey, p.cfg.APIKeyFunc, true)
 	if err != nil {
-		return nil, litellm.NewNetworkError(p.Name(), "stream request failed", err)
+		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, litellm.NewHTTPError(p.Name(), resp.StatusCode, string(data))
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("User-Agent", p.cfg.UserAgent)
+	httpReq.Header.Set("x-api-key", key)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	if stream {
+		httpReq.Header.Set("Accept", "text/event-stream")
 	}
-	return newStream(resp, req, warnings), nil
-}
-
-func (p *Provider) setHeaders(ctx context.Context, req *http.Request) error {
-	key := p.cfg.APIKey
-	if p.cfg.APIKeyFunc != nil {
-		resolved, err := p.cfg.APIKeyFunc(ctx)
-		if err != nil {
-			return fmt.Errorf("anthropic: resolve api key: %w", err)
-		}
-		key = resolved
+	if err := wire.SetHeaders(httpReq.Header, p.cfg.Headers); err != nil {
+		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
 	}
-	if key == "" {
-		return fmt.Errorf("anthropic: api key is required")
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", p.cfg.UserAgent)
-	req.Header.Set("x-api-key", key)
-	req.Header.Set("anthropic-version", p.cfg.Version)
-	if p.cfg.Beta != "" {
-		req.Header.Set("anthropic-beta", p.cfg.Beta)
-	}
-	for name, value := range p.cfg.Headers {
-		name = strings.TrimSpace(name)
-		value = strings.TrimSpace(value)
-		if name == "" {
-			return fmt.Errorf("anthropic: header name cannot be empty")
-		}
-		if value == "" {
-			continue
-		}
-		req.Header.Set(name, value)
-	}
-	return nil
-}
-
-func cacheControl(cache *litellm.CacheControl) (*anthropicCacheControl, error) {
-	if cache == nil {
-		return nil, nil
-	}
-	cc := &anthropicCacheControl{Type: cache.Type}
-	if cc.Type == "" {
-		cc.Type = litellm.CacheTypeEphemeral
-	}
-	if cc.Type != litellm.CacheTypeEphemeral {
-		return nil, fmt.Errorf("anthropic: unsupported cache type %q", cache.Type)
-	}
-	if cache.TTL != "" && cache.TTL != litellm.CacheTTL5m {
-		if cache.TTL != litellm.CacheTTL1h {
-			return nil, fmt.Errorf("anthropic: unsupported cache ttl %q", cache.TTL)
-		}
-		cc.TTL = cache.TTL
-	}
-	return cc, nil
-}
-
-func imageSource(block litellm.ImageBlock) (*anthropicImageSource, error) {
-	switch {
-	case block.URL != "":
-		return &anthropicImageSource{Type: "url", URL: block.URL}, nil
-	case len(block.Data) > 0:
-		if block.MIME == "" {
-			return nil, fmt.Errorf("anthropic: inline image MIME is required")
-		}
-		return &anthropicImageSource{
-			Type:      "base64",
-			MediaType: block.MIME,
-			Data:      base64.StdEncoding.EncodeToString(block.Data),
-		}, nil
-	default:
-		return nil, fmt.Errorf("anthropic: image requires URL or data")
-	}
-}
-
-// NewClient builds the provider from cfg and wraps it in a ready *litellm.Client.
-// It is a convenience for the common single-provider case. It calls New(cfg)
-// and then litellm.New(provider, opts...).
-func NewClient(cfg Config, opts ...litellm.ClientOption) (*litellm.Client, error) {
-	p, err := New(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return litellm.New(p, opts...)
+	return wire.Do(p.cfg.HTTPClient, httpReq, p.Name(), "request")
 }

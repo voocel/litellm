@@ -1,460 +1,216 @@
 package litellm
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 )
 
-func TestCollectPreservesBlockOrder(t *testing.T) {
-	stream := &eventSliceStream{events: []Event{
-		ContentDelta{Text: "first "},
-		ReasoningDelta{Text: "think", Signature: "sig"},
-		ContentDelta{Text: "second "},
-		ToolUseStart{ID: "call_1", Name: "lookup"},
-		ToolUseDelta{ID: "call_1", ArgumentsDelta: []byte(`{"q":"x"}`)},
-		ContentDelta{Text: "third"},
-		DoneEvent{FinishReason: FinishReasonToolCall, Provider: "test-provider", Model: "test-model"},
-	}}
+// unknownEvent is an Event no collector knows.
+type unknownEvent struct{}
 
-	resp, err := Collect(stream)
+func (unknownEvent) isEvent() {}
+
+func TestCollectAssemblesInterleavedBlocks(t *testing.T) {
+	resp, err := Collect(&testStream{events: []Event{
+		BlockStart{Index: 0, Block: TextBlock{}},
+		TextDelta{Index: 0, Text: "hel"},
+		BlockStart{Index: 1, Block: ReasoningBlock{}},
+		BlockStart{Index: 2, Block: ToolUseBlock{ID: "call_1", Name: "lookup"}},
+		ToolUseDelta{Index: 2, Arguments: `{"q":`},
+		ReasoningDelta{Index: 1, Text: "think"},
+		TextDelta{Index: 0, Text: "lo"},
+		ToolUseDelta{Index: 2, Arguments: `"x"}`},
+		BlockEnd{Index: 2},
+		WarningEvent{Warning: Warning{Code: "w"}},
+		BlockEnd{Index: 1, Block: ReasoningBlock{Signature: "sig"}},
+		BlockEnd{Index: 0},
+		DoneEvent{FinishReason: FinishReasonToolCall, FinishReasonRaw: "tool_use", Provider: "test", Model: "m"},
+	}})
 	if err != nil {
-		t.Fatalf("Collect: %v", err)
+		t.Fatal(err)
 	}
-	if len(resp.Blocks) != 5 {
-		t.Fatalf("blocks len = %d, want 5: %#v", len(resp.Blocks), resp.Blocks)
+	want := &Response{
+		Blocks: []Block{
+			TextBlock{Text: "hello"},
+			ReasoningBlock{Text: "think", Signature: "sig"},
+			ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
+		},
+		Provider:        "test",
+		Model:           "m",
+		FinishReason:    FinishReasonToolCall,
+		FinishReasonRaw: "tool_use",
+		Warnings:        []Warning{{Code: "w", Provider: "test"}},
 	}
-	if block, ok := resp.Blocks[0].(TextBlock); !ok || block.Text != "first " {
-		t.Fatalf("blocks[0] = %#v", resp.Blocks[0])
-	}
-	if block, ok := resp.Blocks[1].(ReasoningBlock); !ok || block.Text != "think" || block.Signature != "sig" {
-		t.Fatalf("blocks[1] = %#v", resp.Blocks[1])
-	}
-	if block, ok := resp.Blocks[2].(TextBlock); !ok || block.Text != "second " {
-		t.Fatalf("blocks[2] = %#v", resp.Blocks[2])
-	}
-	if block, ok := resp.Blocks[3].(ToolUseBlock); !ok || block.ID != "call_1" || block.Name != "lookup" || string(block.Arguments) != `{"q":"x"}` {
-		t.Fatalf("blocks[3] = %#v", resp.Blocks[3])
-	}
-	if block, ok := resp.Blocks[4].(TextBlock); !ok || block.Text != "third" {
-		t.Fatalf("blocks[4] = %#v", resp.Blocks[4])
-	}
-	if resp.Provider != "test-provider" || resp.Model != "test-model" {
-		t.Fatalf("provider/model = %q/%q", resp.Provider, resp.Model)
+	if !reflect.DeepEqual(resp, want) {
+		t.Fatalf("response = %#v\nwant %#v", resp, want)
 	}
 }
 
-func TestEventCollectorContinuesAfterResponseSnapshot(t *testing.T) {
-	collector := NewEventCollector()
-	for _, event := range []Event{
-		ContentDelta{Text: "hel"},
-		ContentDelta{Text: "lo"},
-	} {
-		if _, err := collector.Apply(event); err != nil {
-			t.Fatalf("Apply(%T): %v", event, err)
-		}
+func TestBlockEndMergesMetadataOnly(t *testing.T) {
+	resp, err := Collect(&testStream{events: []Event{
+		BlockStart{Index: 0, Block: TextBlock{Text: "he"}},
+		TextDelta{Index: 0, Text: "llo"},
+		BlockEnd{Index: 0, Block: TextBlock{Text: "ignored", Annotations: []Annotation{{Type: "url", URL: "u"}}, Logprobs: json.RawMessage(`[]`)}},
+		BlockStart{Index: 1, Block: ReasoningBlock{Summary: true, Signature: "early"}},
+		ReasoningDelta{Index: 1, Text: "r"},
+		BlockEnd{Index: 1, Block: ReasoningBlock{Text: "ignored", Signature: "late", Redacted: []byte("x"), Extra: json.RawMessage(`{}`)}},
+		BlockStart{Index: 2, Block: ToolUseBlock{Name: "lookup"}},
+		ToolUseDelta{Index: 2, Arguments: `{}`},
+		BlockEnd{Index: 2, Block: ToolUseBlock{ID: "call", Arguments: json.RawMessage(`"ignored"`), Signature: "s"}},
+		BlockStart{Index: 3, Block: ToolUseBlock{ID: "empty", Name: "noop"}},
+		BlockEnd{Index: 3},
+		DoneEvent{Provider: "test", Model: "m"},
+	}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := collector.Response().Text(); got != "hello" {
-		t.Fatalf("first snapshot text = %q, want %q", got, "hello")
+	want := []Block{
+		TextBlock{Text: "hello", Annotations: []Annotation{{Type: "url", URL: "u"}}, Logprobs: json.RawMessage(`[]`)},
+		ReasoningBlock{Text: "r", Summary: true, Signature: "late", Redacted: []byte("x"), Extra: json.RawMessage(`{}`)},
+		ToolUseBlock{ID: "call", Name: "lookup", Arguments: json.RawMessage(`{}`), Signature: "s"},
+		// An argument-less call keeps valid JSON arguments.
+		ToolUseBlock{ID: "empty", Name: "noop", Arguments: json.RawMessage(`{}`)},
 	}
-
-	for _, event := range []Event{
-		ContentDelta{Text: " world"},
-		ReasoningDelta{Text: "think"},
-		ReasoningDelta{Text: "ing", Signature: "sig"},
-	} {
-		if _, err := collector.Apply(event); err != nil {
-			t.Fatalf("Apply(%T): %v", event, err)
-		}
-	}
-	resp := collector.Response()
-	if got := resp.Text(); got != "hello world" {
-		t.Fatalf("second snapshot text = %q, want %q", got, "hello world")
-	}
-	if got := resp.Reasoning(); got != "thinking" {
-		t.Fatalf("second snapshot reasoning = %q, want %q", got, "thinking")
-	}
-	block, ok := resp.Blocks[1].(ReasoningBlock)
-	if !ok || block.Signature != "sig" {
-		t.Fatalf("reasoning block = %#v", resp.Blocks[1])
+	if !reflect.DeepEqual(resp.Blocks, want) {
+		t.Fatalf("blocks = %#v\nwant %#v", resp.Blocks, want)
 	}
 }
 
-func BenchmarkEventCollectorContent(b *testing.B) {
+func TestCollectorRejectsLifecycleViolations(t *testing.T) {
+	start := BlockStart{Index: 0, Block: TextBlock{}}
+	done := DoneEvent{Provider: "test", Model: "m"}
 	for _, tc := range []struct {
 		name   string
-		deltas int
+		events []Event
+		want   string
 	}{
-		{name: "100_deltas", deltas: 100},
-		{name: "1000_deltas", deltas: 1_000},
-		{name: "5000_deltas", deltas: 5_000},
+		{"start out of order", []Event{BlockStart{Index: 1, Block: TextBlock{}}}, "started out of order"},
+		{"start twice", []Event{start, start}, "started out of order"},
+		{"unsupported block", []Event{BlockStart{Index: 0, Block: ImageBlock{}}}, "does not support"},
+		{"delta before start", []Event{TextDelta{Index: 0, Text: "x"}}, "was not started"},
+		{"wrong delta kind", []Event{start, ReasoningDelta{Index: 0, Text: "x"}}, "is text, not reasoning"},
+		{"delta after end", []Event{start, BlockEnd{Index: 0}, TextDelta{Index: 0, Text: "x"}}, "already ended"},
+		{"end twice", []Event{start, BlockEnd{Index: 0}, BlockEnd{Index: 0}}, "already ended"},
+		{"end kind mismatch", []Event{start, BlockEnd{Index: 0, Block: ReasoningBlock{}}}, "does not match"},
+		{"done with open block", []Event{start, done}, "block 0 still open"},
+		{"unknown event", []Event{unknownEvent{}}, "unknown stream event"},
+		{"tool without id", []Event{BlockStart{Index: 0, Block: ToolUseBlock{Name: "t"}}, BlockEnd{Index: 0}, done}, "tool use missing id"},
+		{"missing provider", []Event{DoneEvent{Model: "m"}}, "missing provider"},
+		{"missing model", []Event{DoneEvent{Provider: "test"}}, "missing model"},
+		{"nil event", []Event{nil}, "nil event"},
 	} {
-		b.Run(tc.name, func(b *testing.B) {
-			for b.Loop() {
-				collector := NewEventCollector()
-				for range tc.deltas {
-					_, _ = collector.Apply(ContentDelta{Text: "x"})
+		t.Run(tc.name, func(t *testing.T) {
+			for name, stream := range map[string]Stream{
+				"external": &testStream{events: tc.events},
+				"client":   newValidatedStream("", "", &testStream{events: tc.events}),
+			} {
+				if _, err := Collect(stream); err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Errorf("%s: err = %v, want %q", name, err, tc.want)
 				}
-				_, _ = collector.Apply(DoneEvent{})
-				_ = collector.Response()
 			}
 		})
 	}
 }
 
-func TestCollectMergesToolUseWhenStableIDArrivesAfterIndex(t *testing.T) {
-	stream := &eventSliceStream{events: []Event{
-		ToolUseStart{Name: "lookup", Index: IntPtr(0)},
-		ToolUseDelta{Index: IntPtr(0), ArgumentsDelta: []byte(`{"q":`)},
-		ToolUseDelta{ID: "call_1", Index: IntPtr(0), ArgumentsDelta: []byte(`"x"}`)},
-		ToolUseDone{ID: "call_1", Index: IntPtr(0)},
-		DoneEvent{FinishReason: FinishReasonToolCall, Provider: "test", Model: "m"},
-	}}
-	resp, err := Collect(stream)
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
+func TestCollectorRejectsEventsAfterDone(t *testing.T) {
+	collector := newCollector()
+	if _, done, err := collector.Apply(DoneEvent{}); !done || err != nil {
+		t.Fatalf("done=%v err=%v", done, err)
 	}
-	calls := resp.ToolCalls()
-	if len(calls) != 1 {
-		t.Fatalf("tool calls len = %d, want 1: %#v", len(calls), calls)
+	if _, _, err := collector.Apply(BlockStart{Index: 0, Block: TextBlock{}}); err == nil || !strings.Contains(err.Error(), "after Done") {
+		t.Fatalf("err = %v", err)
 	}
-	if calls[0].ID != "call_1" || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
-		t.Fatalf("tool call = %#v", calls[0])
+	if len(collector.Response().Blocks) != 0 {
+		t.Fatal("late event changed completed response")
 	}
 }
 
-func TestCollectSeparatesToolUseByOutputAndIndex(t *testing.T) {
-	stream := &eventSliceStream{events: []Event{
-		ToolUseStart{ID: "call_a", Name: "first", Index: IntPtr(0), OutputIndex: IntPtr(0)},
-		ToolUseDelta{ID: "call_a", Index: IntPtr(0), OutputIndex: IntPtr(0), ArgumentsDelta: []byte(`{"a":1}`)},
-		ToolUseStart{ID: "call_b", Name: "second", Index: IntPtr(0), OutputIndex: IntPtr(1)},
-		ToolUseDelta{ID: "call_b", Index: IntPtr(0), OutputIndex: IntPtr(1), ArgumentsDelta: []byte(`{"b":2}`)},
-		ToolUseDone{ID: "call_a", Index: IntPtr(0), OutputIndex: IntPtr(0)},
-		ToolUseDone{ID: "call_b", Index: IntPtr(0), OutputIndex: IntPtr(1)},
-		DoneEvent{FinishReason: FinishReasonToolCall, Provider: "test", Model: "m"},
-	}}
-	resp, err := Collect(stream)
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
+func TestHandleDeliversCompletedBlocks(t *testing.T) {
+	events := []Event{
+		BlockStart{Index: 0, Block: ReasoningBlock{}},
+		ReasoningDelta{Index: 0, Text: "th"},
+		ReasoningDelta{Index: 0, Text: "ink"},
+		BlockEnd{Index: 0, Block: ReasoningBlock{Signature: "sig"}},
+		DoneEvent{Provider: "test", Model: "m"},
 	}
-	calls := resp.ToolCalls()
-	if len(calls) != 2 {
-		t.Fatalf("tool calls len = %d, want 2: %#v", len(calls), calls)
-	}
-	if calls[0].ID != "call_a" || calls[0].Name != "first" || string(calls[0].Arguments) != `{"a":1}` {
-		t.Fatalf("first call = %#v", calls[0])
-	}
-	if calls[1].ID != "call_b" || calls[1].Name != "second" || string(calls[1].Arguments) != `{"b":2}` {
-		t.Fatalf("second call = %#v", calls[1])
-	}
-}
-
-func TestCollectRejectsNilEventWithoutError(t *testing.T) {
-	_, err := Collect(&eventSliceStream{events: []Event{nil}})
-	if err == nil || err.Error() != "stream returned nil event without error" {
-		t.Fatalf("expected nil event error, got %v", err)
+	for name, stream := range map[string]Stream{
+		"external": &testStream{events: events},
+		"client":   newValidatedStream("test", "m", &testStream{events: events}),
+	} {
+		var ends []BlockEnd
+		var seen int
+		_, err := Handle(stream, func(event Event) error {
+			seen++
+			if end, ok := event.(BlockEnd); ok {
+				ends = append(ends, end)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		want := BlockEnd{Index: 0, Block: ReasoningBlock{Text: "think", Signature: "sig"}}
+		if seen != len(events) || len(ends) != 1 || !reflect.DeepEqual(ends[0], want) {
+			t.Fatalf("%s: seen=%d ends=%#v", name, seen, ends)
+		}
 	}
 }
 
-func TestCollectRequiresDoneOrError(t *testing.T) {
-	_, err := Collect(&eventSliceStream{events: []Event{ContentDelta{Text: "partial"}}})
-	if !errors.Is(err, io.ErrUnexpectedEOF) {
-		t.Fatalf("expected unexpected EOF when stream ends without Done or error, got %v", err)
-	}
-}
-
-func TestCollectNormalizesInvalidToolArguments(t *testing.T) {
-	resp, err := Collect(&eventSliceStream{events: []Event{
-		ToolUseStart{ID: "call_1", Name: "lookup"},
-		ToolUseDelta{ID: "call_1", ArgumentsDelta: []byte(`{"q":`)},
-		DoneEvent{FinishReason: FinishReasonToolCall, Provider: "test", Model: "m"},
+func TestHandleAfterNext(t *testing.T) {
+	events := append(textEvents(0, "hello"), DoneEvent{Provider: "test", Model: "m"})
+	c, err := New(&testProvider{name: "test", streamFunc: func(context.Context, *Request) (Stream, error) {
+		return &testStream{events: events}, nil
 	}})
-	if err != nil {
-		t.Fatalf("Collect returned error: %v", err)
-	}
-	calls := resp.ToolCalls()
-	if len(calls) != 1 {
-		t.Fatalf("tool calls len = %d, want 1", len(calls))
-	}
-	if got := string(calls[0].Arguments); got != `{"q":` {
-		t.Fatalf("arguments = %q, want raw malformed args", got)
-	}
-	if len(resp.Warnings) != 1 || resp.Warnings[0].Code != "stream.tool_arguments_invalid" {
-		t.Fatalf("warnings = %+v", resp.Warnings)
-	}
-}
-
-func TestCollectRejectsMissingProviderOrModel(t *testing.T) {
-	_, err := Collect(&eventSliceStream{events: []Event{
-		ContentDelta{Text: "ok"},
-		DoneEvent{FinishReason: FinishReasonStop, Model: "m"},
-	}})
-	if err == nil || !strings.Contains(err.Error(), "missing provider") {
-		t.Fatalf("expected missing provider error, got %v", err)
-	}
-
-	_, err = Collect(&eventSliceStream{events: []Event{
-		ContentDelta{Text: "ok"},
-		DoneEvent{FinishReason: FinishReasonStop, Provider: "test"},
-	}})
-	if err == nil || !strings.Contains(err.Error(), "missing model") {
-		t.Fatalf("expected missing model error, got %v", err)
-	}
-}
-
-func TestCollectRejectsToolCallMissingID(t *testing.T) {
-	_, err := Collect(&eventSliceStream{events: []Event{
-		ToolUseStart{Name: "lookup", Index: IntPtr(0)},
-		ToolUseDelta{Index: IntPtr(0), ArgumentsDelta: []byte(`{"q":"x"}`)},
-		DoneEvent{FinishReason: FinishReasonToolCall, Provider: "test", Model: "m"},
-	}})
-	if err == nil || err.Error() == "" {
-		t.Fatalf("expected missing tool id error, got %v", err)
-	}
-}
-
-func TestCollectRejectsToolCallMissingName(t *testing.T) {
-	_, err := Collect(&eventSliceStream{events: []Event{
-		ToolUseDelta{ID: "call_1", ArgumentsDelta: []byte(`{"q":"x"}`)},
-		DoneEvent{FinishReason: FinishReasonToolCall, Provider: "test", Model: "m"},
-	}})
-	if err == nil || err.Error() == "" {
-		t.Fatalf("expected missing tool name error, got %v", err)
-	}
-}
-
-func TestCollectRejectsToolDoneMissingIDAndIndex(t *testing.T) {
-	_, err := Collect(&eventSliceStream{events: []Event{
-		ToolUseDone{},
-	}})
-	if err == nil || !strings.Contains(err.Error(), "missing id and index") {
-		t.Fatalf("expected missing tool done id/index error, got %v", err)
-	}
-}
-
-func TestCollectRejectsToolDoneUnknownToolUse(t *testing.T) {
-	_, err := Collect(&eventSliceStream{events: []Event{
-		ToolUseDone{ID: "call_missing"},
-	}})
-	if err == nil || !strings.Contains(err.Error(), "references unknown tool use") {
-		t.Fatalf("expected unknown tool done error, got %v", err)
-	}
-	if strings.Contains(err.Error(), "missing id and index") {
-		t.Fatalf("unknown tool use must not be reported as missing id/index: %v", err)
-	}
-}
-
-func TestHandleInvokesCallbackPerEventAndAggregates(t *testing.T) {
-	stream := &eventSliceStream{events: []Event{
-		ContentDelta{Text: "a"},
-		ReasoningDelta{Text: "r"},
-		ContentDelta{Text: "b"},
-		DoneEvent{FinishReason: FinishReasonStop, Provider: "test", Model: "m"},
-	}}
-	var seen int
-	resp, err := Handle(stream, func(event Event) error {
-		seen++
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if seen != 4 {
-		t.Fatalf("callback invoked %d times, want 4", seen)
-	}
-	if resp.Text() != "ab" {
-		t.Fatalf("aggregated text = %q, want %q", resp.Text(), "ab")
-	}
-}
-
-func TestCollectStampsUsageProviderAndModelFromDoneEvent(t *testing.T) {
-	resp, err := Collect(&eventSliceStream{events: []Event{
-		ContentDelta{Text: "ok"},
-		UsageEvent{Usage: Usage{InputTokens: IntPtr(1), OutputTokens: IntPtr(2), TotalTokens: IntPtr(3)}},
-		DoneEvent{FinishReason: FinishReasonStop, Provider: "test-provider", Model: "test-model"},
-	}})
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
-	if resp.Usage.Provider != "test-provider" || resp.Usage.Model != "test-model" {
-		t.Fatalf("usage provider/model = %q/%q", resp.Usage.Provider, resp.Usage.Model)
-	}
-}
-
-func TestHandleStopsOnCallbackError(t *testing.T) {
-	boom := errors.New("boom")
-	var seen int
-	_, err := Handle(&eventSliceStream{events: []Event{
-		ContentDelta{Text: "a"},
-		ContentDelta{Text: "b"},
-		DoneEvent{FinishReason: FinishReasonStop, Provider: "test", Model: "m"},
-	}}, func(event Event) error {
-		seen++
-		return boom
-	})
-	if !errors.Is(err, boom) {
-		t.Fatalf("err = %v, want boom", err)
-	}
-	if seen != 1 {
-		t.Fatalf("callback invoked %d times, want 1 (stop on first error)", seen)
-	}
-}
-
-func TestHandleTextReceivesOnlyContentDeltas(t *testing.T) {
-	var text strings.Builder
-	resp, err := HandleText(&eventSliceStream{events: []Event{
-		ReasoningDelta{Text: "ignored"},
-		ContentDelta{Text: "hello "},
-		ContentDelta{Text: "world"},
-		DoneEvent{FinishReason: FinishReasonStop, Provider: "test", Model: "m"},
-	}}, func(s string) error {
-		text.WriteString(s)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("HandleText: %v", err)
-	}
-	if text.String() != "hello world" {
-		t.Fatalf("streamed text = %q, want %q", text.String(), "hello world")
-	}
-	if resp.Reasoning() != "ignored" {
-		t.Fatalf("reasoning still aggregated, got %q", resp.Reasoning())
-	}
-}
-
-func TestHandleWithSplitsReasoningAndContent(t *testing.T) {
-	var reasoning, content strings.Builder
-	resp, err := HandleWith(&eventSliceStream{events: []Event{
-		ReasoningDelta{Text: "think "},
-		ContentDelta{Text: "ans"},
-		ReasoningDelta{Text: "more"},
-		ContentDelta{Text: "wer"},
-		DoneEvent{FinishReason: FinishReasonStop, Provider: "test", Model: "m"},
-	}}, StreamHandler{
-		Reasoning: func(s string) error { reasoning.WriteString(s); return nil },
-		Content:   func(s string) error { content.WriteString(s); return nil },
-	})
-	if err != nil {
-		t.Fatalf("HandleWith: %v", err)
-	}
-	if reasoning.String() != "think more" {
-		t.Fatalf("reasoning = %q, want %q", reasoning.String(), "think more")
-	}
-	if content.String() != "answer" {
-		t.Fatalf("content = %q, want %q", content.String(), "answer")
-	}
-	if resp.Text() != "answer" {
-		t.Fatalf("aggregated text = %q", resp.Text())
-	}
-}
-
-func TestHandleWithNilCallbacksAreSkipped(t *testing.T) {
-	// Only Content is set; reasoning deltas must not panic and are still aggregated.
-	var content strings.Builder
-	resp, err := HandleWith(&eventSliceStream{events: []Event{
-		ReasoningDelta{Text: "r"},
-		ContentDelta{Text: "c"},
-		DoneEvent{FinishReason: FinishReasonStop, Provider: "test", Model: "m"},
-	}}, StreamHandler{
-		Content: func(s string) error { content.WriteString(s); return nil },
-	})
-	if err != nil {
-		t.Fatalf("HandleWith: %v", err)
-	}
-	if content.String() != "c" || resp.Reasoning() != "r" {
-		t.Fatalf("content=%q reasoning=%q", content.String(), resp.Reasoning())
-	}
-}
-
-func TestCollectPreservesRefusalAndMarksSafety(t *testing.T) {
-	resp, err := Collect(&eventSliceStream{events: []Event{
-		RefusalDelta{Text: "I can't help."},
-		DoneEvent{FinishReason: FinishReasonStop, FinishReasonRaw: "completed", Provider: "test", Model: "m"},
-	}})
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
-	if resp.Refusal != "I can't help." || resp.Text() != resp.Refusal {
-		t.Fatalf("refusal/text = %q/%q", resp.Refusal, resp.Text())
-	}
-	if resp.FinishReason != FinishReasonSafety || resp.FinishReasonRaw != "completed" {
-		t.Fatalf("finish/raw = %q/%q", resp.FinishReason, resp.FinishReasonRaw)
-	}
-}
-
-type eventSliceStream struct {
-	events []Event
-	index  int
-}
-
-func (s *eventSliceStream) Next() (Event, error) {
-	if s.index >= len(s.events) {
-		return nil, io.EOF
-	}
-	event := s.events[s.index]
-	s.index++
-	return event, nil
-}
-
-func (s *eventSliceStream) Close() error {
-	return nil
-}
-
-func TestCollectPreservesInterleavedContentIdentity(t *testing.T) {
-	stream := &eventSliceStream{events: []Event{
-		ContentDelta{Text: "a", OutputIndex: IntPtr(0), ContentIndex: IntPtr(0)},
-		ContentDelta{Text: "b", OutputIndex: IntPtr(0), ContentIndex: IntPtr(1)},
-		ReasoningDelta{Text: "think", OutputIndex: IntPtr(1), ContentIndex: IntPtr(0)},
-		ContentDelta{Text: "c", OutputIndex: IntPtr(0), ContentIndex: IntPtr(0)},
-		ReasoningDelta{Signature: "sig", OutputIndex: IntPtr(1), ContentIndex: IntPtr(0)},
-		ContentDelta{Text: "d", OutputIndex: IntPtr(2), ContentIndex: IntPtr(0)},
-		DoneEvent{Provider: "test", Model: "m", FinishReason: FinishReasonStop},
-	}}
-	resp, err := Collect(stream)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.Blocks) != 4 {
-		t.Fatalf("blocks = %#v", resp.Blocks)
+	for _, read := range []int{2, len(events)} {
+		stream, err := c.Stream(context.Background(), Request{Model: "m", Messages: hi})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range read {
+			if _, err := stream.Next(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// A Client stream aggregates from its first event.
+		resp, err := Collect(stream)
+		_ = stream.Close()
+		if err != nil || resp.Text() != "hello" {
+			t.Fatalf("client stream after %d events: text=%q err=%v", read, resp.Text(), err)
+		}
 	}
-	if resp.Blocks[0].(TextBlock).Text != "ac" || resp.Blocks[1].(TextBlock).Text != "b" || resp.Blocks[3].(TextBlock).Text != "d" {
-		t.Fatalf("text blocks lost identity: %#v", resp.Blocks)
-	}
-	if block := resp.Blocks[2].(ReasoningBlock); block.Text != "think" || block.Signature != "sig" {
-		t.Fatalf("reasoning lost identity: %#v", block)
-	}
-}
-
-func TestCollectorSnapshotOwnsReasoningData(t *testing.T) {
-	collector := NewEventCollector()
-	_, err := collector.Apply(ReasoningDelta{Text: "a", ContentIndex: IntPtr(0), Extra: []byte(`{"id":1}`)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	first := collector.Response()
-	first.Blocks[0].(ReasoningBlock).Extra[0] = '!'
-	_, err = collector.Apply(ReasoningDelta{Text: "b", ContentIndex: IntPtr(0)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	second := collector.Response().Blocks[0].(ReasoningBlock)
-	if first.Reasoning() != "a" || second.Text != "ab" || string(second.Extra) != `{"id":1}` {
-		t.Fatalf("snapshot aliases collector: first=%#v second=%#v", first.Blocks, second)
+	// An external stream aggregates only from the point Handle starts.
+	stream := &testStream{events: events}
+	_, _ = stream.Next()
+	if _, err := Collect(stream); err == nil || !strings.Contains(err.Error(), "was not started") {
+		t.Fatalf("external stream after Next: %v", err)
 	}
 }
 
 func TestHandleReturnsPartialResponse(t *testing.T) {
 	boom := errors.New("interrupted")
+	partial := textEvents(0, "partial")[:2]
 	for _, tc := range []struct {
 		name     string
 		stream   Stream
 		callback func(Event) error
 		want     error
 	}{
-		{"truncated", &eventSliceStream{events: []Event{ContentDelta{Text: "partial"}}}, nil, io.ErrUnexpectedEOF},
-		{"provider", &testStreamWithError{events: []Event{ContentDelta{Text: "partial"}}, err: boom}, nil, boom},
-		{"callback", &eventSliceStream{events: []Event{ContentDelta{Text: "partial"}}}, func(Event) error { return boom }, boom},
+		{"truncated", &testStream{events: partial}, nil, io.ErrUnexpectedEOF},
+		{"provider", &testStream{events: partial, err: boom}, nil, boom},
+		{"callback", &testStream{events: partial}, func(e Event) error {
+			if _, ok := e.(TextDelta); ok {
+				return boom
+			}
+			return nil
+		}, boom},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resp, err := Handle(tc.stream, tc.callback)
@@ -465,32 +221,30 @@ func TestHandleReturnsPartialResponse(t *testing.T) {
 	}
 }
 
-func TestCollectorRejectsEventsAfterCompletion(t *testing.T) {
-	collector := NewEventCollector()
-	if done, err := collector.Apply(DoneEvent{}); !done || err != nil {
-		t.Fatalf("done=%v err=%v", done, err)
-	}
-	if _, err := collector.Apply(ContentDelta{Text: "late"}); err == nil {
-		t.Fatal("accepted event after completion")
-	}
-	if collector.Response().Text() != "" {
-		t.Fatal("late event changed completed response")
+func TestHandleStopsOnCallbackError(t *testing.T) {
+	boom := errors.New("boom")
+	var seen int
+	_, err := Handle(&testStream{events: append(textEvents(0, "a"), DoneEvent{Provider: "test", Model: "m"})}, func(Event) error {
+		seen++
+		return boom
+	})
+	if !errors.Is(err, boom) || seen != 1 {
+		t.Fatalf("err=%v seen=%d, want boom after one callback", err, seen)
 	}
 }
 
-func TestProviderStreamStopsAtTerminalEvent(t *testing.T) {
+func TestValidatedStreamStopsAtTerminalEvent(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		events []Event
 		want   error
 	}{
-		{"done", []Event{DoneEvent{}, ContentDelta{Text: "late"}}, nil},
+		{"done", []Event{DoneEvent{Provider: "test"}, UsageEvent{}}, nil},
 		{"truncated", nil, io.ErrUnexpectedEOF},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			stream := newValidatedStream("test", "m", &eventSliceStream{events: tc.events})
-			_, err := stream.Next()
-			if !errors.Is(err, tc.want) {
+			stream := newValidatedStream("test", "m", &testStream{events: tc.events})
+			if _, err := stream.Next(); !errors.Is(err, tc.want) {
 				t.Fatalf("first error=%v want=%v", err, tc.want)
 			}
 			if event, err := stream.Next(); event != nil || err != io.EOF {
@@ -500,79 +254,72 @@ func TestProviderStreamStopsAtTerminalEvent(t *testing.T) {
 	}
 }
 
-// A generated source avoids retaining the test input itself, so this exercises
-// the same ownership boundary as a provider decoding successive network frames.
-type repeatedTextStream struct {
-	remaining int
-	chunk     string
-}
-
-func (s *repeatedTextStream) Next() (Event, error) {
-	if s.remaining == 0 {
-		return DoneEvent{Provider: "test", Model: "m"}, nil
-	}
-	s.remaining--
-	return ContentDelta{Text: s.chunk}, nil
-}
-func (s *repeatedTextStream) Close() error { return nil }
-
-func TestNextDoesNotRetainStreamedText(t *testing.T) {
-	stream := newValidatedStream("test", "m", &repeatedTextStream{remaining: 2048, chunk: strings.Repeat("x", 16*1024)})
-	defer stream.Close()
-	for {
-		event, err := stream.Next()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, done := event.(DoneEvent); done {
-			break
-		}
-	}
-	state := streamCollector(stream)
-	if len(state.textBuilders) != 0 || state.Response().Text() != "" {
-		t.Fatal("Next retained 32 MiB of streamed text")
-	}
-	for _, block := range state.blocks {
-		if contentText(block) != "" {
-			t.Fatal("validator retained text in a block")
-		}
-	}
-}
-
-func TestValidationOnlySnapshotAndToolWarnings(t *testing.T) {
-	for _, final := range []string{"hello", "different"} {
-		stream := newValidatedStream("test", "m", &eventSliceStream{events: []Event{
-			ContentStart{ContentIndex: IntPtr(0), Block: Text("hel")},
-			ContentDelta{ContentIndex: IntPtr(0), Text: "lo"},
-			ContentEnd{ContentIndex: IntPtr(0), Block: Text(final)},
+func TestMalformedToolArgumentsWarnOnce(t *testing.T) {
+	events := func() []Event {
+		return []Event{
+			BlockStart{Index: 0, Block: ToolUseBlock{ID: "call", Name: "tool"}},
+			ToolUseDelta{Index: 0, Arguments: `{"bad":`},
+			BlockEnd{Index: 0},
 			DoneEvent{Provider: "test", Model: "m"},
-		}})
-		_, err := Collect(stream)
-		_ = stream.Close()
-		if (err == nil) != (final == "hello") {
-			t.Fatalf("snapshot %q: %v", final, err)
 		}
 	}
-	stream := newValidatedStream("test", "m", &eventSliceStream{events: []Event{
-		ToolUseStart{ID: "call", Name: "tool"}, ToolUseDelta{ID: "call", ArgumentsDelta: []byte(`{"bad":`)}, ToolUseDone{ID: "call"}, DoneEvent{Provider: "test", Model: "m"},
-	}})
-	defer stream.Close()
-	for {
-		event, err := stream.Next()
+	for name, stream := range map[string]Stream{
+		"external": &testStream{events: events()},
+		"client":   newValidatedStream("test", "m", &testStream{events: events()}),
+	} {
+		resp, err := Collect(stream)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("%s: %v", name, err)
 		}
-		if _, done := event.(DoneEvent); done {
-			break
+		if len(resp.Warnings) != 1 || resp.Warnings[0].Code != "litellm.tool_arguments_invalid" {
+			t.Fatalf("%s: warnings = %+v", name, resp.Warnings)
+		}
+		if got := string(resp.ToolCalls()[0].Arguments); got != `{"bad":` {
+			t.Fatalf("%s: arguments = %q", name, got)
 		}
 	}
-	state := streamCollector(stream)
-	if len(state.Response().Warnings) != 1 {
-		t.Fatalf("warnings=%+v", state.Response().Warnings)
-	}
-	for _, tool := range state.tools.byKey {
-		if len(tool.Arguments) > 0 {
-			t.Fatal("completed tool arguments retained")
+}
+
+func TestCollectorSnapshotsAreIndependent(t *testing.T) {
+	collector := newCollector()
+	apply := func(events ...Event) {
+		t.Helper()
+		for _, event := range events {
+			if _, _, err := collector.Apply(event); err != nil {
+				t.Fatal(err)
+			}
 		}
+	}
+	apply(BlockStart{Index: 0, Block: ReasoningBlock{Extra: json.RawMessage(`{"id":1}`)}}, ReasoningDelta{Index: 0, Text: "a"})
+	first := collector.Response()
+	first.Blocks[0].(ReasoningBlock).Extra[0] = '!'
+	apply(ReasoningDelta{Index: 0, Text: "b"})
+	second := collector.Response().Blocks[0].(ReasoningBlock)
+	if first.Reasoning() != "a" || second.Text != "ab" || string(second.Extra) != `{"id":1}` {
+		t.Fatalf("snapshot aliases collector: first=%#v second=%#v", first.Blocks, second)
+	}
+}
+
+func BenchmarkCollectorText(b *testing.B) {
+	for _, tc := range []struct {
+		name   string
+		deltas int
+	}{
+		{name: "100_deltas", deltas: 100},
+		{name: "1000_deltas", deltas: 1_000},
+		{name: "5000_deltas", deltas: 5_000},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			for b.Loop() {
+				collector := newCollector()
+				_, _, _ = collector.Apply(BlockStart{Index: 0, Block: TextBlock{}})
+				for range tc.deltas {
+					_, _, _ = collector.Apply(TextDelta{Index: 0, Text: "x"})
+				}
+				_, _, _ = collector.Apply(BlockEnd{Index: 0})
+				_, _, _ = collector.Apply(DoneEvent{})
+				_ = collector.Response()
+			}
+		})
 	}
 }

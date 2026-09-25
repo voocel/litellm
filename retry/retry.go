@@ -1,9 +1,9 @@
-// Package retry provides explicit opt-in HTTP retry transports for providers.
+// Package retry provides opt-in HTTP retries for providers.
 //
-// The default SDK behavior is no retry. Provider configs expose Retry for the
-// simple path; this package is also available for advanced transport composition.
-// Enabling retries authorizes repeated requests and possible duplicate charges.
-// A transient HTTP status does not establish that an operation was not processed.
+// Providers never retry. Pass a client from NewHTTPClient as a provider
+// Config.HTTPClient to opt in. Enabling retries authorizes repeated requests
+// and possible duplicate charges: a transient HTTP status does not establish
+// that an operation was not processed.
 package retry
 
 import (
@@ -12,16 +12,24 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
-	"strconv"
 	"time"
+
+	"github.com/voocel/litellm/internal/wire"
 )
 
+// Policy controls retries. Zero durations and multiplier take the
+// DefaultPolicy values.
 type Policy struct {
-	MaxAttempts       int
-	InitialDelay      time.Duration
-	MaxDelay          time.Duration
-	Multiplier        float64
-	Jitter            bool
+	// MaxAttempts counts the first attempt; 1 or less disables retries.
+	MaxAttempts int
+	// Delays grow from InitialDelay by Multiplier up to MaxDelay.
+	InitialDelay time.Duration
+	MaxDelay     time.Duration
+	Multiplier   float64
+	// Jitter varies each delay by up to ±25%.
+	Jitter bool
+	// RespectRetryAfter uses the server's Retry-After instead, even beyond
+	// MaxDelay.
 	RespectRetryAfter bool
 }
 
@@ -39,46 +47,38 @@ func DefaultPolicy() *Policy {
 	}
 }
 
-// NewTransport wraps base with retry behavior. A nil policy, MaxAttempts <= 1,
-// or nil base keeps behavior simple: no retry or http.DefaultTransport.
-func NewTransport(base http.RoundTripper, policy *Policy) http.RoundTripper {
+// NewHTTPClient returns a shallow copy of base, http.DefaultClient when nil,
+// whose Transport retries complete 429/5xx/529 responses according to policy.
+// A nil policy or MaxAttempts <= 1 disables retries. Only replayable request
+// bodies are resent; replayable means the bytes can be resent, not that the
+// operation is idempotent. Transport failures and response-body errors,
+// including interrupted successful streams, are never retried.
+func NewHTTPClient(base *http.Client, policy *Policy) *http.Client {
+	if base == nil {
+		base = http.DefaultClient
+	}
+	out := *base
+	out.Transport = newTransport(base.Transport, policy)
+	return &out
+}
+
+func newTransport(base http.RoundTripper, policy *Policy) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
 	}
 	if policy == nil || policy.MaxAttempts <= 1 {
 		return base
 	}
-	resolved := normalizePolicy(*policy)
-	return &Transport{Base: base, Policy: resolved}
+	return &transport{base: base, policy: normalizePolicy(*policy)}
 }
 
-// NewHTTPClient returns a shallow copy of base whose Transport is wrapped by
-// NewTransport. Provider Config.Retry is the preferred user-facing API.
-func NewHTTPClient(base *http.Client, policy *Policy) *http.Client {
-	if base == nil {
-		base = http.DefaultClient
-	}
-	out := *base
-	out.Transport = NewTransport(base.Transport, policy)
-	return &out
+type transport struct {
+	base   http.RoundTripper
+	policy Policy
 }
 
-// Transport retries complete 429/5xx/529 responses according to Policy.
-// It requires replayable request bodies for retries. Replayable means the bytes
-// can be resent, not that the operation is idempotent. It never retries transport
-// failures or response-body errors (including interrupted successful streams).
-type Transport struct {
-	Base   http.RoundTripper
-	Policy Policy
-}
-
-func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	policy := normalizePolicy(t.Policy)
-	base := t.Base
-	if base == nil {
-		base = http.DefaultTransport
-	}
-
+func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	policy, base := t.policy, t.base
 	for attempt := 1; attempt <= policy.MaxAttempts; attempt++ {
 		attemptReq, err := requestForAttempt(req, attempt)
 		if err != nil {
@@ -88,14 +88,9 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !isRetryableStatus(resp.StatusCode) || attempt == policy.MaxAttempts {
+		// A body that cannot be resent ends retrying with the response as is.
+		if !isRetryableStatus(resp.StatusCode) || attempt == policy.MaxAttempts || (req.Body != nil && req.GetBody == nil) {
 			return resp, nil
-		}
-		if req.Body != nil && req.GetBody == nil {
-			if err := drainAndCloseResponse(resp); err != nil {
-				return nil, err
-			}
-			return nil, errors.New("retry: request body is not replayable")
 		}
 
 		delay := policy.delay(attempt, resp)
@@ -112,9 +107,6 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 func requestForAttempt(req *http.Request, attempt int) (*http.Request, error) {
 	if attempt == 1 {
 		return req, nil
-	}
-	if req.Body != nil && req.GetBody == nil {
-		return nil, errors.New("retry: request body is not replayable")
 	}
 	cloned := req.Clone(req.Context())
 	if req.GetBody != nil {
@@ -188,19 +180,7 @@ func parseRetryAfter(resp *http.Response) time.Duration {
 	if resp == nil {
 		return 0
 	}
-	value := resp.Header.Get("Retry-After")
-	if value == "" {
-		return 0
-	}
-	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
-		return time.Duration(seconds) * time.Second
-	}
-	if when, err := http.ParseTime(value); err == nil {
-		if delay := time.Until(when); delay > 0 {
-			return delay
-		}
-	}
-	return 0
+	return wire.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
 }
 
 func sleep(ctx context.Context, delay time.Duration) error {

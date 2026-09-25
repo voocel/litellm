@@ -1,1116 +1,306 @@
 package anthropic
 
 import (
-	"context"
 	"encoding/json"
-	"io"
-	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/voocel/litellm"
 	"github.com/voocel/litellm/internal/testgolden"
-	"github.com/voocel/litellm/retry"
 )
 
-func TestBuildRequestThinkingToolsCacheRoundTrip(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 4096
-	temp := 1.0
-	req := &litellm.Request{
+func TestBuildRequestGolden(t *testing.T) {
+	data, err := buildRequest(&litellm.Request{
 		Model:       "claude-sonnet-5",
-		MaxTokens:   &maxTokens,
-		Temperature: &temp,
+		MaxTokens:   new(4096),
+		Temperature: new(1.0),
 		Messages: []litellm.Message{
 			litellm.System("You are helpful."),
-			litellm.User(
-				litellm.TextBlock{
-					Text: "Use the tool.",
-					Cache: &litellm.CacheControl{
-						Type: litellm.CacheTypeEphemeral,
-						TTL:  litellm.CacheTTL1h,
-					},
-				},
-			),
+			litellm.User(litellm.TextBlock{Text: "Use the tool.", Cache: &litellm.CacheControl{TTL: litellm.CacheTTL1h}}),
 			litellm.Assistant(
 				litellm.ReasoningBlock{Text: "I should call the tool.", Signature: "sig-thinking"},
-				litellm.ToolUseBlock{ID: "toolu_1", Name: "lookup", Arguments: litellm.MustJSONRaw(map[string]any{"q": "x"})},
+				litellm.ToolUseBlock{ID: "toolu_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
 			),
-			litellm.ToolResult("toolu_1",
-				litellm.Text("result text"),
-				litellm.ToolReferenceBlock{ToolName: "lookup"},
-			),
-			litellm.Assistant(litellm.Text("done")),
+			litellm.ToolResult("toolu_1", litellm.Text("result text"), litellm.ToolReferenceBlock{ToolName: "lookup"}),
+			litellm.AssistantText("done"),
 		},
-		Tools: []litellm.Tool{
-			mustTool(t, "lookup", "Lookup data.", map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"q": map[string]any{"type": "string"},
-				},
-				"required": []string{"q"},
-			}),
-		},
-		Thinking: &litellm.Thinking{
-			Mode:   litellm.ThinkingEnabled,
-			Effort: "low",
-		},
-	}
-	wire, warnings, err := provider.buildRequest(req, false)
-	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
-	}
-	if len(warnings) != 0 {
-		t.Fatalf("warnings = %+v, want none", warnings)
-	}
-	testgolden.AssertJSON(t, "../../testdata/anthropic/request_tools_cache.golden.json", wire)
-
-	data, err := json.Marshal(wire)
-	if err != nil {
-		t.Fatalf("marshal wire: %v", err)
-	}
-	jsonText := string(data)
-	for _, want := range []string{
-		`"thinking":"I should call the tool."`,
-		`"signature":"sig-thinking"`,
-		`"type":"tool_use"`,
-		`"tool_use_id":"toolu_1"`,
-		`"type":"tool_reference"`,
-		`"cache_control":{"type":"ephemeral","ttl":"1h"}`,
-		`"thinking":{"type":"adaptive"}`,
-		`"output_config":{"effort":"low"}`,
-	} {
-		if !strings.Contains(jsonText, want) {
-			t.Fatalf("wire JSON missing %s:\n%s", want, jsonText)
-		}
-	}
-	if strings.Index(jsonText, `"type":"thinking"`) > strings.Index(jsonText, `"type":"tool_use"`) {
-		t.Fatalf("thinking block must precede tool_use block:\n%s", jsonText)
-	}
-	if strings.Index(jsonText, `"type":"tool_use"`) > strings.Index(jsonText, `"type":"tool_result"`) {
-		t.Fatalf("tool_use must precede tool_result:\n%s", jsonText)
-	}
-}
-
-func TestStructuredCapabilityIsModelDependent(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if got := provider.Capabilities("claude-custom").Structured.JSONSchema; got != litellm.SupportUnknown {
-		t.Fatalf("JSONSchema = %v, want unknown", got)
-	}
-}
-
-func TestThinkingCapabilitiesExposeStableBaseline(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	caps := provider.Capabilities("claude-future").Thinking
-	if caps.Supported != litellm.SupportYes || caps.Disable != litellm.SupportUnknown {
-		t.Fatalf("thinking support = %+v", caps)
-	}
-	if !caps.SupportsEffort("low") || !caps.SupportsEffort("high") || caps.SupportsEffort("xhigh") || caps.SupportsEffort("max") {
-		t.Fatalf("thinking efforts = %+v", caps.Efforts)
-	}
-}
-
-func TestBuildRequestUsesRedactedThinkingData(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 4096
-	wire, _, err := provider.buildRequest(&litellm.Request{
-		Model:     "claude",
-		MaxTokens: &maxTokens,
-		Messages: []litellm.Message{
-			litellm.Assistant(litellm.ReasoningBlock{Redacted: []byte("opaque")}),
-		},
+		Tools: []litellm.Tool{{
+			Name:        "lookup",
+			Description: "Lookup data.",
+			Parameters:  litellm.Schema(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`),
+		}},
+		Thinking: &litellm.Thinking{Effort: "low"},
 	}, false)
 	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
+		t.Fatalf("buildRequest: %v", err)
 	}
-	data, err := json.Marshal(wire)
-	if err != nil {
-		t.Fatalf("marshal wire: %v", err)
-	}
-	jsonText := string(data)
-	if !strings.Contains(jsonText, `"type":"redacted_thinking"`) || !strings.Contains(jsonText, `"data":"opaque"`) {
-		t.Fatalf("redacted thinking not encoded with data field:\n%s", jsonText)
-	}
-	if strings.Contains(jsonText, `"content":"opaque"`) {
-		t.Fatalf("redacted thinking must not use content field:\n%s", jsonText)
-	}
+	testgolden.AssertJSONBytes(t, "../../testdata/anthropic/request_tools_cache.golden.json", data)
 }
 
-func TestBuildRequestRejectsInvalidBlockCache(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 4096
-	_, _, err = provider.buildRequest(&litellm.Request{
-		Model:     "claude",
-		MaxTokens: &maxTokens,
-		Messages: []litellm.Message{
-			litellm.User(litellm.TextBlock{
-				Text:  "hi",
-				Cache: &litellm.CacheControl{Type: litellm.CacheTypeEphemeral, TTL: "24h"},
-			}),
-		},
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "unsupported cache ttl") {
-		t.Fatalf("expected cache ttl error, got %v", err)
-	}
-
-	_, _, err = provider.buildRequest(&litellm.Request{
-		Model:     "claude",
-		MaxTokens: &maxTokens,
-		Messages: []litellm.Message{
-			litellm.User(litellm.TextBlock{
-				Text:  "hi",
-				Cache: &litellm.CacheControl{Type: "persistent"},
-			}),
-		},
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "unsupported cache type") {
-		t.Fatalf("expected cache type error, got %v", err)
-	}
-}
-
-func TestBuildRequestRejectsOneHourCacheAfterFiveMinuteCache(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 4096
-	_, _, err = provider.buildRequest(&litellm.Request{
-		Model:     "claude",
-		MaxTokens: &maxTokens,
-		Messages: []litellm.Message{
-			litellm.User(litellm.TextBlock{
-				Text:  "short cache first",
-				Cache: &litellm.CacheControl{Type: litellm.CacheTypeEphemeral, TTL: litellm.CacheTTL5m},
-			}),
-			litellm.User(litellm.TextBlock{
-				Text:  "long cache later",
-				Cache: &litellm.CacheControl{Type: litellm.CacheTypeEphemeral, TTL: litellm.CacheTTL1h},
-			}),
-		},
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "1h cache_control must appear before 5m") {
-		t.Fatalf("expected cache order error, got %v", err)
-	}
-}
-
-func TestBuildRequestAllowsOneHourCacheBeforeFiveMinuteCache(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 4096
-	_, _, err = provider.buildRequest(&litellm.Request{
-		Model:     "claude",
-		MaxTokens: &maxTokens,
-		Messages: []litellm.Message{
-			litellm.User(litellm.TextBlock{
-				Text:  "long cache first",
-				Cache: &litellm.CacheControl{Type: litellm.CacheTypeEphemeral, TTL: litellm.CacheTTL1h},
-			}),
-			litellm.User(litellm.TextBlock{
-				Text:  "short cache later",
-				Cache: &litellm.CacheControl{Type: litellm.CacheTypeEphemeral, TTL: litellm.CacheTTL5m},
-			}),
-		},
-	}, false)
-	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
-	}
-}
-
-func TestBuildRequestUsesDefaultAdaptiveThinking(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 4096
-	wire, _, err := provider.buildRequest(&litellm.Request{
-		Model:     "claude",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled},
-	}, false)
-	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
-	}
-	if wire.Thinking == nil || wire.Thinking.Type != "adaptive" {
-		t.Fatalf("thinking = %+v, want adaptive", wire.Thinking)
-	}
-}
-
-func TestBuildRequestRejectsUnknownThinkingEffort(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 4096
-	_, _, err = provider.buildRequest(&litellm.Request{
-		Model:     "claude",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "extreme"},
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), `unknown thinking effort "extreme"`) {
-		t.Fatalf("expected unknown effort error, got %v", err)
-	}
-}
-
-func TestBuildRequestMapsMaxThinkingEffort(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 65536
-	wire, _, err := provider.buildRequest(&litellm.Request{
-		Model:     "claude-sonnet-5",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "max"},
-	}, false)
-	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
-	}
-	if wire.Thinking == nil || wire.Thinking.Type != "adaptive" {
-		t.Fatalf("thinking = %+v, want adaptive", wire.Thinking)
-	}
-	if wire.OutputConfig == nil || wire.OutputConfig.Effort != "max" {
-		t.Fatalf("output_config = %+v, want effort max", wire.OutputConfig)
-	}
-}
-
-func TestBuildRequestRejectsThinkingBudget(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 1024
-	budget := 1024
-	_, _, err = provider.buildRequest(&litellm.Request{
-		Model:     "claude",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, BudgetTokens: &budget},
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "budget_tokens is not supported") {
-		t.Fatalf("expected unsupported budget error, got %v", err)
-	}
-}
-
-func TestBuildRequestValidatesThinkingTopP(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 2048
-	topP := 0.98
-	_, _, err = provider.buildRequest(&litellm.Request{
-		Model:     "claude-sonnet-5",
-		MaxTokens: &maxTokens,
-		TopP:      &topP,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled},
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "top_p must be between 0.99 and 1") {
-		t.Fatalf("expected top_p error, got %v", err)
-	}
-
-	topP = 0.99
-	if _, _, err := provider.buildRequest(&litellm.Request{
-		Model:     "claude-sonnet-5",
-		MaxTokens: &maxTokens,
-		TopP:      &topP,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled},
-	}, false); err != nil {
-		t.Fatalf("buildRequest returned error for top_p 0.99: %v", err)
-	}
-}
-
-func TestBuildRequestAllowsForcedToolChoiceWithAdaptiveThinking(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 2048
-	wire, _, err := provider.buildRequest(&litellm.Request{
-		Model:      "claude-sonnet-5",
-		MaxTokens:  &maxTokens,
-		Messages:   []litellm.Message{litellm.UserText("hi")},
-		Thinking:   &litellm.Thinking{Mode: litellm.ThinkingEnabled},
-		ToolChoice: &litellm.ToolChoice{Name: "lookup"},
-	}, false)
-	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
-	}
-	choice, ok := wire.ToolChoice.(map[string]any)
-	if !ok || choice["type"] != "tool" || choice["name"] != "lookup" {
-		t.Fatalf("tool_choice = %#v", wire.ToolChoice)
-	}
-}
-
-func TestConvertToolChoice(t *testing.T) {
+func TestBuildRequest(t *testing.T) {
+	const schema = `{"type":"object","properties":{"q":{"type":"string"}}}`
+	jsonSchema := &litellm.ResponseFormat{Type: litellm.ResponseFormatJSONSchema, JSONSchema: &litellm.JSONSchema{Name: "out", Schema: litellm.Schema(schema)}}
 	for _, test := range []struct {
-		name   string
-		choice *litellm.ToolChoice
-		want   string
-	}{
-		{name: "auto", choice: &litellm.ToolChoice{Mode: "auto"}, want: `{"type":"auto"}`},
-		{name: "required", choice: &litellm.ToolChoice{Mode: "required"}, want: `{"type":"any"}`},
-		{name: "none", choice: &litellm.ToolChoice{Mode: "none"}, want: `{"type":"none"}`},
-		{name: "named function", choice: &litellm.ToolChoice{Name: "lookup"}, want: `{"name":"lookup","type":"tool"}`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := convertToolChoice(test.choice)
-			if err != nil {
-				t.Fatalf("convertToolChoice: %v", err)
-			}
-			data, err := json.Marshal(got)
-			if err != nil {
-				t.Fatalf("Marshal: %v", err)
-			}
-			if string(data) != test.want {
-				t.Fatalf("tool_choice = %s, want %s", data, test.want)
-			}
-		})
-	}
-
-	if _, err := convertToolChoice(&litellm.ToolChoice{Mode: "invalid"}); err == nil || !strings.Contains(err.Error(), "unsupported tool choice") {
-		t.Fatalf("expected invalid tool_choice error, got %v", err)
-	}
-}
-
-func TestBuildRequestRequiresMaxTokens(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	_, _, err = provider.buildRequest(&litellm.Request{
-		Model:    "claude",
-		Messages: []litellm.Message{litellm.UserText("hi")},
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "max_tokens is required") {
-		t.Fatalf("expected max_tokens error, got %v", err)
-	}
-}
-
-func TestChatReturnsStructuredValidationError(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	_, err = provider.Chat(context.Background(), &litellm.Request{
-		Model:    "claude",
-		Messages: []litellm.Message{litellm.UserText("hi")},
-	})
-	if err == nil || !litellm.IsValidationError(err) {
-		t.Fatalf("expected structured validation error, got %v", err)
-	}
-}
-
-func TestBuildRequestRejectsTemperatureAndTopP(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 1024
-	temp := 0.7
-	topP := 0.99
-	_, _, err = provider.buildRequest(&litellm.Request{
-		Model:       "claude",
-		MaxTokens:   &maxTokens,
-		Temperature: &temp,
-		TopP:        &topP,
-		Messages:    []litellm.Message{litellm.UserText("hi")},
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "temperature and top_p cannot both be set") {
-		t.Fatalf("expected temperature/top_p error, got %v", err)
-	}
-}
-
-func TestBuildRequestKeepsTopPWhenTemperatureUnset(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 1024
-	topP := 0.99
-	wire, _, err := provider.buildRequest(&litellm.Request{
-		Model:     "claude",
-		MaxTokens: &maxTokens,
-		TopP:      &topP,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-	}, false)
-	if err != nil {
-		t.Fatalf("buildRequest: %v", err)
-	}
-	if wire.TopP == nil || *wire.TopP != topP {
-		t.Fatalf("top_p = %v, want %v", wire.TopP, topP)
-	}
-}
-
-func TestBuildRequestProviderOptions(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 1024
-	wire, _, err := provider.buildRequest(&litellm.Request{
-		Model:     "claude",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: mustProviderOptions(t, map[string]any{
-			"metadata_user_id": "user-123",
-		}),
-	}, false)
-	if err != nil {
-		t.Fatalf("buildRequest: %v", err)
-	}
-	if wire.Metadata["user_id"] != "user-123" {
-		t.Fatalf("metadata = %#v", wire.Metadata)
-	}
-
-	_, _, err = provider.buildRequest(&litellm.Request{
-		Model:           "claude",
-		MaxTokens:       &maxTokens,
-		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: mustProviderOptions(t, map[string]any{"unknown": true}),
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "unsupported provider option") {
-		t.Fatalf("expected unsupported option error, got %v", err)
-	}
-}
-
-func TestStreamConvertsSSEToTypedEvents(t *testing.T) {
-	maxTokens := 2048
-	provider, err := New(Config{
-		APIKey:  "test-key",
-		BaseURL: "https://example.test",
-		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			if req.Header.Get("Accept") != "text/event-stream" {
-				t.Fatalf("Accept = %q, want text/event-stream", req.Header.Get("Accept"))
-			}
-			return streamResponse(testgolden.ReadFixtureString(t, "../../testdata/anthropic/messages_stream.sse")), nil
-		}),
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	stream, err := provider.Stream(context.Background(), &litellm.Request{
-		Model:     "claude-sonnet",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-	})
-	if err != nil {
-		t.Fatalf("Stream returned error: %v", err)
-	}
-	resp, err := litellm.Collect(stream)
-	if err != nil {
-		t.Fatalf("Collect returned error: %v", err)
-	}
-	if resp.Text() != "hello" {
-		t.Fatalf("text = %q", resp.Text())
-	}
-	if resp.Reasoning() != "think" {
-		t.Fatalf("reasoning = %q", resp.Reasoning())
-	}
-	if len(resp.Blocks) == 0 {
-		t.Fatalf("blocks empty")
-	}
-	reasoning, ok := resp.Blocks[0].(litellm.ReasoningBlock)
-	if !ok || reasoning.Signature != "sig-thinking" {
-		t.Fatalf("reasoning block = %+v, want signature", resp.Blocks[0])
-	}
-	calls := resp.ToolCalls()
-	if len(calls) != 1 || calls[0].ID != "toolu_1" || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
-		t.Fatalf("tool calls = %+v", calls)
-	}
-	if *resp.Usage.InputTokens != 7 || *resp.Usage.OutputTokens != 7 || *resp.Usage.CacheReadTokens != 2 {
-		t.Fatalf("usage = %+v", resp.Usage)
-	}
-	if resp.FinishReason != litellm.FinishReasonToolCall {
-		t.Fatalf("finish reason = %q", resp.FinishReason)
-	}
-}
-
-func TestChatSetsProviderHeaders(t *testing.T) {
-	maxTokens := 2048
-	provider, err := New(Config{
-		APIKey:    "test-key",
-		BaseURL:   "https://example.test",
-		Beta:      "beta-name",
-		UserAgent: "my-client/1.0",
-		Headers:   map[string]string{"X-Custom-Client": "my-client"},
-		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			if got := req.Header.Get("User-Agent"); got != "my-client/1.0" {
-				t.Fatalf("User-Agent = %q", got)
-			}
-			if got := req.Header.Get("anthropic-beta"); got != "beta-name" {
-				t.Fatalf("anthropic-beta = %q", got)
-			}
-			if got := req.Header.Get("X-Custom-Client"); got != "my-client" {
-				t.Fatalf("X-Custom-Client = %q", got)
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(`{"id":"msg_1","type":"message","role":"assistant","model":"claude","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)),
-			}, nil
-		}),
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	resp, err := provider.Chat(context.Background(), &litellm.Request{
-		Model:     "claude",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-	})
-	if err != nil {
-		t.Fatalf("Chat returned error: %v", err)
-	}
-	if resp.Text() != "ok" {
-		t.Fatalf("text = %q", resp.Text())
-	}
-}
-
-func TestConvertResponsePreservesRedactedThinkingData(t *testing.T) {
-	resp, err := convertResponse(&anthropicResponse{
-		Model: "claude",
-		Content: []anthropicContent{
-			{Type: "redacted_thinking", Data: "opaque"},
-		},
-	}, "fallback")
-	if err != nil {
-		t.Fatalf("convertResponse returned error: %v", err)
-	}
-	if len(resp.Blocks) != 1 {
-		t.Fatalf("blocks = %#v", resp.Blocks)
-	}
-	reasoning, ok := resp.Blocks[0].(litellm.ReasoningBlock)
-	if !ok || string(reasoning.Redacted) != "opaque" {
-		t.Fatalf("reasoning block = %#v", resp.Blocks[0])
-	}
-}
-
-func TestConvertResponseMapsUsage(t *testing.T) {
-	resp, err := convertResponse(&anthropicResponse{
-		Model: "claude",
-		Usage: anthropicUsage{
-			InputTokens:          litellm.IntPtr(5),
-			OutputTokens:         litellm.IntPtr(9),
-			CacheReadInputTokens: litellm.IntPtr(2),
-		},
-		Content: []anthropicContent{{Type: "text", Text: "ok"}},
-	}, "fallback")
-	if err != nil {
-		t.Fatalf("convertResponse returned error: %v", err)
-	}
-	if *resp.Usage.InputTokens != 7 || *resp.Usage.OutputTokens != 9 || *resp.Usage.TotalTokens != 16 || *resp.Usage.CacheReadTokens != 2 {
-		t.Fatalf("usage = %+v", resp.Usage)
-	}
-}
-
-func TestConvertResponseDropsUnsupportedContentTypeWithWarning(t *testing.T) {
-	resp, err := convertResponse(&anthropicResponse{
-		Model: "claude",
-		Content: []anthropicContent{
-			{Type: "server_tool_use"},
-			{Type: "text", Text: "ok"},
-		},
-	}, "fallback")
-	if err != nil {
-		t.Fatalf("convertResponse returned error: %v", err)
-	}
-	if resp.Text() != "ok" {
-		t.Fatalf("text = %q", resp.Text())
-	}
-	if len(resp.Warnings) != 1 || resp.Warnings[0].Code != "anthropic.unsupported_content_block" {
-		t.Fatalf("warnings = %+v", resp.Warnings)
-	}
-}
-
-func TestConvertResponseRejectsNil(t *testing.T) {
-	_, err := convertResponse(nil, "claude")
-	if err == nil || !strings.Contains(err.Error(), "response cannot be nil") {
-		t.Fatalf("expected nil response error, got %v", err)
-	}
-}
-
-func TestResponseBlocksRoundTripBackIntoAssistantMessage(t *testing.T) {
-	input := map[string]any{"q": "x"}
-	resp, err := convertResponse(&anthropicResponse{
-		Model: "claude",
-		Content: []anthropicContent{
-			{Type: "thinking", Thinking: "Need lookup.", Signature: "sig-thinking"},
-			{Type: "tool_use", ID: "toolu_1", Name: "lookup", Input: &input},
-		},
-	}, "fallback")
-	if err != nil {
-		t.Fatalf("convertResponse returned error: %v", err)
-	}
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 4096
-	wire, _, err := provider.buildRequest(&litellm.Request{
-		Model:     "claude",
-		MaxTokens: &maxTokens,
-		Messages: []litellm.Message{
-			litellm.Assistant(resp.Blocks...),
-			litellm.ToolResultText("toolu_1", "result"),
-		},
-	}, false)
-	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
-	}
-	if len(wire.Messages) != 2 {
-		t.Fatalf("messages = %#v", wire.Messages)
-	}
-	assistant := wire.Messages[0].Content
-	if len(assistant) != 2 {
-		t.Fatalf("assistant content = %#v", assistant)
-	}
-	if assistant[0].Type != "thinking" || assistant[0].Signature != "sig-thinking" {
-		t.Fatalf("thinking block = %#v", assistant[0])
-	}
-	if assistant[1].Type != "tool_use" || assistant[1].ID != "toolu_1" || assistant[1].Name != "lookup" {
-		t.Fatalf("tool_use block = %#v", assistant[1])
-	}
-	result := wire.Messages[1].Content[0]
-	if result.Type != "tool_result" || result.ToolUseID != "toolu_1" {
-		t.Fatalf("tool_result block = %#v", result)
-	}
-}
-
-func TestStreamPreservesRedactedThinkingData(t *testing.T) {
-	stream := newStream(streamResponse(strings.Join([]string{
-		`event: content_block_start`,
-		`data: {"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"opaque"}}`,
-		``,
-		`data: {"type":"content_block_stop","index":0}`,
-		`event: message_stop`,
-		`data: {"type":"message_stop"}`,
-		``,
-	}, "\n")), &litellm.Request{Model: "claude"}, nil)
-	resp, err := litellm.Collect(stream)
-	if err != nil {
-		t.Fatalf("Collect returned error: %v", err)
-	}
-	if len(resp.Blocks) != 1 {
-		t.Fatalf("blocks = %#v", resp.Blocks)
-	}
-	reasoning, ok := resp.Blocks[0].(litellm.ReasoningBlock)
-	if !ok || string(reasoning.Redacted) != "opaque" {
-		t.Fatalf("reasoning block = %#v", resp.Blocks[0])
-	}
-}
-
-func TestStreamMergesUsageFromMessageDelta(t *testing.T) {
-	stream := newStream(streamResponse(strings.Join([]string{
-		`event: message_start`,
-		`data: {"type":"message_start","message":{"model":"claude","usage":{"input_tokens":5}}}`,
-		``,
-		`event: content_block_delta`,
-		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`,
-		``,
-		`event: message_delta`,
-		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":9}}`,
-		``,
-		`event: message_stop`,
-		`data: {"type":"message_stop"}`,
-		``,
-	}, "\n")), &litellm.Request{Model: "claude"}, nil)
-	resp, err := litellm.Collect(stream)
-	if err != nil {
-		t.Fatalf("Collect returned error: %v", err)
-	}
-	if resp.Text() != "ok" {
-		t.Fatalf("text = %q", resp.Text())
-	}
-	if *resp.Usage.OutputTokens != 9 || *resp.Usage.TotalTokens != 14 {
-		t.Fatalf("usage = %+v", resp.Usage)
-	}
-}
-
-func TestStreamRejectsEOFBeforeMessageStop(t *testing.T) {
-	stream := newStream(streamResponse(strings.Join([]string{
-		`event: content_block_delta`,
-		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
-		``,
-	}, "\n")), &litellm.Request{Model: "claude"}, nil)
-	_, err := litellm.Collect(stream)
-	if err == nil || !strings.Contains(err.Error(), "before message_stop") || !litellm.IsProviderError(err) {
-		t.Fatalf("expected truncated stream error, got %v", err)
-	}
-}
-
-func TestBuildRequestAdaptiveThinkingOnModernModels(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 4096
-	wire, warnings, err := provider.buildRequest(&litellm.Request{
-		Model:     "claude-opus-4-8",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "xhigh"},
-	}, false)
-	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
-	}
-	if len(warnings) != 0 {
-		t.Fatalf("warnings = %+v, want none", warnings)
-	}
-	if wire.Thinking == nil || wire.Thinking.Type != "adaptive" {
-		t.Fatalf("thinking = %+v, want adaptive without budget", wire.Thinking)
-	}
-	if wire.OutputConfig == nil || wire.OutputConfig.Effort != "xhigh" {
-		t.Fatalf("output_config = %+v, want effort xhigh", wire.OutputConfig)
-	}
-}
-
-func TestBuildRequestRejectsMinimalAdaptiveEffort(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 4096
-	_, _, err = provider.buildRequest(&litellm.Request{
-		Model:     "claude-sonnet-5",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "minimal"},
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "minimal") {
-		t.Fatalf("expected unsupported effort error, got %v", err)
-	}
-}
-
-func TestBuildRequestRejectsBudgetOnAdaptiveModels(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 4096
-	budget := 2048
-	_, _, err = provider.buildRequest(&litellm.Request{
-		Model:     "claude-opus-4-7",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, BudgetTokens: &budget},
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "budget_tokens") {
-		t.Fatalf("expected unsupported budget error, got %v", err)
-	}
-}
-
-func TestBuildRequestRejectsBudgetOnClaude46(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 4096
-	budget := 2048
-	_, _, err = provider.buildRequest(&litellm.Request{
-		Model:     "claude-sonnet-4-6",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, BudgetTokens: &budget},
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "budget_tokens is not supported") {
-		t.Fatalf("expected unsupported budget error, got %v", err)
-	}
-}
-
-func TestBuildRequestPassesModelSpecificEffortThrough(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 4096
-	wire, _, err := provider.buildRequest(&litellm.Request{
-		Model:     "claude-future",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "xhigh"},
-	}, false)
-	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
-	}
-	if wire.OutputConfig == nil || wire.OutputConfig.Effort != "xhigh" {
-		t.Fatalf("output_config = %+v, want effort xhigh", wire.OutputConfig)
-	}
-}
-
-func TestBuildRequestRejectsSamplingOnModernModels(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 1024
-	temp := 0.7
-	_, _, err = provider.buildRequest(&litellm.Request{
-		Model:       "claude-sonnet-5",
-		MaxTokens:   &maxTokens,
-		Temperature: &temp,
-		Messages:    []litellm.Message{litellm.UserText("hi")},
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "temperature must be 1") {
-		t.Fatalf("expected unsupported sampling error, got %v", err)
-	}
-}
-
-func TestBuildRequestPassesModelSpecificDisableThrough(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 1024
-	wire, _, err := provider.buildRequest(&litellm.Request{
-		Model:     "claude-fable-5",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingDisabled},
-	}, false)
-	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
-	}
-	if wire.Thinking == nil || wire.Thinking.Type != "disabled" {
-		t.Fatalf("thinking = %+v, want disabled passthrough", wire.Thinking)
-	}
-}
-
-func TestBuildRequestMapsIncludeOutputToDisplay(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 4096
-	wire, _, err := provider.buildRequest(&litellm.Request{
-		Model:     "claude-opus-4-8",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, IncludeOutput: true},
-	}, false)
-	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
-	}
-	if wire.Thinking == nil || wire.Thinking.Display != "summarized" {
-		t.Fatalf("thinking = %+v, want display summarized", wire.Thinking)
-	}
-}
-
-func TestBuildRequestMapsJSONSchemaResponseFormat(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 1024
-	schema, err := litellm.SchemaFrom(map[string]any{
-		"type":                 "object",
-		"properties":           map[string]any{"name": map[string]any{"type": "string"}},
-		"required":             []string{"name"},
-		"additionalProperties": false,
-	})
-	if err != nil {
-		t.Fatalf("SchemaFrom: %v", err)
-	}
-	wire, warnings, err := provider.buildRequest(&litellm.Request{
-		Model:     "claude-opus-4-8",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		ResponseFormat: &litellm.ResponseFormat{
-			Type:       litellm.ResponseFormatJSONSchema,
-			JSONSchema: &litellm.JSONSchema{Name: "person", Schema: schema},
-		},
-	}, false)
-	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
-	}
-	if len(warnings) != 0 {
-		t.Fatalf("warnings = %+v, want none", warnings)
-	}
-	if wire.OutputConfig == nil || wire.OutputConfig.Format == nil || wire.OutputConfig.Format.Type != "json_schema" {
-		t.Fatalf("output_config = %+v, want json_schema format", wire.OutputConfig)
-	}
-	if len(wire.OutputConfig.Format.Schema) == 0 {
-		t.Fatalf("format schema is empty")
-	}
-
-	_, _, err = provider.buildRequest(&litellm.Request{
-		Model:          "claude-opus-4-8",
-		MaxTokens:      &maxTokens,
-		Messages:       []litellm.Message{litellm.UserText("hi")},
-		ResponseFormat: &litellm.ResponseFormat{Type: litellm.ResponseFormatJSONObject},
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "json_object is not supported") {
-		t.Fatalf("expected json_object error, got %v", err)
-	}
-}
-
-func TestBuildRequestKeepsEmptyToolUseInput(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 1024
-	cases := []struct {
 		name string
-		call litellm.ToolUseBlock
+		req  func(*litellm.Request)
+		// want maps body fields to their JSON; "" asserts the field is absent.
+		want    map[string]string
+		wantErr string
 	}{
 		{
-			name: "missing arguments",
-			call: litellm.ToolUseBlock{ID: "toolu_empty", Name: "novel_context"},
+			name: "system text is a string",
+			req:  withMessages(litellm.System("be brief"), litellm.UserText("hi")),
+			want: map[string]string{"system": `"be brief"`},
 		},
 		{
-			name: "empty object arguments",
-			call: litellm.ToolUseBlock{
-				ID:        "toolu_empty",
-				Name:      "novel_context",
-				Arguments: litellm.MustJSONRaw(map[string]any{}),
+			name: "system blocks are hoisted and keep cache",
+			req: withMessages(litellm.UserText("hi"), litellm.Message{Role: litellm.RoleSystem, Blocks: []litellm.Block{
+				litellm.Text("a"), litellm.TextBlock{Text: "b", Cache: &litellm.CacheControl{}},
+			}}),
+			want: map[string]string{
+				"system":   `[{"type":"text","text":"a"},{"type":"text","text":"b","cache_control":{"type":"ephemeral"}}]`,
+				"messages": `[{"role":"user","content":[{"type":"text","text":"hi"}]}]`,
 			},
 		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			wire, _, err := provider.buildRequest(&litellm.Request{
-				Model:     "claude",
-				MaxTokens: &maxTokens,
-				Messages: []litellm.Message{
-					litellm.UserText("use the tool"),
-					litellm.Assistant(tc.call),
-				},
-			}, false)
+		{
+			name: "same roles merge",
+			req:  withMessages(litellm.UserText("a"), litellm.UserText("b"), litellm.AssistantText("c"), litellm.AssistantText("d")),
+			want: map[string]string{"messages": `[
+				{"role":"user","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]},
+				{"role":"assistant","content":[{"type":"text","text":"c"},{"type":"text","text":"d"}]}]`},
+		},
+		{
+			name: "tool results share a user turn",
+			req: withMessages(
+				litellm.Assistant(litellm.ToolUseBlock{ID: "t1", Name: "f"}, litellm.ToolUseBlock{ID: "t2", Name: "f", Arguments: json.RawMessage(`{}`)}),
+				litellm.ToolResultText("t1", "one"),
+				litellm.Message{Role: litellm.RoleTool, Blocks: []litellm.Block{litellm.ToolResultBlock{
+					ToolUseID: "t2", IsError: true, Content: []litellm.Block{litellm.TextBlock{Text: "boom", Cache: &litellm.CacheControl{TTL: litellm.CacheTTL5m}}},
+				}}},
+			),
+			want: map[string]string{"messages": `[
+				{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"f","input":{}},{"type":"tool_use","id":"t2","name":"f","input":{}}]},
+				{"role":"user","content":[
+					{"type":"tool_result","tool_use_id":"t1","content":"one"},
+					{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":[{"type":"text","text":"boom","cache_control":{"type":"ephemeral","ttl":"5m"}}]}]}]`},
+		},
+		{
+			name: "images",
+			req:  withMessages(litellm.User(litellm.ImageURL("https://x.test/a.png"), litellm.ImageBlock{Data: []byte("png"), MIME: "image/png"})),
+			want: map[string]string{"messages": `[{"role":"user","content":[
+				{"type":"image","source":{"type":"url","url":"https://x.test/a.png"}},
+				{"type":"image","source":{"type":"base64","media_type":"image/png","data":"cG5n"}}]}]`},
+		},
+		{
+			name:    "inline image without MIME",
+			req:     withMessages(litellm.User(litellm.ImageBlock{Data: []byte("png")})),
+			wantErr: "messages[0]: inline image requires MIME",
+		},
+		{
+			name:    "image without source",
+			req:     withMessages(litellm.User(litellm.ImageBlock{})),
+			wantErr: "messages[0]: image requires URL or data",
+		},
+		{
+			name:    "image file URI",
+			req:     withMessages(litellm.User(litellm.ImageBlock{FileURI: "gs://b/a.png"})),
+			wantErr: "messages[0]: image FileURI is not supported",
+		},
+		{
+			name: "empty tool result omits content",
+			req: withMessages(
+				litellm.Assistant(litellm.ToolUseBlock{ID: "t1", Name: "f"}),
+				litellm.ToolResult("t1"),
+			),
+			want: map[string]string{"messages": `[
+				{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"f","input":{}}]},
+				{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1"}]}]`},
+		},
+		{
+			name: "reasoning replays signature and redacted data",
+			req: withMessages(litellm.UserText("hi"), litellm.Assistant(
+				litellm.ReasoningBlock{Text: "t", Signature: "sig"},
+				litellm.ReasoningBlock{Redacted: []byte("opaque")},
+				litellm.ToolUseBlock{ID: "t1", Name: "f", Arguments: json.RawMessage(`{"q":"x"}`)},
+			)),
+			want: map[string]string{"messages": `[
+				{"role":"user","content":[{"type":"text","text":"hi"}]},
+				{"role":"assistant","content":[
+					{"type":"thinking","thinking":"t","signature":"sig"},
+					{"type":"redacted_thinking","data":"opaque"},
+					{"type":"tool_use","id":"t1","name":"f","input":{"q":"x"}}]}]`},
+		},
+		{
+			name:    "tool arguments must be an object",
+			req:     withMessages(litellm.Assistant(litellm.ToolUseBlock{ID: "t1", Name: "f", Arguments: json.RawMessage(`[1]`)})),
+			wantErr: `messages[0]: tool use "t1" arguments must be a JSON object`,
+		},
+		{
+			name: "tools",
+			req: func(r *litellm.Request) {
+				r.Tools = []litellm.Tool{
+					{Name: "a", Parameters: litellm.Schema(schema), Strict: litellm.StrictEnabled},
+					{Name: "b", Description: "d", Strict: litellm.StrictDisabled},
+				}
+			},
+			want: map[string]string{"tools": `[
+				{"name":"a","input_schema":` + schema + `,"strict":true},
+				{"name":"b","description":"d","input_schema":{"type":"object"},"strict":false}]`},
+		},
+		{name: "tool choice auto", req: withToolChoice(litellm.ToolChoice{Mode: litellm.ToolChoiceAuto}), want: map[string]string{"tool_choice": `{"type":"auto"}`}},
+		{name: "tool choice required", req: withToolChoice(litellm.ToolChoice{Mode: litellm.ToolChoiceRequired}), want: map[string]string{"tool_choice": `{"type":"any"}`}},
+		{name: "tool choice none", req: withToolChoice(litellm.ToolChoice{Mode: litellm.ToolChoiceNone}), want: map[string]string{"tool_choice": `{"type":"none"}`}},
+		{name: "tool choice name", req: withToolChoice(litellm.ToolChoice{Name: "a"}), want: map[string]string{"tool_choice": `{"type":"tool","name":"a"}`}},
+		{
+			name: "thinking unset",
+			req:  func(*litellm.Request) {},
+			want: map[string]string{"thinking": "", "output_config": ""},
+		},
+		{
+			name: "thinking budget",
+			req:  func(r *litellm.Request) { r.Thinking = &litellm.Thinking{BudgetTokens: new(2048)} },
+			want: map[string]string{"thinking": `{"type":"enabled","budget_tokens":2048}`, "output_config": ""},
+		},
+		{
+			name: "effort and json schema share output_config",
+			req: func(r *litellm.Request) {
+				r.Thinking = &litellm.Thinking{Effort: "high"}
+				r.ResponseFormat = jsonSchema
+			},
+			want: map[string]string{
+				"thinking":      `{"type":"adaptive"}`,
+				"output_config": `{"effort":"high","format":{"type":"json_schema","schema":` + schema + `}}`,
+			},
+		},
+		{
+			name: "text format",
+			req:  func(r *litellm.Request) { r.ResponseFormat = &litellm.ResponseFormat{Type: litellm.ResponseFormatText} },
+			want: map[string]string{"output_config": ""},
+		},
+		{
+			name: "json object",
+			req: func(r *litellm.Request) {
+				r.ResponseFormat = &litellm.ResponseFormat{Type: litellm.ResponseFormatJSONObject}
+			},
+			wantErr: "response_format json_object has no Messages API equivalent; use json_schema",
+		},
+		{
+			name: "sampling is sent as given",
+			req: func(r *litellm.Request) {
+				r.Temperature, r.TopP, r.Stop = new(0.5), new(0.9), []string{"END"}
+			},
+			want: map[string]string{"temperature": `0.5`, "top_p": `0.9`, "stop_sequences": `["END"]`, "stream": ""},
+		},
+		{
+			name:    "max_tokens is required",
+			req:     func(r *litellm.Request) { r.MaxTokens = nil },
+			wantErr: "max_tokens is required by the Messages API",
+		},
+		{
+			name: "options",
+			req: withOptions(map[string]any{
+				ProviderOptionMetadata: map[string]any{"user_id": "u"}, ProviderOptionTopK: 5, ProviderOptionServiceTier: "auto",
+			}),
+			want: map[string]string{"metadata": `{"user_id":"u"}`, "top_k": `5`, "service_tier": `"auto"`},
+		},
+		{
+			name: "tools option appends to generated tools",
+			req: func(r *litellm.Request) {
+				r.Tools = []litellm.Tool{{Name: "a"}}
+				withOptions(map[string]any{ProviderOptionTools: []any{map[string]any{"type": "web_search_20250305", "name": "web_search"}}})(r)
+			},
+			want: map[string]string{"tools": `[{"name":"a","input_schema":{"type":"object"}},{"type":"web_search_20250305","name":"web_search"}]`},
+		},
+		{
+			name: "output_config option merges into generated output_config",
+			req: func(r *litellm.Request) {
+				r.ResponseFormat = jsonSchema
+				withOptions(map[string]any{ProviderOptionOutputConfig: map[string]any{"effort": "medium"}})(r)
+			},
+			want: map[string]string{"output_config": `{"effort":"medium","format":{"type":"json_schema","schema":` + schema + `}}`},
+		},
+		{
+			name: "tool_choice option merges into generated tool_choice",
+			req: func(r *litellm.Request) {
+				withToolChoice(litellm.ToolChoice{Mode: litellm.ToolChoiceAuto})(r)
+				withOptions(map[string]any{ProviderOptionToolChoice: map[string]any{"disable_parallel_tool_use": true}})(r)
+			},
+			want: map[string]string{"tool_choice": `{"type":"auto","disable_parallel_tool_use":true}`},
+		},
+		{
+			name:    "unknown option",
+			req:     withOptions(map[string]any{"thinking": map[string]any{"type": "enabled"}}),
+			wantErr: `unsupported provider option "thinking"`,
+		},
+		{
+			name: "option conflicting with a generated field",
+			req: func(r *litellm.Request) {
+				r.Tools = []litellm.Tool{{Name: "a"}}
+				withOptions(map[string]any{ProviderOptionTools: map[string]any{"name": "b"}})(r)
+			},
+			wantErr: `provider option "tools" conflicts with a generated request field`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			req := &litellm.Request{Model: "claude", MaxTokens: new(1024), Messages: []litellm.Message{litellm.UserText("hi")}}
+			test.req(req)
+			data, err := buildRequest(req, false)
+			if test.wantErr != "" {
+				if err == nil || err.Error() != test.wantErr {
+					t.Fatalf("err = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
 			if err != nil {
-				t.Fatalf("buildRequest returned error: %v", err)
+				t.Fatalf("buildRequest: %v", err)
 			}
-			data, err := json.Marshal(wire)
-			if err != nil {
-				t.Fatalf("marshal wire: %v", err)
+			var body map[string]json.RawMessage
+			if err := json.Unmarshal(data, &body); err != nil {
+				t.Fatal(err)
 			}
-			var payload struct {
-				Messages []struct {
-					Content []struct {
-						Type  string          `json:"type"`
-						Input json.RawMessage `json:"input"`
-					} `json:"content"`
-				} `json:"messages"`
-			}
-			if err := json.Unmarshal(data, &payload); err != nil {
-				t.Fatalf("unmarshal wire: %v", err)
-			}
-			input := payload.Messages[1].Content[0].Input
-			if string(input) != `{}` {
-				t.Fatalf("tool_use input = %s, want {}\nwire: %s", input, data)
+			for key, want := range test.want {
+				got, ok := body[key]
+				if want == "" {
+					if ok {
+						t.Errorf("%s = %s, want absent", key, got)
+					}
+					continue
+				}
+				if !ok || !jsonEqual(t, got, want) {
+					t.Errorf("%s = %s\nwant %s", key, got, want)
+				}
 			}
 		})
 	}
 }
 
-func TestBuildRequestMergesConsecutiveToolResultMessages(t *testing.T) {
-	provider, err := New(Config{APIKey: "test"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 1024
-	wire, _, err := provider.buildRequest(&litellm.Request{
-		Model:     "claude",
-		MaxTokens: &maxTokens,
-		Messages: []litellm.Message{
-			litellm.UserText("hi"),
-			litellm.Assistant(
-				litellm.ToolUseBlock{ID: "toolu_1", Name: "a", Arguments: litellm.MustJSONRaw(map[string]any{})},
-				litellm.ToolUseBlock{ID: "toolu_2", Name: "b", Arguments: litellm.MustJSONRaw(map[string]any{})},
-			),
-			litellm.ToolResultText("toolu_1", "one"),
-			litellm.ToolResultText("toolu_2", "two"),
-		},
-	}, false)
-	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
-	}
-	if len(wire.Messages) != 3 {
-		t.Fatalf("messages = %d, want 3 (user, assistant, merged tool results)", len(wire.Messages))
-	}
-	last := wire.Messages[2]
-	if last.Role != "user" || len(last.Content) != 2 {
-		t.Fatalf("last message = %+v, want user with 2 tool_result blocks", last)
-	}
-	if last.Content[0].Type != "tool_result" || last.Content[1].Type != "tool_result" {
-		t.Fatalf("last message content = %+v", last.Content)
+func withMessages(messages ...litellm.Message) func(*litellm.Request) {
+	return func(r *litellm.Request) { r.Messages = messages }
+}
+
+func withToolChoice(choice litellm.ToolChoice) func(*litellm.Request) {
+	return func(r *litellm.Request) { r.ToolChoice = &choice }
+}
+
+func withOptions(values map[string]any) func(*litellm.Request) {
+	return func(r *litellm.Request) {
+		options, err := litellm.NewProviderOptions(values)
+		if err != nil {
+			panic(err)
+		}
+		r.ProviderOptions = options
 	}
 }
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) Do(req *http.Request) (*http.Response, error) {
-	return f(req)
-}
-
-type roundTripperFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
-}
-
-func TestNewRejectsAmbiguousTransportConfig(t *testing.T) {
-	_, err := New(Config{
-		APIKey:     "test-key",
-		HTTPClient: roundTripFunc(nil),
-		Transport:  roundTripperFunc(nil),
-	})
-	if err == nil || !strings.Contains(err.Error(), "HTTPClient and Transport are mutually exclusive") {
-		t.Fatalf("expected HTTPClient/Transport error, got %v", err)
-	}
-
-	_, err = New(Config{
-		APIKey:     "test-key",
-		HTTPClient: roundTripFunc(nil),
-		Retry:      retry.DefaultPolicy(),
-	})
-	if err == nil || !strings.Contains(err.Error(), "Retry cannot be used with a custom HTTPClient") {
-		t.Fatalf("expected HTTPClient/Retry error, got %v", err)
-	}
-}
-
-func streamResponse(body string) *http.Response {
-	return &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     make(http.Header),
-		Body:       io.NopCloser(strings.NewReader(body)),
-	}
-}
-
-func mustTool(t *testing.T, name, description string, schema any) litellm.Tool {
+func jsonEqual(t *testing.T, got json.RawMessage, want string) bool {
 	t.Helper()
-	tool, err := litellm.NewTool(name, description, schema)
-	if err != nil {
-		t.Fatalf("NewTool: %v", err)
+	var g, w any
+	if err := json.Unmarshal(got, &g); err != nil {
+		t.Fatalf("decode %s: %v", got, err)
 	}
-	return tool
-}
-
-func mustProviderOptions(t *testing.T, values map[string]any) litellm.ProviderOptions {
-	t.Helper()
-	o, err := litellm.NewProviderOptions(values)
-	if err != nil {
-		t.Fatal(err)
+	if err := json.NewDecoder(strings.NewReader(want)).Decode(&w); err != nil {
+		t.Fatalf("decode want %s: %v", want, err)
 	}
-	return o
+	return reflect.DeepEqual(g, w)
 }

@@ -56,7 +56,7 @@ func TestSemanticConventionMessageEncoding(t *testing.T) {
 		),
 		litellm.Assistant(
 			litellm.ReasoningBlock{Text: "check weather"},
-			litellm.ToolUseBlock{ID: "call_1", Name: "weather", Arguments: litellm.MustJSONRaw(map[string]any{"city": "Paris"})},
+			litellm.ToolUseBlock{ID: "call_1", Name: "weather", Arguments: json.RawMessage(`{"city":"Paris"}`)},
 		),
 		litellm.ToolResultText("call_1", "sunny"),
 	}
@@ -73,7 +73,7 @@ func TestSemanticConventionMessageEncoding(t *testing.T) {
 	]`)
 
 	got, err = marshalOutputMessages([]litellm.Block{
-		litellm.ToolUseBlock{ID: "call_2", Name: "lookup", Arguments: litellm.MustJSONRaw(map[string]any{"q": "x"})},
+		litellm.ToolUseBlock{ID: "call_2", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
 	}, litellm.FinishReasonToolCall)
 	if err != nil {
 		t.Fatalf("marshalOutputMessages returned error: %v", err)
@@ -98,17 +98,9 @@ func TestSemanticProviderNames(t *testing.T) {
 }
 
 func TestSemanticOperationNames(t *testing.T) {
-	tests := []struct {
-		meta litellm.CallInfo
-		want string
-	}{
-		{meta: litellm.CallInfo{Provider: "openai", Operation: "chat"}, want: "chat"},
-		{meta: litellm.CallInfo{Provider: "openai", Operation: "stream", Streaming: true}, want: "chat"},
-		{meta: litellm.CallInfo{Provider: "gemini", Operation: "stream", Streaming: true}, want: "generate_content"},
-	}
-	for _, test := range tests {
-		if got := semanticOperation(test.meta); got != test.want {
-			t.Errorf("semanticOperation(%+v) = %q, want %q", test.meta, got, test.want)
+	for provider, want := range map[string]string{"openai": "chat", "bedrock": "chat", "gemini": "generate_content"} {
+		if got := semanticOperation(provider); got != want {
+			t.Errorf("semanticOperation(%q) = %q, want %q", provider, got, want)
 		}
 	}
 }
@@ -157,7 +149,7 @@ func TestObserverContextPropagationAndContent(t *testing.T) {
 				_, child := observer.tracer.Start(ctx, "http")
 				child.End()
 			}
-			usage := litellm.Usage{InputTokens: litellm.IntPtr(10), OutputTokens: litellm.IntPtr(5), ReasoningTokens: litellm.IntPtr(2), CacheReadTokens: litellm.IntPtr(3), CacheWriteTokens: litellm.IntPtr(4)}
+			usage := litellm.Usage{InputTokens: new(10), OutputTokens: new(5), ReasoningTokens: new(2), CacheReadTokens: new(3), CacheWriteTokens: new(4)}
 			provider := testProvider{
 				chat: func(ctx context.Context, _ *litellm.Request) (*litellm.Response, error) {
 					checkContext(ctx)
@@ -165,7 +157,7 @@ func TestObserverContextPropagationAndContent(t *testing.T) {
 				},
 				stream: func(ctx context.Context, _ *litellm.Request) (litellm.Stream, error) {
 					checkContext(ctx)
-					return &testStream{events: []litellm.Event{litellm.ContentStart{Block: litellm.TextBlock{Text: "hel"}, ContentIndex: litellm.IntPtr(0)}, litellm.ContentDelta{Text: "lo", ContentIndex: litellm.IntPtr(0)}, litellm.ContentEnd{ContentIndex: litellm.IntPtr(0)}, litellm.UsageEvent{Usage: usage}, litellm.DoneEvent{Provider: "openai", Model: "m", FinishReason: litellm.FinishReasonStop}}}, nil
+					return &testStream{events: []litellm.Event{litellm.BlockStart{Block: litellm.TextBlock{}}, litellm.TextDelta{Text: "hel"}, litellm.TextDelta{Text: "lo"}, litellm.BlockEnd{}, litellm.UsageEvent{Usage: usage}, litellm.DoneEvent{Provider: "openai", Model: "m", FinishReason: litellm.FinishReasonStop}}}, nil
 				},
 			}
 			c, err := litellm.New(provider, litellm.WithObservers(observer))
@@ -222,12 +214,12 @@ func TestObserverPartialAndTerminalStatus(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			observer, rec := newTestObserver(t, WithCaptureContent(true))
 			p := testProvider{stream: func(context.Context, *litellm.Request) (litellm.Stream, error) {
-				s := &testStream{events: []litellm.Event{litellm.ContentDelta{Text: "partial"}}, err: errors.New("provider failed")}
+				s := &testStream{events: []litellm.Event{litellm.BlockStart{Block: litellm.TextBlock{}}, litellm.TextDelta{Text: "partial"}}, err: errors.New("provider failed")}
 				if kind == "canceled" {
 					s.err = context.Canceled
 				}
 				if kind == "protocol" {
-					s.events = []litellm.Event{litellm.ContentStart{Block: litellm.TextBlock{Text: "partial"}, ContentIndex: litellm.IntPtr(0)}, litellm.DoneEvent{Provider: "openai", Model: "m"}}
+					s.events = []litellm.Event{litellm.BlockStart{Block: litellm.TextBlock{}}, litellm.TextDelta{Text: "partial"}, litellm.DoneEvent{Provider: "openai", Model: "m"}}
 					s.err = nil
 				}
 				return s, nil
@@ -238,9 +230,10 @@ func TestObserverPartialAndTerminalStatus(t *testing.T) {
 				t.Fatal(err)
 			}
 			if kind == "closed" {
-				_, err = s.Next()
-				if err != nil {
-					t.Fatal(err)
+				for range 2 {
+					if _, err = s.Next(); err != nil {
+						t.Fatal(err)
+					}
 				}
 			} else {
 				_, err = litellm.Collect(s)
@@ -308,7 +301,7 @@ func TestObserverConcurrentCallsAndAttributes(t *testing.T) {
 func TestObserverPanicIsolation(t *testing.T) {
 	observer, rec := newTestObserver(t, WithSpanAttributes(func(context.Context) []attribute.KeyValue { panic("resolver") }))
 	ctx := context.Background()
-	next, call := observer.Start(ctx, litellm.CallInfo{Model: "m"})
+	next, call := observer.Start(ctx, litellm.CallInfo{Request: &litellm.Request{Model: "m"}})
 	if next != ctx || call != nil || len(rec.Ended()) != 0 {
 		t.Fatal("panic corrupted context or leaked observation")
 	}
@@ -316,8 +309,8 @@ func TestObserverPanicIsolation(t *testing.T) {
 
 func TestUsageUnknownIsOmittedAndZeroIsRecorded(t *testing.T) {
 	observer, rec := newTestObserver(t)
-	_, call := observer.Start(context.Background(), litellm.CallInfo{Provider: "test", Model: "m", Operation: "chat"})
-	call.End(litellm.CallResult{Status: litellm.CallCompleted, Response: &litellm.Response{Model: "m", Usage: litellm.Usage{InputTokens: litellm.IntPtr(0)}}})
+	_, call := observer.Start(context.Background(), litellm.CallInfo{Provider: "test", Request: &litellm.Request{Model: "m"}})
+	call.End(litellm.CallResult{Status: litellm.CallCompleted, Response: &litellm.Response{Model: "m", Usage: litellm.Usage{InputTokens: new(0)}}})
 	spans := rec.Ended()
 	if len(spans) != 1 {
 		t.Fatalf("spans = %d", len(spans))

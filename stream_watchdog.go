@@ -8,10 +8,11 @@ import (
 	"time"
 )
 
-var ErrStreamIdle = errors.New("stream idle timeout")
+var errStreamIdle = errors.New("stream idle timeout")
 
+// IsStreamIdleError reports whether err is the WithStreamIdleTimeout failure.
 func IsStreamIdleError(err error) bool {
-	return errors.Is(err, ErrStreamIdle)
+	return errors.Is(err, errStreamIdle)
 }
 
 type streamIdleWatchdog struct {
@@ -37,12 +38,6 @@ func newStreamIdleWatchdog(inner Stream, cancel context.CancelFunc, timeout time
 	}
 	w.timer = time.AfterFunc(timeout, w.fire)
 	return w
-}
-
-// WithStreamIdleWatchdog wraps inner with a per-event idle timeout. It returns
-// inner unchanged when timeout <= 0 or inner is nil.
-func WithStreamIdleWatchdog(inner Stream, cancel context.CancelFunc, timeout time.Duration, provider string) Stream {
-	return newStreamIdleWatchdog(inner, cancel, timeout, provider)
 }
 
 func (w *streamIdleWatchdog) Next() (Event, error) {
@@ -104,13 +99,13 @@ func (w *streamIdleWatchdog) stop() {
 }
 
 func (w *streamIdleWatchdog) idleError() error {
-	return &LiteLLMError{
+	return &Error{
 		Type:      ErrorTypeTimeout,
 		Provider:  w.provider,
 		Message:   fmt.Sprintf("stream idle timeout: no event received for %s", w.timeout),
 		Temporary: true,
-		Cause:     ErrStreamIdle,
+		Cause:     errStreamIdle,
 	}
 }
 
-func (s *streamIdleWatchdog) eventCollector() *EventCollector { return streamCollector(s.inner) }
+func (s *streamIdleWatchdog) eventCollector() *collector { return streamCollector(s.inner) }

@@ -1,3 +1,4 @@
+// Package gemini connects to the Gemini API.
 package gemini
 
 import (
@@ -10,152 +11,127 @@ import (
 	"strings"
 
 	"github.com/voocel/litellm"
-	"github.com/voocel/litellm/retry"
+	"github.com/voocel/litellm/internal/wire"
 )
 
-const defaultBaseURL = "https://generativelanguage.googleapis.com"
-
+// Config configures the Gemini API client. An API key is required.
 type Config struct {
+	// APIKey authenticates requests; APIKeyFunc, when set, resolves it per
+	// request instead.
 	APIKey     string
 	APIKeyFunc func(context.Context) (string, error)
-	BaseURL    string
-	HTTPClient HTTPClient
-	Transport  http.RoundTripper
-	Retry      *retry.Policy
+	// BaseURL is the API origin, https://generativelanguage.googleapis.com by
+	// default.
+	BaseURL string
+	// HTTPClient sends requests; nil uses http.DefaultClient. Wrap it with
+	// retry.NewHTTPClient to retry.
+	HTTPClient litellm.HTTPClient
+	UserAgent  string
+	// Headers are set after the defaults, so they can override them.
+	Headers map[string]string
 }
 
-type HTTPClient interface {
-	Do(*http.Request) (*http.Response, error)
-}
-
+// Provider implements litellm.Provider, litellm.CapabilityProvider and
+// litellm.ModelLister.
 type Provider struct {
 	cfg Config
 }
 
+// New returns a Provider for cfg.
 func New(cfg Config) (*Provider, error) {
 	if cfg.APIKey == "" && cfg.APIKeyFunc == nil {
-		return nil, fmt.Errorf("gemini: api key is required")
-	}
-	if cfg.HTTPClient != nil && cfg.Transport != nil {
-		return nil, fmt.Errorf("gemini: HTTPClient and Transport are mutually exclusive")
-	}
-	if cfg.HTTPClient != nil && cfg.Retry != nil {
-		return nil, fmt.Errorf("gemini: Retry cannot be used with a custom HTTPClient; use Transport or configure retry on the client")
+		return nil, litellm.NewError("gemini", litellm.ErrorTypeValidation, "api key is required", nil)
 	}
 	if cfg.BaseURL == "" {
-		cfg.BaseURL = defaultBaseURL
+		cfg.BaseURL = "https://generativelanguage.googleapis.com"
 	}
-	if cfg.HTTPClient == nil {
-		base := cfg.Transport
-		if base == nil {
-			base = http.DefaultTransport
-		}
-		cfg.HTTPClient = &http.Client{Transport: retry.NewTransport(base, cfg.Retry)}
+	cfg.HTTPClient = wire.HTTPClient(cfg.HTTPClient)
+	if cfg.UserAgent == "" {
+		cfg.UserAgent = wire.DefaultUserAgent
 	}
 	return &Provider{cfg: cfg}, nil
 }
 
-func Factory(cfg Config) (litellm.Provider, error) {
-	return New(cfg)
-}
-
+// Name returns "gemini".
 func (p *Provider) Name() string {
 	return "gemini"
 }
 
+// Capabilities reports the static protocol facts.
+func (p *Provider) Capabilities() litellm.Capabilities {
+	return litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true, ThinkingBudget: true, ProviderOptions: sortedOptions()}
+}
+
+// Chat sends a generateContent request.
 func (p *Provider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
-	wire, err := p.buildRequest(req)
+	resp, err := p.post(ctx, req, false)
 	if err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
-	}
-	body, err := json.Marshal(wire)
-	if err != nil {
-		return nil, fmt.Errorf("gemini: marshal request: %w", err)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.url(req.Model, "generateContent"), bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("gemini: create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if err := p.setHeaders(ctx, httpReq); err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
-	}
-	resp, err := p.cfg.HTTPClient.Do(httpReq)
-	if err != nil {
-		return nil, litellm.NewNetworkError(p.Name(), "request failed", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		return nil, litellm.NewHTTPError(p.Name(), resp.StatusCode, string(data))
-	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, litellm.NewNetworkError(p.Name(), "read response failed", err)
 	}
 	var parsed response
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		return nil, litellm.NewProviderErrorWithCause(p.Name(), litellm.ErrorTypeProvider, "gemini: decode response", err)
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeProvider, "decode response", err)
 	}
-	out, err := convertResponse(&parsed, req)
-	if err != nil {
-		return nil, litellm.WrapError(err, p.Name())
-	}
-	litellm.CaptureRawResponse(req, out, data)
+	out := convertResponse(&parsed, req.Model)
+	out.Raw = data
 	return out, nil
 }
 
+// Stream sends a streamGenerateContent request.
 func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.Stream, error) {
-	wire, err := p.buildRequest(req)
+	resp, err := p.post(ctx, req, true)
 	if err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
+		return nil, err
 	}
-	body, err := json.Marshal(wire)
-	if err != nil {
-		return nil, fmt.Errorf("gemini: marshal stream request: %w", err)
-	}
-	endpoint := p.url(req.Model, "streamGenerateContent") + "?alt=sse"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("gemini: create stream request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
-	if err := p.setHeaders(ctx, httpReq); err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
-	}
-	resp, err := p.cfg.HTTPClient.Do(httpReq)
-	if err != nil {
-		return nil, litellm.NewNetworkError(p.Name(), "stream request failed", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, litellm.NewHTTPError(p.Name(), resp.StatusCode, string(data))
-	}
-	return newStream(resp, req), nil
+	return newStream(resp, req.Model), nil
 }
 
-func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.modelsURL(), nil)
+func (p *Provider) post(ctx context.Context, req *litellm.Request, stream bool) (*http.Response, error) {
+	body, err := buildRequest(req)
 	if err != nil {
-		return nil, fmt.Errorf("gemini: create models request: %w", err)
+		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
+	}
+	method := "generateContent"
+	if stream {
+		method = "streamGenerateContent?alt=sse"
+	}
+	url := fmt.Sprintf("%s/v1beta/models/%s:%s", strings.TrimRight(p.cfg.BaseURL, "/"), req.Model, method)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeInternal, "create request", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if stream {
+		httpReq.Header.Set("Accept", "text/event-stream")
 	}
 	if err := p.setHeaders(ctx, httpReq); err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
+		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
 	}
-	resp, err := p.cfg.HTTPClient.Do(httpReq)
+	return wire.Do(p.cfg.HTTPClient, httpReq, p.Name(), "request")
+}
+
+// ListModels lists the models available to the API key.
+func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(p.cfg.BaseURL, "/")+"/v1beta/models", nil)
 	if err != nil {
-		return nil, litellm.NewNetworkError(p.Name(), "models request failed", err)
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeInternal, "create models request", err)
+	}
+	if err := p.setHeaders(ctx, httpReq); err != nil {
+		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
+	}
+	resp, err := wire.Do(p.cfg.HTTPClient, httpReq, p.Name(), "models request")
+	if err != nil {
+		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		return nil, litellm.NewHTTPError(p.Name(), resp.StatusCode, string(data))
-	}
 	var payload modelList
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, litellm.NewProviderErrorWithCause(p.Name(), litellm.ErrorTypeProvider, "gemini: decode models response", err)
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeProvider, "decode models response", err)
 	}
 	models := make([]litellm.ModelInfo, 0, len(payload.Models))
 	for _, item := range payload.Models {
@@ -176,49 +152,12 @@ func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) 
 	return models, nil
 }
 
-func (p *Provider) url(model, method string) string {
-	baseURL := strings.TrimRight(p.cfg.BaseURL, "/")
-	return fmt.Sprintf("%s/v1beta/models/%s:%s", baseURL, model, method)
-}
-
-func (p *Provider) modelsURL() string {
-	baseURL := strings.TrimRight(p.cfg.BaseURL, "/")
-	return baseURL + "/v1beta/models"
-}
-
 func (p *Provider) setHeaders(ctx context.Context, req *http.Request) error {
-	key, err := p.apiKey(ctx)
+	key, err := wire.APIKey(ctx, p.cfg.APIKey, p.cfg.APIKeyFunc, true)
 	if err != nil {
 		return err
 	}
+	req.Header.Set("User-Agent", p.cfg.UserAgent)
 	req.Header.Set("x-goog-api-key", key)
-	return nil
-}
-
-func (p *Provider) apiKey(ctx context.Context) (string, error) {
-	if p.cfg.APIKeyFunc == nil {
-		if p.cfg.APIKey == "" {
-			return "", fmt.Errorf("gemini: api key is required")
-		}
-		return p.cfg.APIKey, nil
-	}
-	key, err := p.cfg.APIKeyFunc(ctx)
-	if err != nil {
-		return "", fmt.Errorf("gemini: resolve api key: %w", err)
-	}
-	if key == "" {
-		return "", fmt.Errorf("gemini: api key is required")
-	}
-	return key, nil
-}
-
-// NewClient builds the provider from cfg and wraps it in a ready *litellm.Client.
-// It is a convenience for the common single-provider case. It calls New(cfg)
-// and then litellm.New(provider, opts...).
-func NewClient(cfg Config, opts ...litellm.ClientOption) (*litellm.Client, error) {
-	p, err := New(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return litellm.New(p, opts...)
+	return wire.SetHeaders(req.Header, p.cfg.Headers)
 }

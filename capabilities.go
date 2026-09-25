@@ -1,132 +1,23 @@
 package litellm
 
-type Support int
-
-const (
-	SupportUnknown Support = iota
-	SupportNo
-	SupportYes
-	SupportPartial
-)
-
-type CapabilityProvider interface {
-	Capabilities(model string) Capabilities
-}
-
+// Capabilities states what a provider adapter can express on the wire. It is
+// static per provider: whether a model honors a request is the vendor's call,
+// and the vendor's error is the source of truth.
 type Capabilities struct {
-	Provider string
-	Model    string
-
-	Thinking   ThinkingCapabilities
-	Reasoning  ReasoningCapabilities
-	Tools      ToolCapabilities
-	Structured StructuredCapabilities
-	Media      MediaCapabilities
-	Cache      CacheCapabilities
-	Streaming  StreamingCapabilities
-	Usage      UsageCapabilities
+	// Thinking reports that Request.Thinking is sent to the vendor.
+	Thinking bool
+	// DisableThinking, ThinkingEffort and ThinkingBudget report that
+	// ThinkingDisabled, Thinking.Effort and Thinking.BudgetTokens are sent;
+	// otherwise the adapter rejects them before sending.
+	DisableThinking bool
+	ThinkingEffort  bool
+	ThinkingBudget  bool
+	// ProviderOptions lists the accepted Request.ProviderOptions keys, sorted.
+	// A provider that passes every key through, such as compat, lists none.
+	ProviderOptions []string
 }
 
-type ThinkingCapabilities struct {
-	Supported     Support
-	Disable       Support
-	Efforts       []string
-	BudgetTokens  Support
-	IncludeOutput Support
-	Notes         []string
-}
-
-func (c ThinkingCapabilities) SupportsEffort(effort string) bool {
-	return containsString(c.Efforts, effort)
-}
-
-type ReasoningCapabilities struct {
-	Blocks          Support
-	StreamingDeltas Support
-	ReasoningTokens Support
-}
-
-type ToolCapabilities struct {
-	Calls               Support
-	ParallelCalls       Support
-	StrictSchema        Support
-	Choice              Support
-	MultimodalResults   Support
-	RequiresAdjacency   bool
-	RoundTripSignatures Support
-	HostedProviderTools Support
-}
-
-type StructuredCapabilities struct {
-	JSONObject Support
-	JSONSchema Support
-	Strict     Support
-	PromptOnly bool
-}
-
-type MediaCapabilities struct {
-	ImageURL    Support
-	ImageBytes  Support
-	FileURI     Support
-	ImageDetail Support
-}
-
-type CacheCapabilities struct {
-	Block         Support
-	RequestPolicy Support
-	PromptKey     Support
-	Retention     Support
-	UsageRead     Support
-	UsageWrite    Support
-}
-
-type StreamingCapabilities struct {
-	Supported       Support
-	Usage           Support
-	ReasoningDeltas Support
-	ToolCallDeltas  Support
-	NativeResponses Support
-	IdleTimeout     Support
-}
-
-type UsageCapabilities struct {
-	InputTokens      Support
-	OutputTokens     Support
-	TotalTokens      Support
-	ReasoningTokens  Support
-	CacheReadTokens  Support
-	CacheWriteTokens Support
-}
-
-func GetCapabilities(provider Provider, model string) Capabilities {
-	if provider == nil {
-		return Capabilities{Model: model}
-	}
-	if cp, ok := provider.(CapabilityProvider); ok {
-		caps := cp.Capabilities(model)
-		if caps.Provider == "" {
-			caps.Provider = provider.Name()
-		}
-		if caps.Model == "" {
-			caps.Model = model
-		}
-		return caps
-	}
-	return Capabilities{
-		Provider: provider.Name(),
-		Model:    model,
-	}
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
-
-func PortableThinkingEfforts() []string {
-	return []string{"minimal", "low", "medium", "high", "xhigh", "max"}
+// CapabilityProvider is implemented by providers that declare Capabilities.
+type CapabilityProvider interface {
+	Capabilities() Capabilities
 }

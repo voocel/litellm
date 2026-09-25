@@ -5,572 +5,158 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"hash/crc32"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/voocel/litellm"
-	"github.com/voocel/litellm/internal/testgolden"
 	"github.com/voocel/litellm/retry"
 )
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
+type doerFunc func(*http.Request) (*http.Response, error)
 
-func (f roundTripFunc) Do(req *http.Request) (*http.Response, error) {
-	return f(req)
-}
+func (f doerFunc) Do(req *http.Request) (*http.Response, error) { return f(req) }
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
-func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
-}
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
-func TestBuildRequestToolCacheAndThinking(t *testing.T) {
-	provider := mustProvider(t)
-	maxTokens := 4096
-	temp := 1.0
-	tool := mustTool(t, "lookup", "Lookup data.", map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"q": map[string]any{"type": "string"},
-		},
-		"required": []string{"q"},
-	})
-	tool.Strict = litellm.StrictEnabled
-
-	wire, err := provider.buildRequest(&litellm.Request{
-		Model:       "anthropic.claude-opus-5",
-		MaxTokens:   &maxTokens,
-		Temperature: &temp,
-		Messages: []litellm.Message{
-			litellm.System("be concise"),
-			litellm.User(litellm.Text("use tool")),
-			litellm.Assistant(litellm.ToolUseBlock{
-				ID:        "toolu_1",
-				Name:      "lookup",
-				Arguments: litellm.MustJSONRaw(map[string]any{"q": "x"}),
-			}),
-			litellm.ToolResultText("toolu_1", "result"),
-		},
-		Tools:    []litellm.Tool{tool},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "low"},
-		Cache:    &litellm.CachePolicy{Retention: "1h"},
-	})
-	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
-	}
-	testgolden.AssertJSON(t, "../../testdata/bedrock/request_converse_tools.golden.json", wire)
-
-	data, err := json.Marshal(wire)
-	if err != nil {
-		t.Fatalf("marshal wire: %v", err)
-	}
-	jsonText := string(data)
-	for _, want := range []string{
-		`"system":[{"text":"be concise"},{"cachePoint":{"type":"default","ttl":"1h"}}]`,
-		`"toolUse":{"toolUseId":"toolu_1","name":"lookup","input":{"q":"x"}}`,
-		`"role":"user","content":[{"toolResult":{"toolUseId":"toolu_1","content":[{"text":"result"}]}}`,
-		`"inputSchema":{"json":{"properties":{"q":{"type":"string"}},"required":["q"],"type":"object"}}`,
-		`"strict":true`,
-		`"output_config":{"effort":"low"}`,
-		`"thinking":{"type":"adaptive"}`,
-	} {
-		if !strings.Contains(jsonText, want) {
-			t.Fatalf("wire JSON missing %s:\n%s", want, jsonText)
-		}
-	}
-	if len(wire.ToolConfig.Tools) < 2 || wire.ToolConfig.Tools[len(wire.ToolConfig.Tools)-1].CachePoint == nil {
-		t.Fatalf("expected cache point after tools: %+v", wire.ToolConfig.Tools)
-	}
-}
-
-func TestBuildRequestUsesDefaultAdaptiveThinking(t *testing.T) {
-	provider := mustProvider(t)
-	maxTokens := 4096
-	wire, err := provider.buildRequest(&litellm.Request{
-		Model:     "anthropic.claude-future",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled},
-	})
-	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
-	}
-	thinking := wire.AdditionalModelRequestFields["thinking"].(map[string]any)
-	if thinking["type"] != "adaptive" {
-		t.Fatalf("thinking = %#v", thinking)
-	}
-}
-
-func TestBuildRequestConvertsToolChoice(t *testing.T) {
-	provider := mustProvider(t)
-	tool := mustTool(t, "lookup", "Lookup.", map[string]any{"type": "object"})
-
-	for _, test := range []struct {
-		name   string
-		choice *litellm.ToolChoice
-		want   string
-	}{
-		{name: "auto", choice: &litellm.ToolChoice{Mode: "auto"}, want: `{"auto":{}}`},
-		{name: "required", choice: &litellm.ToolChoice{Mode: "required"}, want: `{"any":{}}`},
-		{name: "named function", choice: &litellm.ToolChoice{Name: "lookup"}, want: `{"tool":{"name":"lookup"}}`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			wire, err := provider.buildRequest(&litellm.Request{
-				Model:      "model",
-				Messages:   []litellm.Message{litellm.UserText("hi")},
-				Tools:      []litellm.Tool{tool},
-				ToolChoice: test.choice,
-			})
-			if err != nil {
-				t.Fatalf("buildRequest: %v", err)
-			}
-			data, err := json.Marshal(wire.ToolConfig.ToolChoice)
-			if err != nil {
-				t.Fatalf("Marshal: %v", err)
-			}
-			if string(data) != test.want {
-				t.Fatalf("toolChoice = %s, want %s", data, test.want)
-			}
-		})
-	}
-
-	wire, err := provider.buildRequest(&litellm.Request{
-		Model:      "model",
-		Messages:   []litellm.Message{litellm.UserText("hi")},
-		Tools:      []litellm.Tool{tool},
-		ToolChoice: &litellm.ToolChoice{Mode: "none"},
-	})
-	if err != nil {
-		t.Fatalf("buildRequest none: %v", err)
-	}
-	if wire.ToolConfig != nil {
-		t.Fatalf("toolConfig = %#v, want omitted", wire.ToolConfig)
-	}
-}
-
-func TestBuildRequestMapsMaxThinkingEffort(t *testing.T) {
-	provider := mustProvider(t)
-	maxTokens := 65536
-	wire, err := provider.buildRequest(&litellm.Request{
-		Model:     "anthropic.claude-future",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "max"},
-	})
-	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
-	}
-	thinking, ok := wire.AdditionalModelRequestFields["thinking"].(map[string]any)
-	if !ok || thinking["type"] != "adaptive" {
-		t.Fatalf("thinking = %#v, want adaptive", wire.AdditionalModelRequestFields["thinking"])
-	}
-	output := wire.AdditionalModelRequestFields["output_config"].(map[string]any)
-	if output["effort"] != "max" {
-		t.Fatalf("output_config = %#v, want effort max", output)
+func TestNewRequiresCredentials(t *testing.T) {
+	_, err := New(Config{})
+	if !litellm.IsValidationError(err) || err.Error() != "bedrock: credentials provider is required" {
+		t.Fatalf("err = %v", err)
 	}
 }
 
 func TestCapabilities(t *testing.T) {
-	provider := mustProvider(t)
-	caps := provider.Capabilities("anthropic.claude-future")
-	if caps.Thinking.Supported != litellm.SupportYes || caps.Thinking.Disable != litellm.SupportUnknown || !caps.Thinking.SupportsEffort("low") || !caps.Thinking.SupportsEffort("high") || caps.Thinking.SupportsEffort("xhigh") || caps.Thinking.SupportsEffort("max") {
-		t.Fatalf("thinking caps = %+v", caps.Thinking)
-	}
-	if caps.Structured.JSONObject != litellm.SupportNo || caps.Structured.JSONSchema != litellm.SupportPartial {
-		t.Fatalf("structured caps = %+v", caps.Structured)
-	}
-	if caps.Structured.Strict != litellm.SupportPartial {
-		t.Fatalf("structured strict = %v, want partial", caps.Structured.Strict)
-	}
-}
-
-func TestBuildRequestUsesAdaptiveThinkingForClaude47(t *testing.T) {
-	provider := mustProvider(t)
-	maxTokens := 4096
-	wire, err := provider.buildRequest(&litellm.Request{
-		Model:     "anthropic.claude-opus-4-7-v1:0",
-		MaxTokens: &maxTokens,
-		Messages:  []litellm.Message{litellm.UserText("hi")},
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
-	})
-	if err != nil {
-		t.Fatalf("buildRequest: %v", err)
-	}
-	thinking := wire.AdditionalModelRequestFields["thinking"].(map[string]any)
-	if thinking["type"] != "adaptive" {
-		t.Fatalf("thinking = %#v", thinking)
-	}
-	output := wire.AdditionalModelRequestFields["output_config"].(map[string]any)
-	if output["effort"] != "high" {
-		t.Fatalf("output_config = %#v", output)
-	}
-}
-
-func TestChatRetriesAndSignsEachAttempt(t *testing.T) {
-	var attempts int
-	provider, err := New(Config{
-		Region:      "us-west-2",
-		BaseURL:     "https://bedrock-runtime.us-west-2.amazonaws.com",
-		Credentials: StaticCredentials("AKID", "SECRET", ""),
-		Retry:       &retry.Policy{MaxAttempts: 2, InitialDelay: 1},
-		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-			attempts++
-			if !strings.Contains(req.Header.Get("Authorization"), "AWS4-HMAC-SHA256 Credential=AKID/") {
-				t.Fatalf("attempt %d missing signature: %s", attempts, req.Header.Get("Authorization"))
-			}
-			if attempts == 1 {
-				return jsonResponse(http.StatusTooManyRequests, `{"error":"retry"}`), nil
-			}
-			return jsonResponse(http.StatusOK, `{
-				"output":{"message":{"role":"assistant","content":[{"text":"ok"}]}},
-				"stopReason":"end_turn"
-			}`), nil
-		}),
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	resp, err := provider.Chat(context.Background(), &litellm.Request{
-		Model:    "anthropic.claude-3-5-sonnet-20240620-v1:0",
-		Messages: []litellm.Message{litellm.UserText("hi")},
-	})
-	if err != nil {
-		t.Fatalf("Chat returned error: %v", err)
-	}
-	if attempts != 2 || resp.Text() != "ok" {
-		t.Fatalf("attempts/text = %d/%q", attempts, resp.Text())
-	}
-}
-
-func TestNewRejectsAmbiguousTransportConfig(t *testing.T) {
-	_, err := New(Config{
-		Credentials: StaticCredentials("AKID", "SECRET", ""),
-		HTTPClient:  roundTripFunc(nil),
-		Transport:   roundTripperFunc(nil),
-	})
-	if err == nil || !strings.Contains(err.Error(), "HTTPClient and Transport are mutually exclusive") {
-		t.Fatalf("expected HTTPClient/Transport error, got %v", err)
-	}
-
-	_, err = New(Config{
-		Credentials: StaticCredentials("AKID", "SECRET", ""),
-		HTTPClient:  roundTripFunc(nil),
-		Retry:       retry.DefaultPolicy(),
-	})
-	if err == nil || !strings.Contains(err.Error(), "Retry cannot be used with a custom HTTPClient") {
-		t.Fatalf("expected HTTPClient/Retry error, got %v", err)
-	}
-}
-
-func TestBuildRequestAllowsAdaptiveThinkingWithoutMaxTokens(t *testing.T) {
-	provider := mustProvider(t)
-	wire, err := provider.buildRequest(&litellm.Request{
-		Model:    "anthropic.claude-opus-5",
-		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "low"},
-	})
-	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
-	}
-	thinking := wire.AdditionalModelRequestFields["thinking"].(map[string]any)
-	if thinking["type"] != "adaptive" {
-		t.Fatalf("thinking = %#v", thinking)
-	}
-}
-
-func TestBuildRequestRejectsNonClaudeThinking(t *testing.T) {
-	provider := mustProvider(t)
-	_, err := provider.buildRequest(&litellm.Request{
-		Model:    "amazon.nova-pro-v1:0",
-		Messages: []litellm.Message{litellm.UserText("hi")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "low"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "only supported for Claude") {
-		t.Fatalf("expected non-Claude thinking error, got %v", err)
-	}
-}
-
-func TestBuildRequestRejectsUnknownProviderOption(t *testing.T) {
-	provider := mustProvider(t)
-	_, err := provider.buildRequest(&litellm.Request{
-		Model:           "anthropic.claude-sonnet-4-20250514-v1:0",
-		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: mustProviderOptions(t, map[string]any{"unknown": true}),
-	})
-	if err == nil || !strings.Contains(err.Error(), "unsupported provider option") {
-		t.Fatalf("expected provider option error, got %v", err)
-	}
-}
-
-func TestBuildRequestRejectsInvalidCacheRetention(t *testing.T) {
-	provider := mustProvider(t)
-	_, err := provider.buildRequest(&litellm.Request{
-		Model:    "anthropic.claude-sonnet-4-20250514-v1:0",
-		Messages: []litellm.Message{litellm.UserText("hi")},
-		Cache:    &litellm.CachePolicy{Retention: "forever"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "unsupported cache retention") {
-		t.Fatalf("expected cache retention error, got %v", err)
-	}
-
-	_, err = provider.buildRequest(&litellm.Request{
-		Model:           "anthropic.claude-sonnet-4-20250514-v1:0",
-		Messages:        []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: mustProviderOptions(t, map[string]any{"cache_retention": "forever"}),
-	})
-	if err == nil || !strings.Contains(err.Error(), "unsupported cache retention") {
-		t.Fatalf("expected provider option cache retention error, got %v", err)
-	}
-}
-
-func TestBuildRequestRoundTripsReasoningBlockHistory(t *testing.T) {
-	provider := mustProvider(t)
-	wire, err := provider.buildRequest(&litellm.Request{
-		Model: "anthropic.claude-sonnet-4-20250514-v1:0",
-		Messages: []litellm.Message{
-			litellm.Assistant(litellm.ReasoningBlock{Text: "think", Signature: "sig"}),
-		},
-	})
-	if err != nil {
-		t.Fatalf("buildRequest returned error: %v", err)
-	}
-	block := wire.Messages[0].Content[0].ReasoningContent
-	if block == nil || block.ReasoningText == nil || block.ReasoningText.Text != "think" || block.ReasoningText.Signature != "sig" {
-		t.Fatalf("reasoning content = %#v", block)
+	want := litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true, ThinkingBudget: true, ProviderOptions: []string{
+		"additionalModelRequestFields", "additionalModelResponseFieldPaths", "guardrailConfig",
+		"performanceConfig", "promptVariables", "requestMetadata",
+	}}
+	if got := newProvider(t, nil).Capabilities(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Capabilities = %+v", got)
 	}
 }
 
 func TestChatSignsRequestAndConvertsResponse(t *testing.T) {
-	var authHeader string
-	var tokenHeader string
-	provider, err := New(Config{
-		Region:      "us-west-2",
-		BaseURL:     "https://bedrock-runtime.us-west-2.amazonaws.com",
-		Credentials: StaticCredentials("AKID", "SECRET", "SESSION"),
-		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			authHeader = req.Header.Get("Authorization")
-			tokenHeader = req.Header.Get("X-Amz-Security-Token")
-			if req.URL.Path != "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/converse" || req.URL.RawPath != "/model/anthropic.claude-3-5-sonnet-20240620-v1%3A0/converse" {
-				t.Fatalf("unexpected path/rawPath: %s/%s", req.URL.Path, req.URL.RawPath)
-			}
-			return jsonResponse(http.StatusOK, `{
-				"output":{"message":{"role":"assistant","content":[
-					{"reasoningContent":{"reasoningText":{"text":"think","signature":"sig"}}},
-					{"text":"hello"},
-					{"toolUse":{"toolUseId":"toolu_1","name":"lookup","input":{"q":"x"}}}
-				]}},
-				"stopReason":"tool_use",
-				"usage":{"inputTokens":5,"outputTokens":7,"totalTokens":12,"cacheReadInputTokens":2,"cacheWriteInputTokens":3}
-			}`), nil
-		}),
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	resp, err := provider.Chat(context.Background(), &litellm.Request{
-		Model:    "anthropic.claude-3-5-sonnet-20240620-v1:0",
-		Messages: []litellm.Message{litellm.UserText("hi")},
-	})
-	if err != nil {
-		t.Fatalf("Chat returned error: %v", err)
-	}
-	if !strings.Contains(authHeader, "AWS4-HMAC-SHA256 Credential=AKID/") || !strings.Contains(authHeader, "/us-west-2/bedrock/aws4_request") {
-		t.Fatalf("bad auth header: %s", authHeader)
-	}
-	if tokenHeader != "SESSION" {
-		t.Fatalf("session token = %q", tokenHeader)
-	}
-	if resp.Text() != "hello" {
-		t.Fatalf("text = %q", resp.Text())
-	}
-	if resp.Reasoning() != "think" {
-		t.Fatalf("reasoning = %q", resp.Reasoning())
-	}
-	reasoning, ok := resp.Blocks[0].(litellm.ReasoningBlock)
-	if !ok || reasoning.Signature != "sig" {
-		t.Fatalf("reasoning block = %#v", resp.Blocks[0])
-	}
-	calls := resp.ToolCalls()
-	if len(calls) != 1 || calls[0].ID != "toolu_1" || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
-		t.Fatalf("tool calls = %+v", calls)
-	}
-	if *resp.Usage.InputTokens != 10 || *resp.Usage.OutputTokens != 7 || *resp.Usage.CacheReadTokens != 2 || *resp.Usage.CacheWriteTokens != 3 {
-		t.Fatalf("usage = %+v", resp.Usage)
-	}
-	if resp.FinishReason != litellm.FinishReasonToolCall {
-		t.Fatalf("finish reason = %q", resp.FinishReason)
-	}
-}
-
-func TestConvertResponseRejectsNil(t *testing.T) {
-	_, err := convertResponse(nil, "anthropic.claude")
-	if err == nil || !strings.Contains(err.Error(), "response cannot be nil") {
-		t.Fatalf("expected nil response error, got %v", err)
-	}
-}
-
-func TestStreamConvertsEventStreamToTypedEvents(t *testing.T) {
-	provider, err := New(Config{
-		Region:      "us-west-2",
-		BaseURL:     "https://bedrock-runtime.us-west-2.amazonaws.com",
-		Credentials: StaticCredentials("AKID", "SECRET", ""),
-		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			if req.URL.Path != "/model/anthropic.claude-3-5-sonnet-20240620-v1:0/converse-stream" || req.URL.RawPath != "/model/anthropic.claude-3-5-sonnet-20240620-v1%3A0/converse-stream" {
-				t.Fatalf("unexpected path/rawPath: %s/%s", req.URL.Path, req.URL.RawPath)
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     make(http.Header),
-				Body:       io.NopCloser(bytes.NewReader(testgolden.ReadFixture(t, "../../testdata/bedrock/eventstream.bin"))),
-			}, nil
-		}),
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	stream, err := provider.Stream(context.Background(), &litellm.Request{
-		Model:    "anthropic.claude-3-5-sonnet-20240620-v1:0",
-		Messages: []litellm.Message{litellm.UserText("hi")},
-	})
-	if err != nil {
-		t.Fatalf("Stream returned error: %v", err)
-	}
-	resp, err := litellm.Collect(stream)
-	if err != nil {
-		t.Fatalf("Collect returned error: %v", err)
-	}
-	if resp.Text() != "hel" {
-		t.Fatalf("text = %q", resp.Text())
-	}
-	calls := resp.ToolCalls()
-	if len(calls) != 1 || calls[0].ID != "toolu_1" || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
-		t.Fatalf("tool calls = %+v", calls)
-	}
-	if *resp.Usage.InputTokens != 10 || *resp.Usage.OutputTokens != 7 || *resp.Usage.CacheReadTokens != 2 || *resp.Usage.CacheWriteTokens != 3 {
-		t.Fatalf("usage = %+v", resp.Usage)
-	}
-	if resp.FinishReason != litellm.FinishReasonToolCall {
-		t.Fatalf("finish reason = %q", resp.FinishReason)
-	}
-}
-
-func TestStreamExposesUnknownContentBlockAsProviderEvent(t *testing.T) {
-	stream := newStream(&http.Response{
-		Body: io.NopCloser(bytes.NewReader(eventStream(
-			`{"contentBlockDelta":{"contentBlockIndex":0,"delta":{"audio":{"bytes":"abc"}}}}`,
-			`{"metadata":{"usage":{"inputTokens":1,"outputTokens":1,"totalTokens":2}}}`,
-		))),
-	}, "anthropic.claude")
-
-	event, err := stream.Next()
-	if err != nil {
-		t.Fatalf("Next returned error: %v", err)
-	}
-	providerEvent, ok := event.(litellm.ProviderEvent)
-	if !ok {
-		t.Fatalf("event = %#v, want ProviderEvent", event)
-	}
-	if providerEvent.Name != "bedrock.contentBlockDelta" || !strings.Contains(string(providerEvent.Raw), "audio") {
-		t.Fatalf("provider event = %#v", providerEvent)
-	}
-}
-
-func TestStreamConvertsReasoningDelta(t *testing.T) {
-	stream := newStream(&http.Response{
-		Body: io.NopCloser(bytes.NewReader(eventStream(
-			`{"contentBlockDelta":{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"think","signature":"sig"}}}}`,
-			`{"metadata":{"usage":{"inputTokens":1,"outputTokens":1,"totalTokens":2}}}`,
-		))),
-	}, "anthropic.claude")
-	resp, err := litellm.Collect(stream)
-	if err != nil {
-		t.Fatalf("Collect returned error: %v", err)
-	}
-	if resp.Reasoning() != "think" {
-		t.Fatalf("reasoning = %q", resp.Reasoning())
-	}
-	reasoning, ok := resp.Blocks[0].(litellm.ReasoningBlock)
-	if !ok || reasoning.Signature != "sig" {
-		t.Fatalf("reasoning block = %#v", resp.Blocks[0])
-	}
-}
-
-func TestStreamConvertsExceptionEventsToErrors(t *testing.T) {
-	stream := newStream(&http.Response{
-		Body: io.NopCloser(bytes.NewReader(eventStream(
-			`{"throttlingException":{"message":"too many requests"}}`,
-		))),
-	}, "anthropic.claude")
-	_, err := stream.Next()
-	if err == nil || !litellm.IsRateLimitError(err) || !strings.Contains(err.Error(), "too many requests") {
-		t.Fatalf("expected rate limit stream error, got %v", err)
-	}
-}
-
-func TestStreamRejectsEOFBeforeMetadata(t *testing.T) {
-	stream := newStream(&http.Response{
-		Body: io.NopCloser(bytes.NewReader(eventStream(
-			`{"contentBlockDelta":{"contentBlockIndex":0,"delta":{"text":"partial"}}}`,
-		))),
-	}, "anthropic.claude")
-	_, err := litellm.Collect(stream)
-	if err == nil || !strings.Contains(err.Error(), "before metadata") || !litellm.IsProviderError(err) {
-		t.Fatalf("expected truncated stream error, got %v", err)
-	}
-}
-
-func jsonResponse(status int, body string) *http.Response {
-	return &http.Response{
-		StatusCode: status,
-		Header:     make(http.Header),
-		Body:       io.NopCloser(strings.NewReader(body)),
-	}
-}
-
-func eventStream(payloads ...string) []byte {
-	var out bytes.Buffer
-	for _, payload := range payloads {
-		data := []byte(payload)
-		totalLength := uint32(16 + len(data))
-		var prelude [12]byte
-		binary.BigEndian.PutUint32(prelude[0:4], totalLength)
-		binary.BigEndian.PutUint32(prelude[4:8], 0)
-		out.Write(prelude[:])
-		out.Write(data)
-		out.Write([]byte{0, 0, 0, 0})
-	}
-	return out.Bytes()
-}
-
-func mustProvider(t *testing.T) *Provider {
-	t.Helper()
-	provider, err := New(Config{
-		Region:      "us-east-1",
-		Credentials: StaticCredentials("AKID", "SECRET", ""),
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	return provider
-}
-
-func mustTool(t *testing.T, name, description string, schema any) litellm.Tool {
-	t.Helper()
-	tool, err := litellm.NewTool(name, description, schema)
-	if err != nil {
-		t.Fatalf("NewTool: %v", err)
-	}
-	return tool
-}
-
-func mustProviderOptions(t *testing.T, values map[string]any) litellm.ProviderOptions {
-	t.Helper()
-	o, err := litellm.NewProviderOptions(values)
+	var req *http.Request
+	p := newProvider(t, doerFunc(func(r *http.Request) (*http.Response, error) {
+		req = r
+		return jsonResponse(http.StatusOK, `{
+			"output":{"message":{"role":"assistant","content":[{"text":"hello"}]}},
+			"stopReason":"end_turn","usage":{"inputTokens":1,"outputTokens":2,"totalTokens":3}}`), nil
+	}))
+	resp, err := p.Chat(context.Background(), &litellm.Request{Model: "anthropic.claude-v1:0", Messages: []litellm.Message{litellm.UserText("hi")}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return o
+	if req.URL.RawPath != "/model/anthropic.claude-v1%3A0/converse" {
+		t.Fatalf("raw path = %q", req.URL.RawPath)
+	}
+	if auth := req.Header.Get("Authorization"); !strings.Contains(auth, "Credential=AKID/") || !strings.Contains(auth, "/us-west-2/bedrock/aws4_request") {
+		t.Fatalf("authorization = %q", auth)
+	}
+	if req.Header.Get("X-Amz-Security-Token") != "SESSION" {
+		t.Fatalf("session token = %q", req.Header.Get("X-Amz-Security-Token"))
+	}
+	if resp.Text() != "hello" || resp.Model != "anthropic.claude-v1:0" || resp.FinishReason != litellm.FinishReasonStop {
+		t.Fatalf("response = %+v", resp)
+	}
+}
+
+// A retrying HTTPClient resends the signed request, which stays valid.
+func TestChatRetriesThroughHTTPClient(t *testing.T) {
+	var auths []string
+	client := retry.NewHTTPClient(&http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		auths = append(auths, r.Header.Get("Authorization"))
+		if body, _ := io.ReadAll(r.Body); !json.Valid(body) {
+			t.Fatalf("attempt %d body = %q", len(auths), body)
+		}
+		if len(auths) == 1 {
+			return jsonResponse(http.StatusTooManyRequests, `{"message":"slow down"}`), nil
+		}
+		return jsonResponse(http.StatusOK, `{"output":{"message":{"role":"assistant","content":[{"text":"ok"}]}},"stopReason":"end_turn"}`), nil
+	})}, &retry.Policy{MaxAttempts: 2, InitialDelay: time.Nanosecond})
+	resp, err := newProvider(t, client).Chat(context.Background(), &litellm.Request{Model: "m", Messages: []litellm.Message{litellm.UserText("hi")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(auths) != 2 || auths[0] == "" || auths[0] != auths[1] || resp.Text() != "ok" {
+		t.Fatalf("auths = %q, text = %q", auths, resp.Text())
+	}
+}
+
+func TestChatReturnsHTTPErrors(t *testing.T) {
+	p := newProvider(t, doerFunc(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusBadRequest, `{"message":"bad model"}`), nil
+	}))
+	_, err := p.Chat(context.Background(), &litellm.Request{Model: "m", Messages: []litellm.Message{litellm.UserText("hi")}})
+	if !litellm.IsValidationError(err) || !strings.Contains(err.Error(), "bad model") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestListModels(t *testing.T) {
+	p := newProvider(t, doerFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "https://bedrock.us-west-2.amazonaws.com/foundation-models" {
+			t.Fatalf("url = %s", r.URL)
+		}
+		return jsonResponse(http.StatusOK, `{"modelSummaries":[{"modelId":"a.b-v1:0","providerName":"A"},{"modelId":"c","modelName":"C"}]}`), nil
+	}))
+	models, err := p.ListModels(context.Background())
+	want := []litellm.ModelInfo{{ID: "a.b-v1:0", Name: "a.b-v1:0", Provider: "A"}, {ID: "c", Name: "C"}}
+	if err != nil || !reflect.DeepEqual(models, want) {
+		t.Fatalf("models = %+v, err = %v", models, err)
+	}
+}
+
+func newProvider(t *testing.T, client litellm.HTTPClient) *Provider {
+	t.Helper()
+	p, err := New(Config{Region: "us-west-2", Credentials: StaticCredentials("AKID", "SECRET", "SESSION"), HTTPClient: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func jsonResponse(status int, body string) *http.Response {
+	return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
+}
+
+type eventFrame struct {
+	headers [][2]string
+	payload string
+}
+
+func event(name, payload string) eventFrame {
+	return eventFrame{headers: [][2]string{{":message-type", "event"}, {":event-type", name}}, payload: payload}
+}
+
+func exception(name, payload string) eventFrame {
+	return eventFrame{headers: [][2]string{{":message-type", "exception"}, {":exception-type", name}}, payload: payload}
+}
+
+// eventStream encodes frames with string headers and valid checksums.
+func eventStream(frames ...eventFrame) io.ReadCloser {
+	var out bytes.Buffer
+	for _, frame := range frames {
+		var headers bytes.Buffer
+		for _, h := range frame.headers {
+			headers.WriteByte(byte(len(h[0])))
+			headers.WriteString(h[0])
+			headers.WriteByte(headerTypeString)
+			_ = binary.Write(&headers, binary.BigEndian, uint16(len(h[1])))
+			headers.WriteString(h[1])
+		}
+		msg := prelude(uint32(16+headers.Len()+len(frame.payload)), uint32(headers.Len()))
+		msg = append(msg, headers.Bytes()...)
+		msg = append(msg, frame.payload...)
+		msg = binary.BigEndian.AppendUint32(msg, crc32.ChecksumIEEE(msg))
+		out.Write(msg)
+	}
+	return io.NopCloser(&out)
 }

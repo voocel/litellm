@@ -12,12 +12,15 @@ PREV_TAG="${1:-$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")}"
 CURR_TAG="$(git describe --tags --abbrev=0 HEAD 2>/dev/null || echo "HEAD")"
 
 if [ -n "$PREV_TAG" ]; then
-    COMMITS=$(git log "${PREV_TAG}..${CURR_TAG}" --pretty=format:"- %s" --no-merges)
     RANGE="${PREV_TAG}..${CURR_TAG}"
+    LOG_RANGE="$RANGE"
 else
-    COMMITS=$(git log --pretty=format:"- %s" --no-merges -50)
     RANGE="last 50 commits"
+    LOG_RANGE="-50"
 fi
+COMMITS=$(git log $LOG_RANGE --pretty=format:"- %s" --no-merges)
+# One "BREAKING CHANGE: ..." footer line per breaking item.
+BREAKING=$(git log $LOG_RANGE --pretty=format:"%B" --no-merges | sed -n 's/^BREAKING[ -]CHANGE: *\(.*\)/- \1/p')
 
 if [ -z "$COMMITS" ]; then
     echo "No commits found in range ${RANGE}"
@@ -32,13 +35,17 @@ You are a release note writer for a Go library called 'litellm' (a multi-provide
 Given the following git commits, generate clean release notes in Markdown.
 
 Rules:
-- Group by: Features, Bug Fixes, Performance, Refactor, Other (skip empty groups)
+- If there are breaking changes, start with a "Breaking Changes" group listing every item below and every commit whose type ends with "!"; never drop or merge them away
+- Then group by: Features, Bug Fixes, Performance, Refactor, Other (skip empty groups)
 - Each item: one concise line, no commit hashes, no author names
 - Remove conventional commit prefixes (feat:, fix:, etc.)
 - Merge related commits into one entry
 - Use imperative mood (Add, Fix, Update)
 - Focus on user-visible changes such as provider support, request/stream behavior, API compatibility, resilience, examples, and documentation
 - Output ONLY the markdown, no intro text
+
+Breaking changes:
+${BREAKING:-none}
 
 Commits (${RANGE}):
 ${COMMITS}
@@ -48,6 +55,12 @@ build_body() { jq -Rs "$1" < "$TMPDIR/prompt.txt" > "$TMPDIR/body.json"; }
 extract() { python3 -c "import json,sys; d=json.load(open('$TMPDIR/result.json')); print($1)"; }
 
 fallback() {
+    if [ -n "$BREAKING" ]; then
+        echo "## Breaking Changes"
+        echo ""
+        echo "$BREAKING"
+        echo ""
+    fi
     echo "## What's Changed"
     echo ""
     echo "$COMMITS"

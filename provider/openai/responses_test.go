@@ -3,1237 +3,203 @@ package openai
 import (
 	"context"
 	"encoding/json"
-	"io"
-	"net/http"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/voocel/litellm"
-	"github.com/voocel/litellm/internal/testgolden"
 )
 
-func TestResponsesBuildRequestMapsCoreFields(t *testing.T) {
-	provider := mustProvider(t)
-	maxOutputTokens := 1200
-	maxToolCalls := 4
-	topLogprobs := 2
-	parallelToolCalls := true
-	store := true
-	background := false
-
-	wire, err := provider.buildResponsesRequest(&ResponsesRequest{
-		Model: "gpt-5.6",
-		Messages: []litellm.Message{
-			litellm.System("Follow the contract."),
-			litellm.UserText("Search and summarize."),
-		},
-		Instructions:         "Be concise.",
-		PreviousResponseID:   "resp_previous",
-		ContextManagement:    []map[string]any{{"type": "compaction", "compact_threshold": 0.75}},
-		MaxOutputTokens:      &maxOutputTokens,
-		MaxToolCalls:         &maxToolCalls,
-		Include:              []string{"reasoning.encrypted_content"},
-		TopLogprobs:          &topLogprobs,
-		TextVerbosity:        "low",
-		Truncation:           "auto",
-		OpenAITools:          []ResponsesTool{{"type": "web_search_preview"}},
-		ParallelToolCalls:    &parallelToolCalls,
-		ReasoningEffort:      "xhigh",
-		ReasoningSummary:     "auto",
-		ReasoningMode:        "pro",
-		ReasoningContext:     "all_turns",
-		PromptCacheKey:       "workflow-v1",
-		PromptCacheOptions:   &PromptCacheOptions{Mode: "explicit", TTL: "30m"},
-		PromptCacheRetention: "24h",
-		Metadata:             map[string]string{"tenant": "acme"},
-		SafetyIdentifier:     "user-123",
-		ServiceTier:          "flex",
-		Store:                &store,
-		Background:           &background,
-		Prompt:               map[string]any{"id": "pmpt_123"},
-	}, false)
-	if err != nil {
-		t.Fatalf("buildResponsesRequest: %v", err)
-	}
-
-	if wire.Instructions != "Be concise.\nFollow the contract." {
-		t.Fatalf("instructions = %q", wire.Instructions)
-	}
-	if wire.Input != "Search and summarize." {
-		t.Fatalf("input = %#v", wire.Input)
-	}
-	if wire.PreviousResponseID != "resp_previous" {
-		t.Fatalf("previous_response_id = %q", wire.PreviousResponseID)
-	}
-	if len(wire.ContextManagement) != 1 || wire.ContextManagement[0]["type"] != "compaction" {
-		t.Fatalf("context_management = %#v", wire.ContextManagement)
-	}
-	if wire.MaxOutputTokens == nil || *wire.MaxOutputTokens != maxOutputTokens {
-		t.Fatalf("max_output_tokens = %v", wire.MaxOutputTokens)
-	}
-	if wire.Text == nil || wire.Text.Verbosity != "low" {
-		t.Fatalf("text = %#v", wire.Text)
-	}
-	if wire.Reasoning == nil || wire.Reasoning.Effort != "xhigh" || wire.Reasoning.Summary != "auto" || wire.Reasoning.Mode != "pro" || wire.Reasoning.Context != "all_turns" {
-		t.Fatalf("reasoning = %#v", wire.Reasoning)
-	}
-	if wire.PromptCacheOptions == nil || wire.PromptCacheOptions.Mode != "explicit" || wire.PromptCacheOptions.TTL != "30m" {
-		t.Fatalf("prompt_cache_options = %#v", wire.PromptCacheOptions)
-	}
-	tools, err := json.Marshal(wire.Tools)
-	if err != nil {
-		t.Fatalf("marshal tools: %v", err)
-	}
-	if string(tools) != `[{"type":"web_search_preview"}]` {
-		t.Fatalf("tools = %s", tools)
-	}
-	if wire.Prompt["id"] != "pmpt_123" || wire.Metadata["tenant"] != "acme" || wire.ServiceTier != "flex" || wire.Store == nil || !*wire.Store {
-		t.Fatalf("wire = %#v", wire)
-	}
-}
-
-func TestResponsesAcceptsNativeInputWithoutMessages(t *testing.T) {
-	provider := mustProvider(t)
-	wire, err := provider.buildResponsesRequest(&ResponsesRequest{
-		Model: "gpt-5.1",
-		Input: []any{
-			map[string]any{
-				"type": "message",
-				"role": "user",
-				"content": []any{
-					map[string]any{"type": "input_text", "text": "hello"},
-				},
+func TestBuildResponsesRequest(t *testing.T) {
+	lookup := litellm.Tool{Name: "lookup", Description: "Lookup.", Parameters: litellm.Schema(`{"type":"object","properties":{"q":{"type":"string"}}}`), Strict: litellm.StrictEnabled}
+	schema := &litellm.ResponseFormat{Type: litellm.ResponseFormatJSONSchema, JSONSchema: &litellm.JSONSchema{Name: "answer", Description: "d", Schema: litellm.Schema(`{"type":"object"}`), Strict: litellm.StrictEnabled}}
+	cached := &litellm.CacheControl{}
+	tests := []struct {
+		name   string
+		req    litellm.Request
+		stream bool
+		want   string
+	}{{
+		name: "core fields",
+		req: litellm.Request{
+			Model: "gpt-5.1", MaxTokens: new(100), Temperature: new(0.5), TopP: new(0.9),
+			Messages: []litellm.Message{
+				litellm.System("be brief"),
+				litellm.System("be kind"),
+				litellm.User(litellm.Text("look"), litellm.ImageBlock{URL: "https://x.test/a.png", Detail: "low"}, litellm.ImageBlock{Data: []byte("png"), MIME: "image/png"}),
+				litellm.Assistant(
+					litellm.ReasoningBlock{Text: "summary", Summary: true, Extra: json.RawMessage(`{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"enc"}`)},
+					litellm.Text("calling"),
+					litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
+				),
+				litellm.ToolResultText("call_1", "result"),
 			},
+			Tools:          []litellm.Tool{lookup, {Name: "ping"}},
+			ToolChoice:     &litellm.ToolChoice{Name: "lookup"},
+			ResponseFormat: schema,
+			Thinking:       &litellm.Thinking{Effort: "high", IncludeOutput: true},
 		},
-		Instructions: "Be concise.",
-	}, false)
-	if err != nil {
-		t.Fatalf("buildResponsesRequest: %v", err)
-	}
-	if wire.Instructions != "Be concise." {
-		t.Fatalf("instructions = %q", wire.Instructions)
-	}
-	items, ok := wire.Input.([]any)
-	if !ok || len(items) != 1 {
-		t.Fatalf("input = %#v", wire.Input)
-	}
-}
-
-func TestResponsesAcceptsPromptOnlyRequest(t *testing.T) {
-	provider := mustProvider(t)
-	wire, err := provider.buildResponsesRequest(&ResponsesRequest{
-		Model: "gpt-5.1",
-		Prompt: map[string]any{
-			"id": "pmpt_123",
-			"variables": map[string]any{
-				"topic": "cache",
-			},
-		},
-	}, false)
-	if err != nil {
-		t.Fatalf("buildResponsesRequest: %v", err)
-	}
-	if wire.Input != nil {
-		t.Fatalf("input = %#v, want nil", wire.Input)
-	}
-	if wire.Prompt["id"] != "pmpt_123" {
-		t.Fatalf("prompt = %#v", wire.Prompt)
-	}
-}
-
-func TestResponsesRejectsInputWithNonSystemMessages(t *testing.T) {
-	provider := mustProvider(t)
-	_, err := provider.buildResponsesRequest(&ResponsesRequest{
-		Model: "gpt-5.1",
-		Input: "hello",
-		Messages: []litellm.Message{
-			litellm.UserText("also hello"),
-		},
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "cannot set Input and non-system Messages") {
-		t.Fatalf("expected input/messages conflict error, got %v", err)
-	}
-}
-
-func TestResponsesStreamOptions(t *testing.T) {
-	provider := mustProvider(t)
-	includeObfuscation := false
-	wire, err := provider.buildResponsesRequest(&ResponsesRequest{
-		Model:    "gpt-5.1",
-		Messages: []litellm.Message{litellm.UserText("hello")},
-		StreamOptions: &ResponsesStreamOptions{
-			IncludeObfuscation: &includeObfuscation,
-		},
-	}, true)
-	if err != nil {
-		t.Fatalf("buildResponsesRequest: %v", err)
-	}
-	if wire.StreamOptions == nil || wire.StreamOptions.IncludeObfuscation == nil || *wire.StreamOptions.IncludeObfuscation {
-		t.Fatalf("stream_options = %#v", wire.StreamOptions)
-	}
-
-	_, err = provider.buildResponsesRequest(&ResponsesRequest{
-		Model:    "gpt-5.1",
-		Messages: []litellm.Message{litellm.UserText("hello")},
-		StreamOptions: &ResponsesStreamOptions{
-			IncludeObfuscation: &includeObfuscation,
-		},
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "stream_options requires stream request") {
-		t.Fatalf("expected non-stream stream_options error, got %v", err)
-	}
-}
-
-func TestResponsesRejectsMinimalReasoningEffort(t *testing.T) {
-	provider := mustProvider(t)
-	_, err := provider.buildResponsesRequest(&ResponsesRequest{
-		Model:           "gpt-5.1",
-		Messages:        []litellm.Message{litellm.UserText("hello")},
-		ReasoningEffort: "minimal",
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), `unsupported reasoning_effort "minimal"`) {
-		t.Fatalf("expected minimal reasoning_effort error, got %v", err)
-	}
-}
-
-func TestResponsesLeavesModelSpecificConstraintsToAPI(t *testing.T) {
-	provider := mustProvider(t)
-	wire, err := provider.buildResponsesRequest(&ResponsesRequest{
-		Model:           "gpt-5.7",
-		Input:           "hi",
-		ReasoningEffort: "none",
-	}, false)
-	if err != nil || wire.Reasoning == nil || wire.Reasoning.Effort != "none" {
-		t.Fatalf("future model reasoning = %#v, err %v", wire.Reasoning, err)
-	}
-
-	wire, err = provider.buildResponsesRequest(&ResponsesRequest{
-		Model:          "gpt-5.7",
-		Input:          "hi",
-		ResponseFormat: &litellm.ResponseFormat{Type: litellm.ResponseFormatJSONObject},
-	}, false)
-	if err != nil || wire.Text == nil || wire.Text.Format == nil {
-		t.Fatalf("future model structured output = %#v, err %v", wire.Text, err)
-	}
-
-	if _, err = provider.buildResponsesRequest(&ResponsesRequest{Model: "gpt-5.7", Input: "hi"}, true); err != nil {
-		t.Fatalf("future model streaming: %v", err)
-	}
-}
-
-func TestResponsesReasoningContextAndMode(t *testing.T) {
-	provider := mustProvider(t)
-	wire, err := provider.buildResponsesRequest(&ResponsesRequest{
-		Model:            "gpt-5.6",
-		Messages:         []litellm.Message{litellm.UserText("hello")},
-		ReasoningContext: "current_turn",
-	}, false)
-	if err != nil {
-		t.Fatalf("buildResponsesRequest context: %v", err)
-	}
-	if wire.Reasoning == nil || wire.Reasoning.Context != "current_turn" {
-		t.Fatalf("reasoning = %#v", wire.Reasoning)
-	}
-
-	wire, err = provider.buildResponsesRequest(&ResponsesRequest{
-		Model:         "gpt-5.6",
-		Messages:      []litellm.Message{litellm.UserText("hello")},
-		ReasoningMode: "pro",
-	}, false)
-	if err != nil || wire.Reasoning == nil || wire.Reasoning.Mode != "pro" {
-		t.Fatalf("reasoning mode = %#v, err %v", wire.Reasoning, err)
-	}
-}
-
-func TestResponsesMapsPromptCacheBreakpoint(t *testing.T) {
-	provider := mustProvider(t)
-	wire, err := provider.buildResponsesRequest(&ResponsesRequest{
-		Model: "gpt-5.6",
-		Messages: []litellm.Message{
-			{
-				Role: litellm.RoleSystem,
-				Blocks: []litellm.Block{litellm.TextBlock{
-					Text:  "stable developer instructions",
-					Cache: &litellm.CacheControl{Type: litellm.CacheTypeEphemeral},
-				}},
-			},
-			litellm.UserText("hello"),
-		},
-	}, false)
-	if err != nil {
-		t.Fatalf("buildResponsesRequest: %v", err)
-	}
-	data, err := json.Marshal(wire)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	jsonText := string(data)
-	if wire.Instructions != "" || !strings.Contains(jsonText, `"role":"developer"`) || !strings.Contains(jsonText, `"prompt_cache_breakpoint":{"mode":"explicit"}`) {
-		t.Fatalf("wire = %s", data)
-	}
-}
-
-func TestResponsesInputItemsPreserveToolTurns(t *testing.T) {
-	items, err := responsesInputItems([]litellm.Message{
-		litellm.UserText("weather?"),
-		litellm.Assistant(
-			litellm.Text("let me check"),
-			litellm.ToolUseBlock{ID: "call_1", Name: "get_weather", Arguments: litellm.MustJSONRaw(map[string]any{"city": "Paris"})},
-		),
-		litellm.ToolResultText("call_1", `{"temp":"15C"}`),
-	})
-	if err != nil {
-		t.Fatalf("responsesInputItems: %v", err)
-	}
-	if len(items) != 4 {
-		t.Fatalf("items len = %d, want 4: %+v", len(items), items)
-	}
-	if items[0].Type != "message" || items[0].Role != "user" || items[0].Content[0].Type != "input_text" {
-		t.Fatalf("user item = %+v", items[0])
-	}
-	if items[1].Type != "message" || items[1].Role != "assistant" || items[1].Content[0].Type != "output_text" {
-		t.Fatalf("assistant item = %+v", items[1])
-	}
-	if items[2].Type != "function_call" || items[2].CallID != "call_1" || items[2].Name != "get_weather" {
-		t.Fatalf("function call item = %+v", items[2])
-	}
-	if items[3].Type != "function_call_output" || items[3].CallID != "call_1" || items[3].Output == "" {
-		t.Fatalf("function output item = %+v", items[3])
-	}
-}
-
-func TestResponsesTextFormatUsesResponsesJSONSchemaShape(t *testing.T) {
-	provider := mustProvider(t)
-	format, err := litellm.NewResponseFormatJSONSchema("answer", "Answer shape.", map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"answer": map[string]any{"type": "string"},
-		},
-		"required": []string{"answer"},
-	}, litellm.StrictEnabled)
-	if err != nil {
-		t.Fatalf("NewResponseFormatJSONSchema: %v", err)
-	}
-	wire, err := provider.buildResponsesRequest(&ResponsesRequest{
-		Model:          "gpt-5.1",
-		Messages:       []litellm.Message{litellm.UserText("hello")},
-		ResponseFormat: format,
-	}, false)
-	if err != nil {
-		t.Fatalf("buildResponsesRequest: %v", err)
-	}
-	data, err := json.Marshal(wire)
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	var body map[string]any
-	if err := json.Unmarshal(data, &body); err != nil {
-		t.Fatalf("unmarshal request: %v", err)
-	}
-	text, ok := body["text"].(map[string]any)
-	if !ok {
-		t.Fatalf("text = %#v", body["text"])
-	}
-	formatBody, ok := text["format"].(map[string]any)
-	if !ok {
-		t.Fatalf("text.format = %#v", text["format"])
-	}
-	if _, ok := formatBody["json_schema"]; ok {
-		t.Fatalf("responses text.format must not use chat response_format nesting: %s", data)
-	}
-	if formatBody["type"] != "json_schema" || formatBody["name"] != "answer" || formatBody["description"] != "Answer shape." || formatBody["strict"] != true {
-		t.Fatalf("format = %#v", formatBody)
-	}
-	schema, ok := formatBody["schema"].(map[string]any)
-	if !ok || schema["type"] != "object" || schema["additionalProperties"] != false {
-		t.Fatalf("schema = %#v", formatBody["schema"])
-	}
-}
-
-func TestResponsesBuildRequestDeepClonesNativeMaps(t *testing.T) {
-	provider := mustProvider(t)
-	req := &ResponsesRequest{
-		Model:    "gpt-5.1",
-		Messages: []litellm.Message{litellm.UserText("hello")},
-		OpenAITools: []ResponsesTool{{
-			"type": "web_search_preview",
-			"filters": map[string]any{
-				"domains": []any{"example.com"},
-			},
+		want: `{"model":"gpt-5.1","max_output_tokens":100,"temperature":0.5,"top_p":0.9,
+			"instructions":"be brief\nbe kind",
+			"input":[
+				{"type":"message","role":"user","content":[
+					{"type":"input_text","text":"look"},
+					{"type":"input_image","image_url":"https://x.test/a.png","detail":"low"},
+					{"type":"input_image","image_url":"data:image/png;base64,cG5n"}]},
+				{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"enc"},
+				{"type":"message","role":"assistant","content":[{"type":"output_text","text":"calling"}]},
+				{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}"},
+				{"type":"function_call_output","call_id":"call_1","output":"result"}],
+			"tools":[
+				{"type":"function","name":"lookup","description":"Lookup.","parameters":{"type":"object","properties":{"q":{"type":"string"}}},"strict":true},
+				{"type":"function","name":"ping","parameters":{"type":"object"}}],
+			"tool_choice":{"type":"function","name":"lookup"},
+			"text":{"format":{"type":"json_schema","name":"answer","description":"d","schema":{"type":"object"},"strict":true}},
+			"reasoning":{"effort":"high","summary":"auto"}}`,
+	}, {
+		// Instructions cannot carry a breakpoint, and only input content has one.
+		name: "cache breakpoints",
+		req: litellm.Request{Model: "m", Messages: []litellm.Message{
+			{Role: litellm.RoleSystem, Blocks: []litellm.Block{litellm.TextBlock{Text: "sys", Cache: cached}}},
+			litellm.User(litellm.ImageBlock{URL: "https://x.test/a.png", Cache: cached}),
+			litellm.Assistant(litellm.TextBlock{Text: "a", Cache: cached}),
 		}},
-		Prompt: map[string]any{
-			"id": "pmpt_123",
-			"variables": map[string]any{
-				"tags": []any{"a", "b"},
+		want: `{"model":"m","input":[
+			{"type":"message","role":"developer","content":[{"type":"input_text","text":"sys","prompt_cache_breakpoint":{"mode":"explicit"}}]},
+			{"type":"message","role":"user","content":[{"type":"input_image","image_url":"https://x.test/a.png","prompt_cache_breakpoint":{"mode":"explicit"}}]},
+			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"a"}]}]}`,
+	}, {
+		name:   "disabled thinking and tool choice mode",
+		req:    litellm.Request{Model: "m", Thinking: &litellm.Thinking{Mode: litellm.ThinkingDisabled}, ToolChoice: &litellm.ToolChoice{Mode: litellm.ToolChoiceRequired}},
+		stream: true,
+		want:   `{"model":"m","stream":true,"tool_choice":"required","reasoning":{"effort":"none"}}`,
+	}, {
+		// Options merge into generated objects and append to generated arrays.
+		name: "provider options",
+		req: litellm.Request{
+			Model: "m", Tools: []litellm.Tool{{Name: "ping"}}, ResponseFormat: schema, Thinking: &litellm.Thinking{Effort: "low"},
+			ProviderOptions: providerOptions(t, map[string]any{
+				ProviderOptionText:      map[string]any{"verbosity": "low"},
+				ProviderOptionReasoning: map[string]any{"summary": "detailed"},
+				ProviderOptionTools:     []any{map[string]any{"type": "web_search"}},
+				ProviderOptionInclude:   []any{"reasoning.encrypted_content"},
+				ProviderOptionStore:     false,
+			}),
+		},
+		want: `{"model":"m","store":false,"include":["reasoning.encrypted_content"],
+			"tools":[{"type":"function","name":"ping","parameters":{"type":"object"}},{"type":"web_search"}],
+			"text":{"format":{"type":"json_schema","name":"answer","description":"d","schema":{"type":"object"},"strict":true},"verbosity":"low"},
+			"reasoning":{"effort":"low","summary":"detailed"}}`,
+	}}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body, err := buildResponsesRequest(&test.req, test.stream)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertJSON(t, body, test.want)
+		})
+	}
+}
+
+func TestBuildResponsesRequestErrors(t *testing.T) {
+	tests := []struct {
+		name, wantErr string
+		req           litellm.Request
+	}{
+		{"stop", "stop is not supported", litellm.Request{Stop: []string{"x"}}},
+		{"budget", "budget_tokens is not supported", litellm.Request{Thinking: &litellm.Thinking{BudgetTokens: new(1024)}}},
+		{"cache TTL", "prompt_cache_options", litellm.Request{Messages: []litellm.Message{litellm.User(litellm.TextBlock{Text: "x", Cache: &litellm.CacheControl{TTL: litellm.CacheTTL5m}})}}},
+		{"image tool result", "only supports text content", litellm.Request{Messages: []litellm.Message{litellm.ToolResult("call_1", litellm.ImageURL("https://x.test/a.png"))}}},
+		{"invalid reasoning extra", "reasoning extra must be a JSON reasoning item", litellm.Request{Messages: []litellm.Message{litellm.Assistant(litellm.ReasoningBlock{Extra: json.RawMessage(`{`)})}}},
+		{"nested option conflict", `provider option "reasoning.summary" conflicts`, litellm.Request{Thinking: &litellm.Thinking{IncludeOutput: true}, ProviderOptions: providerOptions(t, map[string]any{ProviderOptionReasoning: map[string]any{"summary": "detailed"}})}},
+		{"option conflict", `provider option "tools" conflicts`, litellm.Request{Tools: []litellm.Tool{{Name: "ping"}}, ProviderOptions: providerOptions(t, map[string]any{ProviderOptionTools: map[string]any{"type": "web_search"}})}},
+	}
+	for _, test := range tests {
+		if _, err := buildResponsesRequest(&test.req, false); err == nil || !strings.Contains(err.Error(), test.wantErr) {
+			t.Errorf("%s: err = %v, want %q", test.name, err, test.wantErr)
+		}
+	}
+}
+
+func TestConvertResponsesResponse(t *testing.T) {
+	const (
+		reasoning = `{"id":"rs_1","type":"reasoning","summary":[{"type":"summary_text","text":"a"},{"type":"summary_text","text":"b"}],"encrypted_content":"enc"}`
+		rawText   = `{"id":"rs_2","type":"reasoning","summary":[],"content":[{"type":"reasoning_text","text":"raw"}]}`
+		citation  = `{"type":"url_citation","url":"https://example.com","title":"t"}`
+	)
+	tests := []struct {
+		name, body string
+		want       litellm.Response
+	}{{
+		name: "blocks in output order",
+		body: `{"model":"gpt-5.1","status":"completed","output":[` + reasoning + `,
+			{"type":"web_search_call","id":"ws_1","status":"completed"},
+			{"type":"message","content":[{"type":"output_text","text":"hi","annotations":[` + citation + `],"logprobs":[{"token":"hi"}]}]},
+			{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}"}],
+			"usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8,"input_tokens_details":{"cached_tokens":2},"output_tokens_details":{"reasoning_tokens":1}}}`,
+		want: litellm.Response{
+			Blocks: []litellm.Block{
+				litellm.ReasoningBlock{Text: "a\nb", Summary: true, Extra: json.RawMessage(reasoning)},
+				litellm.TextBlock{Text: "hi", Annotations: []litellm.Annotation{{Type: "url_citation", URL: "https://example.com", Extra: json.RawMessage(citation)}}, Logprobs: json.RawMessage(`[{"token":"hi"}]`)},
+				litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
 			},
+			Usage:        litellm.Usage{InputTokens: new(5), OutputTokens: new(3), TotalTokens: new(8), CacheReadTokens: new(2), ReasoningTokens: new(1)},
+			Model:        "gpt-5.1",
+			FinishReason: litellm.FinishReasonToolCall, FinishReasonRaw: "completed",
 		},
-	}
-	wire, err := provider.buildResponsesRequest(req, false)
-	if err != nil {
-		t.Fatalf("buildResponsesRequest: %v", err)
-	}
-	wire.Prompt["variables"].(map[string]any)["tags"].([]any)[0] = "mutated"
-	wire.Tools[0].Raw["filters"].(map[string]any)["domains"].([]any)[0] = "mutated.test"
-
-	if req.Prompt["variables"].(map[string]any)["tags"].([]any)[0] != "a" {
-		t.Fatalf("prompt mutated: %#v", req.Prompt)
-	}
-	if req.OpenAITools[0]["filters"].(map[string]any)["domains"].([]any)[0] != "example.com" {
-		t.Fatalf("openai tool mutated: %#v", req.OpenAITools)
-	}
-}
-
-func TestResponsesInputEncodesReasoningHistory(t *testing.T) {
-	items, err := responsesInputItems([]litellm.Message{
-		litellm.Assistant(litellm.ReasoningBlock{Text: "think", Summary: true}),
-	})
-	if err != nil {
-		t.Fatalf("responsesInputItems: %v", err)
-	}
-	if len(items) != 1 || items[0].Type != "reasoning" || len(items[0].Summary) != 1 || items[0].Summary[0].Text != "think" {
-		t.Fatalf("items = %#v", items)
-	}
-}
-
-func TestResponsesInputRejectsOpaqueReasoningHistory(t *testing.T) {
-	_, err := responsesInputItems([]litellm.Message{
-		litellm.Assistant(litellm.ReasoningBlock{Text: "think", Signature: "sig"}),
-	})
-	if err == nil || !strings.Contains(err.Error(), "only support text summary or provider extra state") {
-		t.Fatalf("expected opaque reasoning history error, got %v", err)
-	}
-}
-
-func TestResponsesRejectsNonTextSystemInstructions(t *testing.T) {
-	provider := mustProvider(t)
-	_, err := provider.buildResponsesRequest(&ResponsesRequest{
-		Model: "gpt-5.1",
-		Messages: []litellm.Message{
-			{Role: litellm.RoleSystem, Blocks: []litellm.Block{litellm.ImageURL("https://example.test/a.png")}},
-			litellm.UserText("hello"),
+	}, {
+		name: "raw reasoning text and refusal",
+		body: `{"status":"completed","output":[` + rawText + `,{"type":"message","content":[{"type":"refusal","refusal":"no"}]}]}`,
+		want: litellm.Response{
+			Blocks:       []litellm.Block{litellm.ReasoningBlock{Text: "raw", Extra: json.RawMessage(rawText)}, litellm.TextBlock{Text: "no"}},
+			Model:        "req-model",
+			FinishReason: litellm.FinishReasonSafety, FinishReasonRaw: "completed",
 		},
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "system message") || !strings.Contains(err.Error(), "only text blocks") {
-		t.Fatalf("expected non-text system error, got %v", err)
-	}
-}
-
-func TestResponsesInputRejectsNonTextToolResultOutput(t *testing.T) {
-	_, err := responsesInputItems([]litellm.Message{
-		litellm.Assistant(litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: litellm.MustJSONRaw(map[string]any{})}),
-		litellm.ToolResult("call_1", litellm.ImageURL("https://example.test/a.png")),
-	})
-	if err == nil || !strings.Contains(err.Error(), "tool result") || !strings.Contains(err.Error(), "only text blocks") {
-		t.Fatalf("expected non-text tool result error, got %v", err)
-	}
-}
-
-func TestResponsesToolsDefaultLeavesSchemaUnchanged(t *testing.T) {
-	tool, err := litellm.NewTool("lookup", "Lookup.", map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"q": map[string]any{"type": "string"},
-		},
-		"default": map[string]any{"q": "x"},
-	})
-	if err != nil {
-		t.Fatalf("NewTool: %v", err)
-	}
-	converted, err := responsesTools([]litellm.Tool{tool}, nil)
-	if err != nil {
-		t.Fatalf("responsesTools: %v", err)
-	}
-	if len(converted) != 1 || converted[0].Strict != nil {
-		t.Fatalf("tool strict = %#v", converted)
-	}
-	params := converted[0].Parameters.(map[string]any)
-	if _, ok := params["additionalProperties"]; ok {
-		t.Fatalf("default mode should not add additionalProperties: %#v", params)
-	}
-	if got, ok := params["default"]; !ok {
-		t.Fatalf("default mode should preserve schema fields: %#v", params)
-	} else if got.(map[string]any)["q"] != "x" {
-		t.Fatalf("default = %#v", got)
-	}
-}
-
-func TestResponsesToolsStrictEnabledNormalizesSchema(t *testing.T) {
-	tool, err := litellm.NewTool("lookup", "Lookup.", map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"q": map[string]any{"type": "string", "default": "x"},
-		},
-		"required": []string{"q"},
-		"default":  map[string]any{"q": "x"},
-	})
-	if err != nil {
-		t.Fatalf("NewTool: %v", err)
-	}
-	tool.Strict = litellm.StrictEnabled
-
-	converted, err := responsesTools([]litellm.Tool{tool}, nil)
-	if err != nil {
-		t.Fatalf("responsesTools: %v", err)
-	}
-	if len(converted) != 1 || converted[0].Strict == nil || !*converted[0].Strict {
-		t.Fatalf("tool strict = %#v", converted)
-	}
-	params := converted[0].Parameters.(map[string]any)
-	if params["additionalProperties"] != false {
-		t.Fatalf("additionalProperties = %#v", params["additionalProperties"])
-	}
-	if _, ok := params["default"]; ok {
-		t.Fatalf("default should be removed from strict schema: %#v", params)
-	}
-	props := params["properties"].(map[string]any)
-	q := props["q"].(map[string]any)
-	if _, ok := q["default"]; ok {
-		t.Fatalf("nested default should be removed from strict schema: %#v", q)
-	}
-}
-
-func TestResponsesToolsStrictEnabledRejectsSchemaMissingRequired(t *testing.T) {
-	tool, err := litellm.NewTool("lookup", "Lookup.", map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"q": map[string]any{"type": "string"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("NewTool: %v", err)
-	}
-	tool.Strict = litellm.StrictEnabled
-
-	_, err = responsesTools([]litellm.Tool{tool}, nil)
-	if err == nil || !strings.Contains(err.Error(), "required") {
-		t.Fatalf("expected strict schema error, got %v", err)
-	}
-}
-
-func TestResponsesRejectsConversationWithPreviousResponseID(t *testing.T) {
-	provider := mustProvider(t)
-	_, err := provider.buildResponsesRequest(&ResponsesRequest{
-		Model:              "gpt-5.1",
-		Messages:           []litellm.Message{litellm.UserText("hello")},
-		Conversation:       "conv_123",
-		PreviousResponseID: "resp_123",
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Fatalf("expected mutual exclusion error, got %v", err)
-	}
-}
-
-func TestResponsesRejectsInvalidPromptCacheRetention(t *testing.T) {
-	provider := mustProvider(t)
-	_, err := provider.buildResponsesRequest(&ResponsesRequest{
-		Model:                "gpt-5.1",
-		Messages:             []litellm.Message{litellm.UserText("hello")},
-		PromptCacheRetention: "forever",
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "prompt_cache_retention") {
-		t.Fatalf("expected prompt cache retention error, got %v", err)
-	}
-}
-
-func TestResponsesReturnsStructuredValidationError(t *testing.T) {
-	provider := mustProvider(t)
-	_, err := provider.Responses(context.Background(), &ResponsesRequest{
-		Model:              "gpt-5.1",
-		Messages:           []litellm.Message{litellm.UserText("hello")},
-		Conversation:       "conv_123",
-		PreviousResponseID: "resp_123",
-	})
-	if err == nil || !litellm.IsValidationError(err) {
-		t.Fatalf("expected structured validation error, got %v", err)
-	}
-}
-
-func TestResponsesAPIChatRoutesToResponsesEndpoint(t *testing.T) {
-	var capturedPath string
-	var capturedBody map[string]any
-	provider, err := New(Config{
-		API:     APIResponses,
-		APIKey:  "test-key",
-		BaseURL: "https://example.test",
-		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			capturedPath = req.URL.Path
-			if err := json.NewDecoder(req.Body).Decode(&capturedBody); err != nil {
-				t.Fatalf("decode request body: %v", err)
+	}, {
+		name: "incomplete",
+		body: `{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[]}`,
+		want: litellm.Response{Model: "req-model", FinishReason: litellm.FinishReasonLength, FinishReasonRaw: "max_output_tokens"},
+	}, {
+		name: "content filter",
+		body: `{"status":"incomplete","incomplete_details":{"reason":"content_filter"},"output":[]}`,
+		want: litellm.Response{Model: "req-model", FinishReason: litellm.FinishReasonSafety, FinishReasonRaw: "content_filter"},
+	}}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var parsed responsesResponse
+			if err := json.Unmarshal([]byte(test.body), &parsed); err != nil {
+				t.Fatal(err)
 			}
-			return jsonResponse(http.StatusOK, `{
-				"id":"resp_123",
-				"model":"gpt-5.1",
-				"status":"completed",
-				"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],
-				"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}
-			}`), nil
-		}),
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	maxTokens := 128
-	parallelToolCalls := false
-	resp, err := provider.Chat(context.Background(), &litellm.Request{
-		Model:     "gpt-5.1",
-		MaxTokens: &maxTokens,
-		Messages: []litellm.Message{
-			litellm.System("Follow instructions."),
-			litellm.UserText("hi"),
-		},
-		Tools:    []litellm.Tool{mustTool(t, "lookup", "Lookup.", map[string]any{"type": "object"})},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "medium"},
-		ProviderOptions: mustProviderOptions(t, map[string]any{
-			ProviderOptionStore:             true,
-			ProviderOptionMetadata:          map[string]any{"tenant": "acme"},
-			ProviderOptionParallelToolCalls: parallelToolCalls,
-			ProviderOptionVerbosity:         "low",
-		}),
-	})
-	if err != nil {
-		t.Fatalf("Chat returned error: %v", err)
-	}
-	if resp.Text() != "ok" {
-		t.Fatalf("Text = %q", resp.Text())
-	}
-	if capturedPath != "/v1/responses" {
-		t.Fatalf("path = %q, want /v1/responses", capturedPath)
-	}
-	if capturedBody["input"] != "hi" || capturedBody["instructions"] != "Follow instructions." {
-		t.Fatalf("input/instructions = %#v/%#v", capturedBody["input"], capturedBody["instructions"])
-	}
-	if capturedBody["max_output_tokens"] != float64(maxTokens) {
-		t.Fatalf("max_output_tokens = %#v", capturedBody["max_output_tokens"])
-	}
-	reasoning := capturedBody["reasoning"].(map[string]any)
-	if reasoning["effort"] != "medium" {
-		t.Fatalf("reasoning = %#v", reasoning)
-	}
-	text := capturedBody["text"].(map[string]any)
-	if text["verbosity"] != "low" {
-		t.Fatalf("text = %#v", text)
-	}
-	if capturedBody["store"] != true || capturedBody["parallel_tool_calls"] != false {
-		t.Fatalf("store/parallel_tool_calls = %#v/%#v", capturedBody["store"], capturedBody["parallel_tool_calls"])
-	}
-}
-
-func TestResponsesAPIStreamRoutesToResponsesEndpoint(t *testing.T) {
-	var capturedPath string
-	var capturedBody map[string]any
-	provider, err := New(Config{
-		API:     APIResponses,
-		APIKey:  "test-key",
-		BaseURL: "https://example.test",
-		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			capturedPath = req.URL.Path
-			if err := json.NewDecoder(req.Body).Decode(&capturedBody); err != nil {
-				t.Fatalf("decode request body: %v", err)
+			test.want.Provider = "openai"
+			if got := convertResponsesResponse(&parsed, "req-model"); !reflect.DeepEqual(*got, test.want) {
+				t.Fatalf("response = %#v\nwant %#v", *got, test.want)
 			}
-			return streamResponse(strings.Join([]string{
-				`data: {"type":"response.output_text.delta","delta":"o"}`,
-				`data: {"type":"response.output_text.delta","delta":"k"}`,
-				`data: {"type":"response.completed","response":{"model":"gpt-5.1","status":"completed","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`,
-				"",
-			}, "\n\n")), nil
-		}),
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	includeObfuscation := false
-	stream, err := provider.Stream(context.Background(), &litellm.Request{
-		Model:    "gpt-5.1",
-		Messages: []litellm.Message{litellm.UserText("hi")},
-		ProviderOptions: mustProviderOptions(t, map[string]any{
-			ProviderOptionStreamOptions: map[string]any{"include_obfuscation": includeObfuscation},
-		}),
-	})
-	if err != nil {
-		t.Fatalf("Stream returned error: %v", err)
-	}
-	resp, err := litellm.Collect(stream)
-	if err != nil {
-		t.Fatalf("Collect returned error: %v", err)
-	}
-	if resp.Text() != "ok" {
-		t.Fatalf("Text = %q", resp.Text())
-	}
-	if capturedPath != "/v1/responses" || capturedBody["stream"] != true {
-		t.Fatalf("path/stream = %q/%#v", capturedPath, capturedBody["stream"])
-	}
-	streamOptions := capturedBody["stream_options"].(map[string]any)
-	if streamOptions["include_obfuscation"] != false {
-		t.Fatalf("stream_options = %#v", streamOptions)
+		})
 	}
 }
 
-func TestResponsesAPIRejectsChatOnlyProviderOption(t *testing.T) {
-	provider, err := New(Config{API: APIResponses, APIKey: "test-key"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	_, err = provider.Chat(context.Background(), &litellm.Request{
-		Model:    "gpt-5.1",
-		Messages: []litellm.Message{litellm.UserText("hello")},
-		ProviderOptions: mustProviderOptions(t, map[string]any{
-			ProviderOptionFrequencyPenalty: 0.2,
-		}),
-	})
-	if err == nil || !strings.Contains(err.Error(), "only supported with chat completions API") || !litellm.IsValidationError(err) {
-		t.Fatalf("expected chat-only provider option validation error, got %v", err)
-	}
-}
-
-func TestResponsesAPIRejectsUnsupportedRequestField(t *testing.T) {
-	provider, err := New(Config{API: APIResponses, APIKey: "test-key"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	_, err = provider.Chat(context.Background(), &litellm.Request{
-		Model:    "gpt-5.1",
-		Messages: []litellm.Message{litellm.UserText("hello")},
-		Stop:     []string{"END"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "does not support request field") || !litellm.IsValidationError(err) {
-		t.Fatalf("expected unsupported request field validation error, got %v", err)
-	}
-}
-
-func TestResponsesAPIRejectsMinimalThinkingEffort(t *testing.T) {
-	provider, err := New(Config{API: APIResponses, APIKey: "test-key"})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	_, err = provider.Chat(context.Background(), &litellm.Request{
-		Model:    "gpt-5.1",
-		Messages: []litellm.Message{litellm.UserText("hello")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "minimal"},
-	})
-	if err == nil || !strings.Contains(err.Error(), `unsupported reasoning_effort "minimal"`) || !litellm.IsValidationError(err) {
-		t.Fatalf("expected minimal reasoning_effort validation error, got %v", err)
-	}
-}
-
-func TestResponsesThinkingUsesDefaultEffort(t *testing.T) {
-	provider := mustProvider(t)
-	wire, err := provider.buildResponsesRequest(&ResponsesRequest{
-		Model:    "gpt-5.1",
-		Messages: []litellm.Message{litellm.UserText("hello")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled},
-	}, false)
-	if err != nil {
-		t.Fatalf("buildResponsesRequest: %v", err)
-	}
-	if wire.Reasoning == nil || wire.Reasoning.Effort != "medium" {
-		t.Fatalf("reasoning = %#v", wire.Reasoning)
-	}
-
-	wire, err = provider.buildResponsesRequest(&ResponsesRequest{
-		Model:    "gpt-5.1",
-		Messages: []litellm.Message{litellm.UserText("hello")},
-		Thinking: &litellm.Thinking{Mode: litellm.ThinkingEnabled, IncludeOutput: true},
-	}, false)
-	if err != nil {
-		t.Fatalf("buildResponsesRequest: %v", err)
-	}
-	if wire.Reasoning == nil || wire.Reasoning.Summary != "auto" {
-		t.Fatalf("reasoning = %#v", wire.Reasoning)
-	}
-}
-
-func TestResponsesConvertsOutputBlocks(t *testing.T) {
-	resp, err := convertResponsesResponse(&responsesResponse{
-		Model:  "gpt-5.1",
-		Status: "completed",
-		Output: []responsesOutputItem{
-			{Type: "reasoning", Summary: []responsesSummaryItem{{Text: "think"}}},
-			{Type: "message", Content: []responsesContentItem{{Type: "output_text", Text: "answer"}}},
-			{Type: "function_call", ID: "fc_1", CallID: "call_1", Name: "lookup", Arguments: `{"q":"x"}`},
-		},
-		Usage: responsesUsage{
-			InputTokens:         litellm.IntPtr(3),
-			OutputTokens:        litellm.IntPtr(4),
-			TotalTokens:         litellm.IntPtr(7),
-			InputTokensDetails:  &responsesInputTokensDetails{CachedTokens: litellm.IntPtr(2), CacheWriteTokens: litellm.IntPtr(5)},
-			OutputTokensDetails: &responsesOutputTokensDetails{ReasoningTokens: litellm.IntPtr(1)},
-		},
-	}, "")
-	if err != nil {
-		t.Fatalf("convertResponsesResponse: %v", err)
-	}
-	if resp.Reasoning() != "think" || resp.Text() != "answer" {
-		t.Fatalf("reasoning/text = %q/%q", resp.Reasoning(), resp.Text())
-	}
-	calls := resp.ToolCalls()
-	if len(calls) != 1 || calls[0].ID != "call_1" || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
-		t.Fatalf("tool calls = %+v", calls)
-	}
-	if resp.FinishReason != litellm.FinishReasonToolCall {
-		t.Fatalf("finish = %q", resp.FinishReason)
-	}
-	if *resp.Usage.InputTokens != 3 || *resp.Usage.OutputTokens != 4 || *resp.Usage.CacheReadTokens != 2 || *resp.Usage.CacheWriteTokens != 5 || *resp.Usage.ReasoningTokens != 1 {
-		t.Fatalf("usage = %+v", resp.Usage)
-	}
-}
-
-func TestResponsesPreservesRefusalAndIncompleteReason(t *testing.T) {
-	resp, err := convertResponsesResponse(&responsesResponse{
-		Model:             "gpt-5.1",
-		Status:            "incomplete",
-		IncompleteDetails: &responsesIncompleteDetails{Reason: "content_filter"},
-		Output: []responsesOutputItem{{
-			Type:    "message",
-			Content: []responsesContentItem{{Type: "refusal", Refusal: "I can't help."}},
-		}},
-	}, "")
-	if err != nil {
-		t.Fatalf("convertResponsesResponse: %v", err)
-	}
-	if resp.Refusal != "I can't help." || resp.Text() != resp.Refusal {
-		t.Fatalf("refusal/text = %q/%q", resp.Refusal, resp.Text())
-	}
-	if resp.FinishReason != litellm.FinishReasonSafety || resp.FinishReasonRaw != "content_filter" {
-		t.Fatalf("finish/raw = %q/%q", resp.FinishReason, resp.FinishReasonRaw)
-	}
-}
-
-func TestResponsesIncompleteMaxOutputTokensMapsToLength(t *testing.T) {
-	resp, err := convertResponsesResponse(&responsesResponse{
-		Status:            "incomplete",
-		IncompleteDetails: &responsesIncompleteDetails{Reason: "max_output_tokens"},
-	}, "gpt-5.1")
-	if err != nil {
-		t.Fatalf("convertResponsesResponse: %v", err)
-	}
-	if resp.FinishReason != litellm.FinishReasonLength || resp.FinishReasonRaw != "max_output_tokens" {
-		t.Fatalf("finish/raw = %q/%q", resp.FinishReason, resp.FinishReasonRaw)
-	}
-}
-
-func TestResponsesReasoningItemRoundTripsWithEncryptedContent(t *testing.T) {
-	resp, err := convertResponsesResponse(&responsesResponse{
-		Model:  "gpt-5.1",
-		Status: "completed",
-		Output: []responsesOutputItem{
-			{
-				ID:               "rs_1",
-				Type:             "reasoning",
-				Status:           "completed",
-				EncryptedContent: "enc_123",
-				Summary:          []responsesSummaryItem{{Text: "think"}},
-				Raw:              json.RawMessage(`{"id":"rs_1","type":"reasoning","status":"completed","encrypted_content":"enc_123","summary":[{"text":"think"}]}`),
-			},
-			{Type: "function_call", ID: "fc_1", CallID: "call_1", Name: "lookup", Arguments: `{"q":"x"}`},
-		},
-	}, "")
-	if err != nil {
-		t.Fatalf("convertResponsesResponse: %v", err)
-	}
-	reasoning, ok := resp.Blocks[0].(litellm.ReasoningBlock)
-	if !ok || reasoning.Text != "think" || !reasoning.Summary || !strings.Contains(string(reasoning.Extra), `"encrypted_content":"enc_123"`) {
-		t.Fatalf("reasoning block = %#v", resp.Blocks[0])
-	}
-
-	items, err := responsesInputItems([]litellm.Message{litellm.Assistant(resp.Blocks...)})
-	if err != nil {
-		t.Fatalf("responsesInputItems: %v", err)
-	}
-	data, err := json.Marshal(items)
-	if err != nil {
-		t.Fatalf("marshal items: %v", err)
-	}
-	if !strings.Contains(string(data), `"encrypted_content":"enc_123"`) || !strings.Contains(string(data), `"call_id":"call_1"`) {
-		t.Fatalf("round-trip items lost provider state: %s", data)
-	}
-}
-
-func TestConvertResponsesResponseRejectsNil(t *testing.T) {
-	_, err := convertResponsesResponse(nil, "gpt-5.1")
-	if err == nil || !strings.Contains(err.Error(), "responses response cannot be nil") {
-		t.Fatalf("expected nil responses response error, got %v", err)
-	}
-}
-
-func TestResponsesRejectsInvalidToolCallArguments(t *testing.T) {
-	_, err := convertResponsesResponse(&responsesResponse{
-		Model: "gpt-5.1",
-		Output: []responsesOutputItem{
-			{Type: "function_call", ID: "fc_1", CallID: "call_1", Name: "lookup", Arguments: `{"q":`},
-		},
-	}, "")
-	if err == nil || !strings.Contains(err.Error(), "arguments are not valid JSON") {
-		t.Fatalf("expected invalid arguments error, got %v", err)
-	}
-}
-
-func TestResponsesRejectsUnsupportedOutputItem(t *testing.T) {
-	_, err := convertResponsesResponse(&responsesResponse{
-		Model: "gpt-5.1",
-		Output: []responsesOutputItem{
-			{Type: "computer_call", ID: "item_1"},
-		},
-	}, "")
-	if err == nil || !strings.Contains(err.Error(), "unsupported responses output item type") {
-		t.Fatalf("expected unsupported output item error, got %v", err)
-	}
-}
-
-func TestResponsesRejectsUnsupportedContentItem(t *testing.T) {
-	_, err := convertResponsesResponse(&responsesResponse{
-		Model: "gpt-5.1",
-		Output: []responsesOutputItem{
-			{Type: "message", Content: []responsesContentItem{{Type: "audio", Text: "sound"}}},
-		},
-	}, "")
-	if err == nil || !strings.Contains(err.Error(), "unsupported responses content item type") {
-		t.Fatalf("expected unsupported content item error, got %v", err)
-	}
-}
-
-func TestResponsesSendsRequestToEndpoint(t *testing.T) {
-	var capturedPath string
-	var capturedBody map[string]any
-	provider, err := New(Config{
-		APIKey:  "test-key",
-		BaseURL: "https://example.test",
-		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			capturedPath = req.URL.Path
-			if err := json.NewDecoder(req.Body).Decode(&capturedBody); err != nil {
-				t.Fatalf("decode request body: %v", err)
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     make(http.Header),
-				Body: io.NopCloser(strings.NewReader(`{
-					"model":"gpt-5.1",
-					"status":"completed",
-					"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],
-					"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}
-				}`)),
-			}, nil
-		}),
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	resp, err := provider.Responses(context.Background(), &ResponsesRequest{
-		Model:    "gpt-5.1",
-		Messages: []litellm.Message{litellm.UserText("hello")},
-	})
-	if err != nil {
-		t.Fatalf("Responses: %v", err)
-	}
-	if capturedPath != "/v1/responses" {
-		t.Fatalf("path = %q", capturedPath)
-	}
-	if capturedBody["input"] != "hello" {
-		t.Fatalf("body = %#v", capturedBody)
-	}
-	if resp.Text() != "ok" || *resp.Usage.TotalTokens != 3 {
-		t.Fatalf("response = %+v", resp)
-	}
-	if len(resp.Raw) != 0 {
-		t.Fatalf("raw should be empty by default: %s", resp.Raw)
-	}
-}
-
-func TestResponsesCanCaptureRawResponse(t *testing.T) {
-	const body = `{"model":"gpt-5.1","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`
-	provider, err := New(Config{
-		APIKey:  "test-key",
-		BaseURL: "https://example.test",
-		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     make(http.Header),
-				Body:       io.NopCloser(strings.NewReader(body)),
-			}, nil
-		}),
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	resp, err := provider.Responses(context.Background(), &ResponsesRequest{
-		Model:              "gpt-5.1",
-		Messages:           []litellm.Message{litellm.UserText("hello")},
-		CaptureRawResponse: true,
-	})
-	if err != nil {
-		t.Fatalf("Responses: %v", err)
-	}
-	if string(resp.Raw) != body {
-		t.Fatalf("raw = %s, want %s", resp.Raw, body)
-	}
-}
-
-func TestResponsesStreamCollectsTypedEvents(t *testing.T) {
-	provider, err := New(Config{
-		APIKey:  "test-key",
-		BaseURL: "https://example.test",
-		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			var body map[string]any
-			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-				t.Fatalf("decode request body: %v", err)
-			}
-			if body["stream"] != true {
-				t.Fatalf("stream flag = %#v", body["stream"])
-			}
-			return streamResponse(testgolden.ReadFixtureString(t, "../../testdata/openai/responses_stream.sse")), nil
-		}),
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	stream, err := provider.ResponsesStream(context.Background(), &ResponsesRequest{
-		Model:    "gpt-5.1",
-		Messages: []litellm.Message{litellm.UserText("hello")},
-	})
-	if err != nil {
-		t.Fatalf("ResponsesStream: %v", err)
-	}
-	var sawProviderEvent bool
-	events := make([]litellm.Event, 0)
-	for {
-		event, err := stream.Next()
-		if err != nil {
-			t.Fatalf("Next: %v", err)
-		}
-		events = append(events, event)
-		if providerEvent, ok := event.(litellm.ProviderEvent); ok && providerEvent.Name == "response.code_interpreter_call.in_progress" {
-			sawProviderEvent = true
-		}
-		if _, ok := event.(litellm.DoneEvent); ok {
-			break
-		}
-	}
-	if !sawProviderEvent {
-		t.Fatalf("expected hosted tool lifecycle ProviderEvent, got %#v", events)
-	}
-	stream = &sliceStream{events: events}
-	resp, err := litellm.Collect(stream)
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
-	if resp.Text() != "hel" || resp.Reasoning() != "think " {
-		t.Fatalf("text/reasoning = %q/%q", resp.Text(), resp.Reasoning())
-	}
-	calls := resp.ToolCalls()
-	if len(calls) != 1 || calls[0].ID != "call_1" || calls[0].Name != "lookup" || string(calls[0].Arguments) != `{"q":"x"}` {
-		t.Fatalf("tool calls = %+v", calls)
-	}
-	if *resp.Usage.InputTokens != 2 || *resp.Usage.OutputTokens != 3 || *resp.Usage.CacheReadTokens != 1 || *resp.Usage.CacheWriteTokens != 2 || *resp.Usage.ReasoningTokens != 1 {
-		t.Fatalf("usage = %+v", resp.Usage)
-	}
-	if resp.FinishReason != litellm.FinishReasonStop {
-		t.Fatalf("finish = %q", resp.FinishReason)
-	}
-}
-
-func TestResponsesStreamIdleTimeout(t *testing.T) {
-	provider, err := New(Config{
-		APIKey:            "test-key",
-		BaseURL:           "https://example.test",
-		StreamIdleTimeout: 10 * time.Millisecond,
-		HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     make(http.Header),
-				Body: &contextBlockingBody{
-					ctx: req.Context(),
-					prefix: []byte(strings.Join([]string{
-						`event: response.output_text.delta`,
-						`data: {"type":"response.output_text.delta","delta":"hi"}`,
-						``,
-						``,
-					}, "\n")),
-				},
-			}, nil
-		}),
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	stream, err := provider.ResponsesStream(context.Background(), &ResponsesRequest{
-		Model:    "gpt-5.1",
-		Messages: []litellm.Message{litellm.UserText("hello")},
-	})
-	if err != nil {
-		t.Fatalf("ResponsesStream: %v", err)
-	}
-	defer stream.Close()
-	event, err := stream.Next()
-	if err != nil {
-		t.Fatalf("first Next: %v", err)
-	}
-	if delta, ok := event.(litellm.ContentDelta); !ok || delta.Text != "hi" {
-		t.Fatalf("event = %#v, want content delta hi", event)
-	}
-	_, err = stream.Next()
-	if err == nil || !litellm.IsTimeoutError(err) || !litellm.IsStreamIdleError(err) {
-		t.Fatalf("expected stream idle timeout, got %v", err)
-	}
-}
-
-func TestResponsesStreamErrorEventSurfaces(t *testing.T) {
-	stream := newResponsesStream(streamResponse(strings.Join([]string{
-		`event: error`,
-		`data: {"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}`,
-		``,
-	}, "\n")), "gpt-5.1")
-	event, err := stream.Next()
-	if event != nil {
-		t.Fatalf("failure returned as event: %#v", event)
-	}
-	if err == nil || !strings.Contains(err.Error(), "bad request") || !litellm.IsProviderError(err) {
-		t.Fatalf("expected stream error, got %v", err)
-	}
-	if event, err := stream.Next(); event != nil || err != io.EOF {
-		t.Fatalf("failed stream continued: event=%#v error=%v", event, err)
-	}
-}
-
-func TestResponsesStreamFailedEventSurfacesStructuredError(t *testing.T) {
-	stream := newResponsesStream(streamResponse(strings.Join([]string{
-		`event: response.failed`,
-		`data: {"type":"response.failed","response":{"error":{"code":"server_error","message":"failed"}}}`,
-		``,
-	}, "\n")), "gpt-5.1")
-	event, err := stream.Next()
-	if event != nil {
-		t.Fatalf("failure returned as event: %#v", event)
-	}
-	if err == nil || !strings.Contains(err.Error(), "failed") || !litellm.IsProviderError(err) {
-		t.Fatalf("expected structured failed event error, got %v", err)
-	}
-	if event, err := stream.Next(); event != nil || err != io.EOF {
-		t.Fatalf("failed stream continued: event=%#v error=%v", event, err)
-	}
-}
-
-func TestResponsesStreamPreservesIncompleteReason(t *testing.T) {
-	stream := newResponsesStream(streamResponse(strings.Join([]string{
-		`event: response.incomplete`,
-		`data: {"type":"response.incomplete","response":{"model":"gpt-5.1","status":"incomplete","incomplete_details":{"reason":"content_filter"},"usage":{}},"sequence_number":1}`,
-		``,
-	}, "\n")), "gpt-5.1")
-	resp, err := litellm.Collect(stream)
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
-	if resp.FinishReason != litellm.FinishReasonSafety || resp.FinishReasonRaw != "content_filter" {
-		t.Fatalf("finish/raw = %q/%q", resp.FinishReason, resp.FinishReasonRaw)
-	}
-}
-
-func TestResponsesStreamDoesNotDuplicateRefusalDone(t *testing.T) {
-	stream := newResponsesStream(streamResponse(strings.Join([]string{
-		`event: response.refusal.delta`,
-		`data: {"type":"response.refusal.delta","delta":"I can't help.","sequence_number":1}`,
-		``,
-		`event: response.refusal.done`,
-		`data: {"type":"response.refusal.done","refusal":"I can't help.","sequence_number":2}`,
-		``,
-		`event: response.completed`,
-		`data: {"type":"response.completed","response":{"model":"gpt-5.1","status":"completed","usage":{}},"sequence_number":3}`,
-		``,
-	}, "\n")), "gpt-5.1")
-	resp, err := litellm.Collect(stream)
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
-	if resp.Refusal != "I can't help." || resp.Text() != resp.Refusal {
-		t.Fatalf("refusal/text = %q/%q", resp.Refusal, resp.Text())
-	}
-}
-
-func TestResponsesStreamRejectsEOFBeforeCompleted(t *testing.T) {
-	stream := newResponsesStream(streamResponse(strings.Join([]string{
-		`event: response.output_text.delta`,
-		`data: {"type":"response.output_text.delta","delta":"partial"}`,
-		``,
-	}, "\n")), "gpt-5.1")
-	_, err := litellm.Collect(stream)
-	if err == nil || !strings.Contains(err.Error(), "before response.completed") || !litellm.IsProviderError(err) {
-		t.Fatalf("expected truncated responses stream error, got %v", err)
-	}
-}
-
-func TestResponsesStreamRejectsDataWithoutEventType(t *testing.T) {
-	stream := newResponsesStream(streamResponse(strings.Join([]string{
-		`data: {"delta":"orphan"}`,
-		``,
-	}, "\n")), "gpt-5.1")
-	_, err := stream.Next()
-	if err == nil || !strings.Contains(err.Error(), "event missing type") || !litellm.IsProviderError(err) {
-		t.Fatalf("expected missing type error, got %v", err)
-	}
-}
-
-type sliceStream struct {
-	events []litellm.Event
-	index  int
-}
-
-func (s *sliceStream) Next() (litellm.Event, error) {
-	if s.index >= len(s.events) {
-		return nil, io.EOF
-	}
-	event := s.events[s.index]
-	s.index++
-	return event, nil
-}
-
-func (s *sliceStream) Close() error {
-	return nil
-}
-
-type contextBlockingBody struct {
-	ctx    context.Context
-	prefix []byte
-	offset int
-}
-
-func (b *contextBlockingBody) Read(p []byte) (int, error) {
-	if b.offset < len(b.prefix) {
-		n := copy(p, b.prefix[b.offset:])
-		b.offset += n
-		return n, nil
-	}
-	<-b.ctx.Done()
-	return 0, b.ctx.Err()
-}
-
-func (b *contextBlockingBody) Close() error {
-	return nil
-}
-
-func TestResponsesStreamPreservesContentCoordinates(t *testing.T) {
-	stream := newResponsesStream(streamResponse(strings.Join([]string{
-		`data: {"type":"response.output_text.delta","delta":"a","output_index":0,"content_index":0,"sequence_number":1}`,
-		`data: {"type":"response.output_text.delta","delta":"b","output_index":0,"content_index":1,"sequence_number":2}`,
-		`data: {"type":"response.reasoning_summary_text.delta","delta":"first","output_index":1,"summary_index":0,"sequence_number":3}`,
-		`data: {"type":"response.reasoning_summary_text.delta","delta":"second","output_index":1,"summary_index":1,"sequence_number":4}`,
-		`data: {"type":"response.output_text.delta","delta":"c","output_index":0,"content_index":0,"sequence_number":5}`,
-		`data: {"type":"response.reasoning_summary_text.delta","delta":" summary","output_index":1,"summary_index":0,"sequence_number":6}`,
-		`data: {"type":"response.completed","response":{"model":"m","status":"completed","usage":{}},"sequence_number":7}`,
-		``,
-	}, "\n")), "m")
-	defer stream.Close()
-	resp, err := litellm.Collect(stream)
+func TestResponsesChat(t *testing.T) {
+	const reply = `{"model":"gpt-5.1","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`
+	p, got := testProvider(t, Config{API: APIResponses}, reply)
+	client, err := litellm.New(p, litellm.WithCaptureRawResponse(true))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.Blocks) != 4 {
-		t.Fatalf("blocks = %#v", resp.Blocks)
+	resp, err := client.Chat(context.Background(), litellm.Request{Model: "gpt-5.1", Messages: []litellm.Message{litellm.UserText("hi")}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if resp.Blocks[0].(litellm.TextBlock).Text != "ac" || resp.Blocks[1].(litellm.TextBlock).Text != "b" {
-		t.Fatalf("text coordinates lost: %#v", resp.Blocks)
+	if resp.Text() != "ok" || string(resp.Raw) != reply || got.req.Header.Get("Accept") != "application/json" {
+		t.Fatalf("response = %+v, Accept = %q", resp, got.req.Header.Get("Accept"))
 	}
-	first := resp.Blocks[2].(litellm.ReasoningBlock)
-	second := resp.Blocks[3].(litellm.ReasoningBlock)
-	if first.Text != "first summary" || second.Text != "second" || !first.Summary || !second.Summary {
-		t.Fatalf("summary coordinates lost: %#v", resp.Blocks)
+	assertJSON(t, got.body, `{"model":"gpt-5.1","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
+
+	p, _ = testProvider(t, Config{API: APIResponses}, `{"status":"failed","error":{"code":"server_error","message":"boom"}}`)
+	_, err = p.Chat(context.Background(), &litellm.Request{Model: "m"})
+	var e *litellm.Error
+	if !errors.As(err, &e) || e.Code != "server_error" || e.Message != "boom" || e.Provider != "openai" {
+		t.Fatalf("failed response: err = %#v", err)
 	}
 }

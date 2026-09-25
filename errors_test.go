@@ -4,8 +4,34 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"testing"
 )
+
+func TestErrorRendering(t *testing.T) {
+	for _, tc := range []struct {
+		err  *Error
+		want string
+	}{
+		{&Error{Provider: "p", Code: "c", Message: " boom "}, "p: c: boom"},
+		{&Error{Message: "boom"}, "boom"},
+		{&Error{Provider: "p", Code: "c"}, "p: c"},
+		{&Error{Provider: "p", StatusCode: 503, Type: ErrorTypeProvider}, "p: HTTP 503 (provider)"},
+		{&Error{StatusCode: 503}, "HTTP 503"},
+		{&Error{Type: ErrorTypeValidation}, "validation"},
+		{&Error{}, "litellm error"},
+		{NewNetworkError("p", "read failed", io.EOF), "p: read failed: EOF"},
+		{NewNetworkError("p", "read: EOF", io.EOF), "p: read: EOF"},
+		{NewError("p", ErrorTypeProvider, "decode", io.EOF), "p: decode"},
+	} {
+		if got := tc.err.Error(); got != tc.want {
+			t.Errorf("Error() = %q, want %q", got, tc.want)
+		}
+	}
+	if got := WrapError("p", ErrorTypeProvider, errors.New("boom")).Error(); got != "p: boom" {
+		t.Errorf("wrapped plain error = %q", got)
+	}
+}
 
 func TestTemporaryErrorClassification(t *testing.T) {
 	for _, tc := range []struct {
@@ -13,14 +39,7 @@ func TestTemporaryErrorClassification(t *testing.T) {
 		err       error
 		temporary bool
 	}{
-		{"rate_limit", NewHTTPError("test", 429, "busy"), true},
-		{"unavailable", NewHTTPError("test", 503, "busy"), true},
-		{"timeout", NewHTTPError("test", 408, "timeout"), true},
-		{"overloaded", NewHTTPError("test", 529, "busy"), true},
-		{"unsupported", NewHTTPError("test", 501, "unsupported"), false},
-		{"bad_request", NewHTTPError("test", 400, "bad input"), false},
-		{"moderation", NewHTTPError("test", 503, `{"error":{"code":"content_filter","message":"blocked"}}`), false},
-		{"unknown_provider", NewProviderError("test", ErrorTypeProvider, "unknown"), false},
+		{"unknown_provider", NewError("test", ErrorTypeProvider, "unknown", nil), false},
 		{"network_outcome_unknown", NewNetworkError("test", "read failed", errors.New("EOF")), true},
 		{"caller_canceled", NewNetworkError("test", "canceled", context.Canceled), false},
 		{"caller_deadline", NewNetworkError("test", "deadline", context.DeadlineExceeded), false},
@@ -34,18 +53,21 @@ func TestTemporaryErrorClassification(t *testing.T) {
 }
 
 func TestWrapErrorPreservesCauseAndClassification(t *testing.T) {
-	original := NewHTTPError("", 503, "unavailable")
-	wrapped := WrapError(original, "test")
-	var typed *LiteLLMError
+	original := &Error{Type: ErrorTypeProvider, StatusCode: 503, Temporary: true, Message: "unavailable"}
+	wrapped := WrapError("test", ErrorTypeProvider, original)
+	var typed *Error
 	if !errors.As(wrapped, &typed) || typed.Provider != "test" || !typed.Temporary || typed.StatusCode != 503 {
 		t.Fatalf("wrapped = %#v", wrapped)
 	}
 	if original.Provider != "" {
 		t.Fatal("WrapError mutated original")
 	}
-	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
-		if err := WrapError(fmt.Errorf("transport: %w", cause), "test"); !errors.Is(err, cause) {
-			t.Fatalf("lost cause %v: %v", cause, err)
-		}
+	canceled := WrapError("test", ErrorTypeProvider, fmt.Errorf("transport: %w", context.Canceled))
+	if !IsNetworkError(canceled) || IsTemporaryError(canceled) || !errors.Is(canceled, context.Canceled) {
+		t.Fatalf("canceled error = %v", canceled)
+	}
+	deadline := WrapError("test", ErrorTypeProvider, fmt.Errorf("transport: %w", context.DeadlineExceeded))
+	if !IsTimeoutError(deadline) || IsTemporaryError(deadline) || !errors.Is(deadline, context.DeadlineExceeded) {
+		t.Fatalf("deadline error = %v", deadline)
 	}
 }

@@ -4,11 +4,15 @@
 
 LiteLLM is a small, explicit Go SDK for calling LLM providers through one typed core model. The root package owns the provider-agnostic API; concrete providers live in `provider/<name>` subpackages.
 
+The SDK maps structure only. It does not infer what a model supports, does not validate vendor values locally, and does not rewrite your input: the vendor API decides, and its error is returned as a typed `*litellm.Error`.
+
 ## Install
 
 ```bash
 go get github.com/voocel/litellm
 ```
+
+Requires Go 1.26 or newer.
 
 ## Quick Start
 
@@ -26,9 +30,11 @@ import (
 )
 
 func main() {
-	client, err := openai.NewClient(openai.Config{
-		APIKey: os.Getenv("OPENAI_API_KEY"),
-	})
+	provider, err := openai.New(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")})
+	if err != nil {
+		log.Fatal(err)
+	}
+	client, err := litellm.New(provider)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -39,7 +45,7 @@ func main() {
 			litellm.System("You are concise."),
 			litellm.UserText("Explain Go interfaces in one sentence."),
 		},
-		MaxTokens: litellm.IntPtr(120),
+		MaxTokens: new(120),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -48,82 +54,36 @@ func main() {
 }
 ```
 
-`openai.NewClient(cfg, opts...)` builds the provider first, then returns a ready `*litellm.Client`; every provider package exposes it. The explicit two-step form — `provider, _ := openai.New(cfg)` then `litellm.New(provider, opts...)` — is equivalent; prefer it when you want to share one provider across multiple clients. Both forms accept the same `ClientOption`s.
+A provider is safe to share across clients. `litellm.New` accepts `ClientOption`s such as `WithObservers`, `WithStreamIdleTimeout` and `WithCaptureRawResponse`.
 
 ## Core Model
 
-Messages and responses use ordered `Block` values:
-
-- `TextBlock`
-- `ImageBlock`
-- `ReasoningBlock`
-- `ToolUseBlock`
-- `ToolResultBlock`
-- `ToolReferenceBlock`
-
-`Response.Blocks` is the canonical response content. `Text()`, `Reasoning()`, and `ToolCalls()` are convenience views.
+Messages and responses use ordered `Block` values: `TextBlock`, `ImageBlock`, `ReasoningBlock`, `ToolUseBlock`, `ToolResultBlock` and `ToolReferenceBlock`. `Response.Blocks` is the canonical content; `Text()`, `Reasoning()` and `ToolCalls()` are views.
 
 ```go
 msgs := []litellm.Message{
 	litellm.User(litellm.Text("What is in this image?"), litellm.ImageURL("https://example.com/cat.png")),
 }
-
-resp, err := client.Chat(ctx, litellm.Request{Model: "gpt-5.6", Messages: msgs})
-_ = resp
-_ = err
 ```
 
-For multi-turn tool workflows, append the previous response blocks directly:
+For multi-turn tool workflows, append the previous response blocks as they are; reasoning signatures and provider extras travel with them:
 
 ```go
-args, err := litellm.JSONRaw(map[string]any{"ok": true})
-if err != nil {
-	log.Fatal(err)
-}
-
 msgs = append(msgs,
 	litellm.Assistant(resp.Blocks...),
-	litellm.ToolResultText("call_1", string(args)),
+	litellm.ToolResultText("call_1", `{"ok":true}`),
 )
 ```
 
-`JSONRaw` returns marshal errors instead of silently producing invalid tool arguments. Use `MustJSONRaw` only for static test data or package-level examples where panic is acceptable.
+The Client checks the shared model's structure and never rewrites history. Tool-call pairing and repair are conversation policy, owned by the layer that manages the session.
 
-The Client validates the shared model's structure; Providers enforce their own protocol constraints. Applications explicitly check whether tool history is complete. Repair is a separate operation; `WithMessageRepair` has been removed:
-
-```go
-if err := litellm.ValidateHistory(msgs); err != nil {
-    log.Fatal(err)
-}
-
-// Call only when the application chooses repair; msgs remains unchanged.
-repaired, warnings := litellm.RepairMessages(msgs, litellm.RepairAll)
-_ = repaired
-_ = warnings
-```
-
-The application handles repair warnings directly. Provider normalization warnings still reach `Response.Warnings`, `WarningEvent`, and `CallObserver.OnEvent`. Synthetic tool results mark interrupted execution; they do not claim that a tool ran.
-
-Raw provider response bodies are not retained by default. Enable them explicitly when debugging:
-
-```go
-client, err := openai.NewClient(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")}, litellm.WithCaptureRawResponse(true))
-```
+Raw provider response bodies are kept only with `litellm.WithCaptureRawResponse(true)`.
 
 ## Streaming
 
-`Client.Stream` does not retain complete output by default. The core keeps block identities, text fingerprints, usage and unfinished tool arguments (released after JSON checks). Memory still depends on block count, active tool arguments and provider protocol buffers; it is not constant-memory. `Collect` / `Handle` / `StreamText` / `StreamWith` explicitly aggregate complete or partial responses. Start aggregation at the beginning of the stream; consumed events are not cached for replay.
+A stream is a sequence of blocks. `BlockStart` opens the block at `Index`, the position it takes in `Response.Blocks`; `TextDelta`, `ReasoningDelta` and `ToolUseDelta` grow it; `BlockEnd` closes it with the completed block, including late metadata such as signatures. Blocks may interleave, and all end before `DoneEvent`. `UsageEvent`, `WarningEvent` and `ProviderEvent` (native events without a typed equivalent) carry the rest.
 
-Streams emit typed `Event` values.
-Providers with explicit content boundaries emit `ContentStart` / `ContentEnd`. The start carries initial content; the end may carry a complete final snapshot with metadata, not another delta. Snapshot text must match streamed text; mismatches return an error and the partial response. `Collect` handles both; `StreamText` / `StreamWith` deliver initial text and subsequent deltas.
-`Stream` is intended for single-goroutine consumption; do not call `Next` concurrently.
-Use `WithStreamIdleTimeout` when you want an explicit per-event idle timeout; it is off by default.
-`WithStreamIdleTimeout` only covers generic `Client.Stream`; OpenAI Responses native streaming uses `openai.Config.StreamIdleTimeout`.
-For example:
-
-```go
-client, err := openai.NewClient(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")}, litellm.WithStreamIdleTimeout(120*time.Second))
-```
+`Handle` aggregates a stream and passes each event to a callback; `Collect` only aggregates. On failure both return the partial response with the error.
 
 ```go
 stream, err := client.Stream(ctx, litellm.Request{
@@ -135,63 +95,18 @@ if err != nil {
 }
 defer stream.Close()
 
-for {
-	event, err := stream.Next()
-	if err != nil {
-		log.Fatal(err)
-	}
+resp, err := litellm.Handle(stream, func(event litellm.Event) error {
 	switch e := event.(type) {
-	case litellm.ContentStart:
-		switch block := e.Block.(type) {
-		case litellm.TextBlock:
-			fmt.Print(block.Text)
-		case litellm.ReasoningBlock:
-			fmt.Print(block.Text)
-		}
-	case litellm.ContentDelta:
-		fmt.Print(e.Text)
 	case litellm.ReasoningDelta:
 		fmt.Print(e.Text)
-	case litellm.ProviderEvent:
-		// Provider-native lifecycle/hosted-tool event.
-	case litellm.DoneEvent:
-		return
+	case litellm.TextDelta:
+		fmt.Print(e.Text)
 	}
-}
-```
-
-To aggregate a stream (on failure, both a partial response and an error are returned; always check the error):
-
-```go
-resp, err := litellm.Collect(stream)
-```
-
-## Retry
-
-Retries are off by default. `LiteLLMError.Temporary` / `IsTemporaryError` describe a potentially transient failure, not a guarantee that replay is safe. Opting into retries accepts possible duplicate requests and charges. The transport retries selected HTTP statuses, never network failures or interrupted response streams. Enable retries per provider:
-
-```go
-import "github.com/voocel/litellm/retry"
-
-provider, err := openai.New(openai.Config{
-	APIKey: os.Getenv("OPENAI_API_KEY"),
-	Retry:  retry.DefaultPolicy(),
+	return nil
 })
 ```
 
-Bedrock retries re-sign each attempt internally, so users do not need to compose SigV4 transports by hand.
-
-If you need a proxy, tracing, or a custom base transport, pass `Transport` together with `Retry`. A custom `HTTPClient` is an advanced escape hatch and cannot be combined with `Retry`; configure retry inside that client yourself.
-
-Choose the smallest configuration that matches your use case:
-
-| Use case | Config |
-| --- | --- |
-| Normal retries | `Retry: retry.DefaultPolicy()` |
-| Retries plus proxy/tracing/custom base transport | `Retry` + `Transport` |
-| Fully custom request execution | `HTTPClient`, without `Retry`/`Transport` |
-
-`APIKeyFunc` is resolved once when a request is created; retry attempts reuse that request. If you use extremely short-lived Bearer tokens, inject auth in a lower-level custom `Transport` or `HTTPClient`. Normal API keys and the default retry window do not need special handling.
+`Client.Stream` aggregates as events are read, so `Handle` and `Collect` return the complete response even after some events were read with `Next`. A stream is consumed by one goroutine. `WithStreamIdleTimeout` sets an optional per-event idle timeout.
 
 ## Tools
 
@@ -216,6 +131,8 @@ resp, err := client.Chat(ctx, litellm.Request{
 })
 ```
 
+`ToolChoice` takes a `Mode` (`Auto`, `None`, `Required`) or a tool `Name`; nil leaves the vendor default.
+
 ## Structured Output
 
 ```go
@@ -239,99 +156,64 @@ resp, err := client.Chat(ctx, litellm.Request{
 
 ## Thinking
 
-Thinking is explicit. If `Thinking` is nil, the SDK sends no thinking control fields.
+`Thinking == nil` sends no thinking fields and keeps the vendor default. Otherwise the zero `Mode` enables thinking and `ThinkingDisabled` turns it off; `Effort` and `BudgetTokens` are sent as given, and `IncludeOutput` asks for reasoning text where the vendor makes it optional.
 
 ```go
 resp, err := client.Chat(ctx, litellm.Request{
-	Model:    "claude-sonnet-5",
-	Messages: []litellm.Message{litellm.UserText("Explain the tradeoffs.")},
-	MaxTokens: litellm.IntPtr(2048),
-	Thinking: &litellm.Thinking{
-		Mode:  litellm.ThinkingEnabled,
-		Effort: "low",
-	},
+	Model:     "claude-sonnet-5",
+	Messages:  []litellm.Message{litellm.UserText("Explain the tradeoffs.")},
+	MaxTokens: new(2048),
+	Thinking:  &litellm.Thinking{Effort: "low"},
 })
 ```
 
-Stable provider constraints are validated locally. Model-specific effort and disable limits are left to the provider API, so new models in the same API generation work without SDK updates.
-Portable effort values are `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`, but support is model-specific.
-Use `client.Capabilities(model)` or `litellm.GetCapabilities(provider, model)` for the stable UI/preflight baseline. Model-specific values outside that baseline can still be sent and are validated by the provider API.
+Which values a model accepts is the vendor's decision. [providers.md](providers.md) lists the exact wire mapping per provider.
 
-## OpenAI Responses
+## Prompt Caching
 
-Set `openai.Config.API = openai.APIResponses` to route generic `Client.Chat` and `Client.Stream` calls through the Responses API while keeping the shared `litellm.Request` and return types. The default is the Chat Completions API.
+Mark a cache breakpoint on a block; the prompt prefix up to and including it may be cached. `TTL` is passed as is (`litellm.CacheTTL5m`, `litellm.CacheTTL1h`, or empty for the vendor default). Breakpoints are hints: providers without a slot drop them.
 
 ```go
-client, err := openai.NewClient(openai.Config{
-	APIKey: os.Getenv("OPENAI_API_KEY"),
-	API:    openai.APIResponses,
-})
+litellm.User(litellm.TextBlock{Text: longDocument, Cache: &litellm.CacheControl{TTL: litellm.CacheTTL1h}})
 ```
 
-For native fields such as hosted tools, conversation IDs, and `previous_response_id`, use `Responses` and `ResponsesStream` on `provider/openai.Provider`:
+## Provider Options
+
+`Request.ProviderOptions` carries native wire fields: each key is a top-level field of the vendor's request body, and its value is JSON. Keys are checked against the provider's list and rejected when unknown. When a key names a field the adapter also generates, an object is merged into it and an array is appended to it; any other collision is an error.
 
 ```go
-oai, err := openai.New(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY")})
+options, err := litellm.NewProviderOptions(map[string]any{
+	openai.ProviderOptionPromptCacheKey: "session-42",
+	openai.ProviderOptionServiceTier:    "flex",
+})
 if err != nil {
 	log.Fatal(err)
 }
-
-resp, err := oai.Responses(ctx, &openai.ResponsesRequest{
-	Model: "gpt-5.6",
-	Messages: []litellm.Message{
-		litellm.UserText("Solve 15*8 step by step."),
-	},
-	ReasoningEffort:  "medium",
-	ReasoningSummary: "auto",
-	ReasoningMode:    "pro",
-	ReasoningContext: "all_turns",
-	MaxOutputTokens:  litellm.IntPtr(800),
-	OpenAITools: []openai.ResponsesTool{
-		{"type": "web_search_preview"},
-	},
+resp, err := client.Chat(ctx, litellm.Request{
+	Model:           "gpt-5.6",
+	Messages:        []litellm.Message{litellm.UserText("Hello")},
+	ProviderOptions: options,
 })
 ```
 
-Streaming Responses uses the same typed event model:
-
-```go
-oai, err := openai.New(openai.Config{
-	APIKey:            os.Getenv("OPENAI_API_KEY"),
-	StreamIdleTimeout: 120 * time.Second,
-})
-
-stream, err := oai.ResponsesStream(ctx, &openai.ResponsesRequest{
-	Model:    "gpt-5.6",
-	Messages: []litellm.Message{litellm.UserText("Search and summarize.")},
-})
-```
+`client.Capabilities()` reports what the adapter can express (`ok` is false for a custom provider that declares nothing): whether `Thinking`, `ThinkingDisabled`, `Effort` and `BudgetTokens` are sent, and the accepted option keys. It is static per provider; whether a model honors a request is still the vendor's call.
 
 ## Providers
 
-Provider configs are provider-specific. Authentication is not forced into a single API-key shape.
-
-```go
-import (
-	"github.com/voocel/litellm/provider/anthropic"
-	"github.com/voocel/litellm/provider/bedrock"
-	"github.com/voocel/litellm/provider/deepseek"
-	"github.com/voocel/litellm/provider/gemini"
-	"github.com/voocel/litellm/provider/glm"
-	"github.com/voocel/litellm/provider/grok"
-	"github.com/voocel/litellm/provider/minimax"
-	"github.com/voocel/litellm/provider/ollama"
-	"github.com/voocel/litellm/provider/openrouter"
-	"github.com/voocel/litellm/provider/qwen"
-)
-```
-
-Examples:
+| Package | API |
+| --- | --- |
+| `provider/openai` | OpenAI Chat Completions (default) or Responses |
+| `provider/anthropic` | Anthropic Messages |
+| `provider/gemini` | Gemini `generateContent` |
+| `provider/bedrock` | Amazon Bedrock Converse (SigV4) |
+| `provider/deepseek`, `glm`, `grok`, `mimo`, `minimax`, `ollama`, `openrouter`, `qwen` | each vendor's Chat Completions dialect |
+| `provider/compat` | any other OpenAI-compatible endpoint (vLLM, LM Studio, gateways) |
 
 ```go
 anthropic.New(anthropic.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
 gemini.New(gemini.Config{APIKey: os.Getenv("GEMINI_API_KEY")})
-deepseek.New(deepseek.Config{APIKey: os.Getenv("DEEPSEEK_API_KEY")})
 ollama.New(ollama.Config{})
+compat.New(compat.Config{BaseURL: "http://localhost:8000/v1"})
 
 bedrock.New(bedrock.Config{
 	Region: "us-east-1",
@@ -343,8 +225,22 @@ bedrock.New(bedrock.Config{
 })
 ```
 
-Supported provider packages currently include OpenAI, Anthropic, Gemini, Bedrock, DeepSeek, Qwen, GLM, OpenRouter, MiniMax, Grok, MiMo, and Ollama.
-See [Provider Capabilities](provider-capabilities.md) for thinking, reasoning, usage, and cache support across providers.
+`openai` speaks the official protocol only (`max_completion_tokens`, `prompt_cache_breakpoint`). `compat` sends `max_tokens` and passes every provider option through unchecked, since it cannot know the server's fields.
+
+### OpenAI Responses
+
+Set `openai.Config.API = openai.APIResponses` to route `Chat` and `Stream` through the Responses API with the same request and response types. Native Responses fields are provider options; using an option of the other API is an error.
+
+```go
+provider, err := openai.New(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY"), API: openai.APIResponses})
+
+options, err := litellm.NewProviderOptions(map[string]any{
+	openai.ProviderOptionPreviousResponseID: "resp_123",
+	openai.ProviderOptionTools:              []any{map[string]any{"type": "web_search"}},
+})
+```
+
+Hosted tools in `tools` are appended to the generated function tools; `text` and `reasoning` objects merge into the generated ones.
 
 ## Model Listing
 
@@ -352,91 +248,85 @@ See [Provider Capabilities](provider-capabilities.md) for thinking, reasoning, u
 models, err := client.ListModels(ctx)
 ```
 
-Only providers that implement `ModelLister` support this. Returned fields are best-effort.
+Available when the provider implements `ModelLister`. Returned fields are best-effort.
 
-## Provider Options
+## Errors
 
-`Request.ProviderOptions` is `map[string]json.RawMessage`: it carries JSON data only. `NewProviderOptions` and `Set` encode values immediately and return encoding errors. The Client copies JSON bytes for execution and each Observer. Providers decode and validate their supported keys at their own boundary; unknown keys error by default.
+HTTP failures and errors inside a stream are classified the same way; check with the `Is*` helpers instead of matching messages:
 
 ```go
-options, err := litellm.NewProviderOptions(map[string]any{
-    openai.ProviderOptionPromptCacheOptions: openai.PromptCacheOptions{Mode: "implicit", TTL: "30m"},
-})
-if err != nil {
-    log.Fatal(err)
+switch {
+case litellm.IsContextOverflowError(err):
+	// compact history and resend
+case litellm.IsRateLimitError(err), litellm.IsOverloadedError(err):
+	time.Sleep(litellm.RetryAfter(err)) // 0 when the provider sent no Retry-After
+case litellm.IsContentFilterError(err):
+	// do not retry
 }
-resp, err := client.Chat(ctx, litellm.Request{
-    Model: "gpt-5.6",
-    Messages: []litellm.Message{litellm.UserText("Hello")},
-    ProviderOptions: options,
+```
+
+Messages render as `provider: code: message`. Context overflow and content filtering are detected from vendor codes and messages even when a proxy rewrites the status; they are never marked temporary.
+
+## Retry
+
+Providers never retry. `Error.Temporary` describes a possibly transient failure, not permission to replay: the vendor may already have processed and billed the request. To opt in, wrap the HTTP client you pass to the provider:
+
+```go
+import "github.com/voocel/litellm/retry"
+
+provider, err := openai.New(openai.Config{
+	APIKey:     os.Getenv("OPENAI_API_KEY"),
+	HTTPClient: retry.NewHTTPClient(nil, retry.DefaultPolicy()),
 })
 ```
 
-`ToolChoice` no longer accepts strings or protocol objects. Use `&litellm.ToolChoice{Mode: litellm.ToolChoiceAuto}` (also `None` / `Required`), or `&litellm.ToolChoice{Name: "lookup"}` to select a named tool. `nil` leaves the provider default in place. Do not mutate requests concurrently with an invocation.
+The transport retries complete 429, 500, 502, 503, 504 and 529 responses, never network failures or interrupted streams. A request body that cannot be resent returns the original response. For Bedrock, the retried request carries its SigV4 signature, which stays valid for five minutes.
 
 ## Observers And OTel
 
-An `Observer` starts a separate `CallObserver` for every Chat/Stream invocation, including local validation failures. `Start` receives an isolated snapshot of the caller's request before defaults and validation. Its returned context reaches later observers, the Provider and HTTP requests. Observer factories may run concurrently; each call owns its state.
-
-`OnEvent` observes validated stream events and warnings (including Chat warnings). `End` runs once, in reverse observer registration order, with status `completed`, `failed`, `canceled` or `closed`, duration, error and response metadata. Streaming results omit Blocks and Refusal unless explicitly requested through `CallObserverFuncs{CaptureContent: true}` or `StreamContentObserver.CaptureStreamContent()`. Observers that do not opt in receive metadata even when another observer captures content. Opening a stream does not end the call. Consume streams to termination or Close them; cancellation without Next/Close does not run callbacks in the background.
-
-Inputs, events and results are isolated copies. Callbacks run synchronously; the core does not recover panics. Application consumer callback errors belong to the consumer, not the model execution; closing that unfinished stream reports `closed`. A cleanup error after completion is returned by Close without revising the completed result. Deadlines and idle timeouts report `failed`; explicit context cancellation reports `canceled`.
+An `Observer` starts a `CallObserver` for every Chat/Stream invocation, including local validation failures. `CallInfo.Request` is a snapshot of the caller's request, shared by all observers. `OnEvent` receives stream events (and Chat warnings) as they arrive; `End` runs once with the status (`completed`, `failed`, `canceled`, `closed`), duration, error and the final or partial response. Consume streams to termination or Close them.
 
 ```go
+type logCall struct{ info litellm.CallInfo }
+
+func (c logCall) OnEvent(litellm.Event) {}
+func (c logCall) End(r litellm.CallResult) {
+	log.Printf("%s/%s: %s in %s, err=%v", c.info.Provider, c.info.Request.Model, r.Status, r.Duration, r.Err)
+}
+
 observer := litellm.ObserverFunc(func(ctx context.Context, info litellm.CallInfo) (context.Context, litellm.CallObserver) {
-    return ctx, litellm.CallObserverFuncs{
-        EndFunc: func(result litellm.CallResult) {
-            fmt.Printf("%s/%s: %s (%s), err=%v\n",
-                info.Provider, info.Model, result.Status, result.Duration, result.Err)
-        },
-    }
+	return ctx, logCall{info}
 })
 client, err := litellm.New(provider, litellm.WithObservers(observer))
 ```
 
-The optional `github.com/voocel/litellm/otel` module creates a span per call and propagates its context to the transport. It uses the final/partial result without a global call registry, lock or duplicate stream collector. Content capture is off by default. Enable it explicitly to record messages, which may contain user data and tool arguments:
+The optional `github.com/voocel/litellm/otel` module creates a GenAI semantic-convention span per call and propagates its context to the transport. Content capture is off by default; enable it explicitly, since messages may contain user data:
 
 ```go
 import litellmotel "github.com/voocel/litellm/otel"
 
 observer := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
-client, err := litellm.New(provider, litellm.WithObservers(observer))
 ```
 
-Migration: `Hook`, `HookFuncs`, `CallMeta` and `WithHook(s)` have been removed. Use `ObserverFunc`, `CallObserverFuncs`, `CallInfo`/`CallResult` and `WithObservers`; there is no compatibility shim. During development `otel/go.mod` replaces the core dependency with `..`. Before publishing, release the new core API, update OTel's required core version, and remove the local replacement.
+During development `otel/go.mod` replaces the core module with `..`; release the core first, then update OTel's requirement and drop the replacement.
 
-## Usage
+## Usage And Pricing
 
-Token counts are `*int`: `nil` means unknown; `litellm.IntPtr(0)` means a known zero. Input includes cache reads and writes; output includes reasoning. Detail counts are subsets, not extra tokens to add again. Anthropic / Bedrock adapters add separate cache counts to input, and Gemini adds thoughts to output. Unreported details remain `nil`; OTel omits these attributes instead of recording zero.
+Token counts are `*int`: nil is unknown, `new(0)` a known zero. `Input()`, `Output()`, `Total()`, `Reasoning()`, `CacheRead()` and `CacheWrite()` return `(count, known)`. Input includes cache reads and writes; output includes reasoning; detail counts are subsets.
 
-```go
-if resp.Usage.InputTokens != nil {
-    fmt.Println(*resp.Usage.InputTokens)
-}
-```
-
-Pricing requires known input and output counts. A distinct cache rate requires its corresponding cache count; missing data returns an error. Cache reads and writes are billed once, and negative counts or cache counts exceeding input are rejected. Cache rates are `*float64`: `nil` inherits the input rate; `litellm.Float64Ptr(0)` means free. Registry Set/Get copy rate pointers.
-
-## Pricing
-
-Pricing is explicit. Cost calculation never loads remote pricing implicitly.
+Pricing is explicit and never loads remote data implicitly:
 
 ```go
 import "github.com/voocel/litellm/pricing"
 
 reg := pricing.NewRegistry()
 err := reg.LoadFromURL(ctx, pricing.DefaultURL)
-cost, err := reg.Calculate(resp.Model, resp.Usage)
-
-err = reg.Set("my-model", pricing.ModelPricing{
-	InputCostPerToken:  0.000001,
-	OutputCostPerToken: 0.000002,
-})
+cost, err := reg.Cost(resp.Model, resp.Usage)
 ```
 
 ## Custom Providers
 
-Implement the small provider interface:
+Implement the provider interface; `CapabilityProvider` and `ModelLister` are optional:
 
 ```go
 type Provider interface {

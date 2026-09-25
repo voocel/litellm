@@ -1,3 +1,5 @@
+// Package pricing computes request cost from Usage and per-token rates, set
+// explicitly or loaded into a Registry from LiteLLM's price list.
 package pricing
 
 import (
@@ -14,10 +16,11 @@ import (
 	"github.com/voocel/litellm"
 )
 
+// DefaultURL is LiteLLM's community-maintained model price list.
 const DefaultURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 
-// ModelPricing uses nil cache rates to inherit the ordinary input rate.
-// A non-nil zero rate means free cache usage.
+// ModelPricing holds per-token rates; LiteLLM's list is in USD. A nil cache
+// rate inherits the input rate; a non-nil zero means free cache usage.
 type ModelPricing struct {
 	InputCostPerToken      float64  `json:"input_cost_per_token"`
 	OutputCostPerToken     float64  `json:"output_cost_per_token"`
@@ -25,48 +28,27 @@ type ModelPricing struct {
 	CacheWriteCostPerToken *float64 `json:"cache_creation_input_token_cost,omitempty"`
 }
 
-type ModelCapabilities struct {
-	Provider          string `json:"litellm_provider"`
-	MaxInputTokens    int    `json:"max_input_tokens"`
-	MaxOutputTokens   int    `json:"max_output_tokens"`
-	SupportsTools     bool   `json:"supports_function_calling"`
-	SupportsVision    bool   `json:"supports_vision"`
-	SupportsReasoning bool   `json:"supports_reasoning"`
-}
-
+// Cost is a cost breakdown in the currency of the rates.
 type Cost struct {
 	Input      float64 `json:"input"`
 	Output     float64 `json:"output"`
 	CacheRead  float64 `json:"cache_read,omitempty"`
 	CacheWrite float64 `json:"cache_write,omitempty"`
 	Total      float64 `json:"total"`
-	Currency   string  `json:"currency"`
 }
 
+// Registry is a concurrency-safe price table. The zero value is ready to use.
 type Registry struct {
 	mu      sync.RWMutex
-	entries map[string]entry
+	entries map[string]ModelPricing
 }
 
-type entry struct {
-	inputCostPerToken      float64
-	outputCostPerToken     float64
-	cacheReadCostPerToken  *float64
-	cacheWriteCostPerToken *float64
-	hasInputPricing        bool
-	hasOutputPricing       bool
-	provider               string
-	maxInputTokens         int
-	maxOutputTokens        int
-	supportsTools          bool
-	supportsVision         bool
-	supportsReasoning      bool
-}
-
+// NewRegistry returns an empty Registry.
 func NewRegistry() *Registry {
-	return &Registry{entries: make(map[string]entry)}
+	return &Registry{entries: make(map[string]ModelPricing)}
 }
 
+// Set adds or replaces the rates for model.
 func (r *Registry) Set(model string, price ModelPricing) error {
 	if strings.TrimSpace(model) == "" {
 		return fmt.Errorf("pricing: model is required")
@@ -77,59 +59,32 @@ func (r *Registry) Set(model string, price ModelPricing) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.entries == nil {
-		r.entries = make(map[string]entry)
+		r.entries = make(map[string]ModelPricing)
 	}
-	e := r.entries[model]
-	e.inputCostPerToken = price.InputCostPerToken
-	e.outputCostPerToken = price.OutputCostPerToken
-	e.cacheReadCostPerToken = copyRate(price.CacheReadCostPerToken)
-	e.cacheWriteCostPerToken = copyRate(price.CacheWriteCostPerToken)
-	e.hasInputPricing = true
-	e.hasOutputPricing = true
-	r.entries[model] = e
+	r.entries[model] = clonePricing(price)
 	return nil
 }
 
+// Get returns the rates for model. A "vendor/model" name falls back to "model"
+// when it has no entry of its own.
 func (r *Registry) Get(model string) (ModelPricing, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	e, ok := r.lookup(model)
-	if !ok || !e.hasInputPricing || !e.hasOutputPricing {
-		return ModelPricing{}, false
-	}
-	return ModelPricing{
-		InputCostPerToken:      e.inputCostPerToken,
-		OutputCostPerToken:     e.outputCostPerToken,
-		CacheReadCostPerToken:  copyRate(e.cacheReadCostPerToken),
-		CacheWriteCostPerToken: copyRate(e.cacheWriteCostPerToken),
-	}, true
+	price, ok := r.lookup(model)
+	return clonePricing(price), ok
 }
 
-func (r *Registry) Capabilities(model string) (ModelCapabilities, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	e, ok := r.lookup(model)
-	if !ok {
-		return ModelCapabilities{}, false
-	}
-	return ModelCapabilities{
-		Provider:          e.provider,
-		MaxInputTokens:    e.maxInputTokens,
-		MaxOutputTokens:   e.maxOutputTokens,
-		SupportsTools:     e.supportsTools,
-		SupportsVision:    e.supportsVision,
-		SupportsReasoning: e.supportsReasoning,
-	}, true
-}
-
-func (r *Registry) Calculate(model string, usage litellm.Usage) (Cost, error) {
+// Cost prices usage with the rates for model.
+func (r *Registry) Cost(model string, usage litellm.Usage) (Cost, error) {
 	price, ok := r.Get(model)
 	if !ok {
-		return Cost{}, fmt.Errorf("pricing: model %q is not loaded", model)
+		return Cost{}, fmt.Errorf("pricing: model %q has no pricing", model)
 	}
-	return Calculate(model, usage, map[string]ModelPricing{model: price})
+	return price.Cost(usage)
 }
 
+// LoadFromURL replaces the table with the JSON price list at url, such as
+// DefaultURL.
 func (r *Registry) LoadFromURL(ctx context.Context, url string) error {
 	if strings.TrimSpace(url) == "" {
 		return fmt.Errorf("pricing: url is required")
@@ -150,6 +105,8 @@ func (r *Registry) LoadFromURL(ctx context.Context, url string) error {
 	return r.LoadFromReader(resp.Body)
 }
 
+// LoadFromReader replaces the table with a JSON price list in LiteLLM's
+// format. Models without both input and output rates are skipped.
 func (r *Registry) LoadFromReader(reader io.Reader) error {
 	entries, err := parseRegistry(reader)
 	if err != nil {
@@ -161,11 +118,9 @@ func (r *Registry) LoadFromReader(reader io.Reader) error {
 	return nil
 }
 
-func Calculate(model string, usage litellm.Usage, table map[string]ModelPricing) (Cost, error) {
-	price, ok := table[model]
-	if !ok {
-		return Cost{}, fmt.Errorf("pricing: model %q is not in table", model)
-	}
+// Cost prices usage. Input and output counts must be known; cache counts may
+// be unknown only when their rate equals the input rate.
+func (price ModelPricing) Cost(usage litellm.Usage) (Cost, error) {
 	if err := validatePricing(price); err != nil {
 		return Cost{}, err
 	}
@@ -207,16 +162,15 @@ func Calculate(model string, usage litellm.Usage, table map[string]ModelPricing)
 		CacheRead:  cacheReadCost,
 		CacheWrite: cacheWriteCost,
 		Total:      inputCost + outputCost + cacheReadCost + cacheWriteCost,
-		Currency:   "USD",
 	}, nil
 }
 
-func parseRegistry(reader io.Reader) (map[string]entry, error) {
+func parseRegistry(reader io.Reader) (map[string]ModelPricing, error) {
 	var raw map[string]json.RawMessage
 	if err := json.NewDecoder(reader).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("pricing: decode registry: %w", err)
 	}
-	entries := make(map[string]entry, len(raw))
+	entries := make(map[string]ModelPricing, len(raw))
 	for model, rawData := range raw {
 		if model == "sample_spec" {
 			continue
@@ -226,58 +180,45 @@ func parseRegistry(reader io.Reader) (map[string]entry, error) {
 			OutputCostPerToken     *float64 `json:"output_cost_per_token"`
 			CacheReadCostPerToken  *float64 `json:"cache_read_input_token_cost"`
 			CacheWriteCostPerToken *float64 `json:"cache_creation_input_token_cost"`
-			Provider               string   `json:"litellm_provider"`
-			MaxInputTokens         int      `json:"max_input_tokens"`
-			MaxOutputTokens        int      `json:"max_output_tokens"`
-			SupportsTools          bool     `json:"supports_function_calling"`
-			SupportsVision         bool     `json:"supports_vision"`
-			SupportsReasoning      bool     `json:"supports_reasoning"`
 		}
 		if err := json.Unmarshal(rawData, &parsed); err != nil {
 			return nil, fmt.Errorf("pricing: decode model %q: %w", model, err)
 		}
-		e := entry{
-			provider:          parsed.Provider,
-			maxInputTokens:    parsed.MaxInputTokens,
-			maxOutputTokens:   parsed.MaxOutputTokens,
-			supportsTools:     parsed.SupportsTools,
-			supportsVision:    parsed.SupportsVision,
-			supportsReasoning: parsed.SupportsReasoning,
+		if parsed.InputCostPerToken == nil || parsed.OutputCostPerToken == nil {
+			continue
 		}
-		if parsed.InputCostPerToken != nil {
-			e.inputCostPerToken = *parsed.InputCostPerToken
-			e.hasInputPricing = true
+		entries[model] = ModelPricing{
+			InputCostPerToken:      *parsed.InputCostPerToken,
+			OutputCostPerToken:     *parsed.OutputCostPerToken,
+			CacheReadCostPerToken:  parsed.CacheReadCostPerToken,
+			CacheWriteCostPerToken: parsed.CacheWriteCostPerToken,
 		}
-		if parsed.OutputCostPerToken != nil {
-			e.outputCostPerToken = *parsed.OutputCostPerToken
-			e.hasOutputPricing = true
-		}
-		if parsed.CacheReadCostPerToken != nil {
-			e.cacheReadCostPerToken = parsed.CacheReadCostPerToken
-		}
-		if parsed.CacheWriteCostPerToken != nil {
-			e.cacheWriteCostPerToken = parsed.CacheWriteCostPerToken
-		}
-		entries[model] = e
 	}
 	return entries, nil
 }
 
-func (r *Registry) lookup(model string) (entry, bool) {
-	if r == nil || r.entries == nil {
-		return entry{}, false
+func (r *Registry) lookup(model string) (ModelPricing, bool) {
+	if r == nil {
+		return ModelPricing{}, false
 	}
-	if e, ok := r.entries[model]; ok {
-		return e, true
+	if price, ok := r.entries[model]; ok {
+		return price, true
 	}
 	if _, after, ok := strings.Cut(model, "/"); ok {
-		e, found := r.entries[after]
-		return e, found
+		price, found := r.entries[after]
+		return price, found
 	}
-	return entry{}, false
+	return ModelPricing{}, false
 }
 
-// Optional cache rates distinguish an inherited rate (nil) from free usage (zero).
+// clonePricing copies the optional cache rates, which distinguish an inherited
+// rate (nil) from free usage (zero).
+func clonePricing(price ModelPricing) ModelPricing {
+	price.CacheReadCostPerToken = copyRate(price.CacheReadCostPerToken)
+	price.CacheWriteCostPerToken = copyRate(price.CacheWriteCostPerToken)
+	return price
+}
+
 func copyRate(rate *float64) *float64 {
 	if rate == nil {
 		return nil

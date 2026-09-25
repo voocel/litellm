@@ -17,10 +17,14 @@ func main() {
 		mode = os.Args[1]
 	}
 
-	client, err := anthropic.NewClient(anthropic.Config{
+	provider, err := anthropic.New(anthropic.Config{
 		APIKey:  os.Getenv("ANTHROPIC_API_KEY"),
 		BaseURL: os.Getenv("ANTHROPIC_BASE_URL"),
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	client, err := litellm.New(provider)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -50,7 +54,7 @@ func runChat(ctx context.Context, client *litellm.Client) {
 			litellm.System("You are concise."),
 			litellm.UserText("Explain prompt caching in one sentence."),
 		},
-		MaxTokens: litellm.IntPtr(256),
+		MaxTokens: new(256),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -59,15 +63,14 @@ func runChat(ctx context.Context, client *litellm.Client) {
 }
 
 func runStream(ctx context.Context, client *litellm.Client) {
-	printer := exampleutil.StreamPrinter{}
-	resp, err := client.StreamWith(ctx, litellm.Request{
+	resp, err := exampleutil.Stream(ctx, client, litellm.Request{
 		Model: model(),
 		Messages: []litellm.Message{
 			litellm.UserText("Explain prompt caching in one sentence."),
 		},
-		MaxTokens: litellm.IntPtr(2048),
+		MaxTokens: new(2048),
 		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "minimal"},
-	}, printer.Handler())
+	})
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -1,261 +1,179 @@
+// Package openai connects to the OpenAI API, or any endpoint that implements
+// it exactly (such as Azure OpenAI), through Chat Completions or Responses.
+// Use provider/compat for other OpenAI-compatible servers.
 package openai
 
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
+	"slices"
 	"strings"
-	"time"
 
 	"github.com/voocel/litellm"
-	"github.com/voocel/litellm/retry"
+	"github.com/voocel/litellm/internal/wire"
+	"github.com/voocel/litellm/provider/internal/openaicompat"
 )
 
+// Config.API values.
 const (
-	defaultBaseURL   = "https://api.openai.com"
-	defaultUserAgent = "litellm-go/0.1"
-
 	APIChat      = "chat"
 	APIResponses = "responses"
 )
 
+// Config configures the OpenAI client. An API key is required.
 type Config struct {
-	API               string
-	APIKey            string
-	APIKeyFunc        func(context.Context) (string, error)
-	BaseURL           string
-	HTTPClient        HTTPClient
-	Transport         http.RoundTripper
-	Retry             *retry.Policy
-	StreamIdleTimeout time.Duration
-	UserAgent         string
-	Headers           map[string]string
-
-	// PromptCacheParams declares that a compatible endpoint accepts OpenAI's
-	// prompt cache params and content breakpoints. The official endpoint is
-	// enabled automatically; custom endpoints require this opt-in.
-	PromptCacheParams bool
+	// API selects Chat Completions (APIChat, the default) or APIResponses.
+	API string
+	// APIKey authenticates requests; APIKeyFunc, when set, resolves it per
+	// request instead.
+	APIKey     string
+	APIKeyFunc func(context.Context) (string, error)
+	// BaseURL is the API root, https://api.openai.com/v1 by default.
+	BaseURL string
+	// HTTPClient sends requests; nil uses http.DefaultClient. Wrap it with
+	// retry.NewHTTPClient to retry.
+	HTTPClient litellm.HTTPClient
+	UserAgent  string
+	// Headers are set after the defaults, so they can override them.
+	Headers map[string]string
 }
 
-type HTTPClient interface {
-	Do(*http.Request) (*http.Response, error)
-}
-
+// Provider implements litellm.Provider, litellm.CapabilityProvider and
+// litellm.ModelLister.
 type Provider struct {
-	cfg Config
+	cfg  Config
+	chat *openaicompat.Provider
 }
 
+// New returns a Provider for cfg.
 func New(cfg Config) (*Provider, error) {
-	if cfg.APIKey == "" && cfg.APIKeyFunc == nil {
-		return nil, fmt.Errorf("openai: api key is required")
-	}
-	if cfg.HTTPClient != nil && cfg.Transport != nil {
-		return nil, fmt.Errorf("openai: HTTPClient and Transport are mutually exclusive")
-	}
-	if cfg.HTTPClient != nil && cfg.Retry != nil {
-		return nil, fmt.Errorf("openai: Retry cannot be used with a custom HTTPClient; use Transport or configure retry on the client")
+	switch cfg.API {
+	case "":
+		cfg.API = APIChat
+	case APIChat, APIResponses:
+	default:
+		return nil, litellm.NewError("openai", litellm.ErrorTypeValidation, fmt.Sprintf("api must be %q or %q, got %q", APIChat, APIResponses, cfg.API), nil)
 	}
 	if cfg.BaseURL == "" {
-		cfg.BaseURL = defaultBaseURL
+		cfg.BaseURL = "https://api.openai.com/v1"
 	}
-	if cfg.HTTPClient == nil {
-		base := cfg.Transport
-		if base == nil {
-			base = http.DefaultTransport
-		}
-		cfg.HTTPClient = &http.Client{Transport: retry.NewTransport(base, cfg.Retry)}
-	}
+	cfg.HTTPClient = wire.HTTPClient(cfg.HTTPClient)
 	if cfg.UserAgent == "" {
-		cfg.UserAgent = defaultUserAgent
+		cfg.UserAgent = wire.DefaultUserAgent
 	}
-	api, err := normalizeAPI(cfg.API)
+	chat, err := openaicompat.New(openaicompat.Config{
+		APIKey: cfg.APIKey, APIKeyFunc: cfg.APIKeyFunc, BaseURL: cfg.BaseURL,
+		HTTPClient: cfg.HTTPClient, UserAgent: cfg.UserAgent, Headers: cfg.Headers,
+	}, openaicompat.Spec{
+		Name:           "openai",
+		APIKeyRequired: true,
+		MaxTokensField: "max_completion_tokens",
+		Options:        chatOptions,
+		Cache:          promptCacheBreakpoint,
+	})
 	if err != nil {
 		return nil, err
 	}
-	cfg.API = api
-	return &Provider{cfg: cfg}, nil
+	return &Provider{cfg: cfg, chat: chat}, nil
 }
 
-func Factory(cfg Config) (litellm.Provider, error) {
-	return New(cfg)
-}
-
+// Name returns "openai".
 func (p *Provider) Name() string {
 	return "openai"
 }
 
+// Capabilities reports the static protocol facts of the selected API.
+func (p *Provider) Capabilities() litellm.Capabilities {
+	if p.cfg.API == APIResponses {
+		return litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true, ProviderOptions: sortedCopy(responsesOptions)}
+	}
+	return p.chat.Capabilities()
+}
+
+// Chat sends the request through the selected API.
 func (p *Provider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
+	if err := p.checkOptions(req); err != nil {
+		return nil, err
+	}
 	if p.cfg.API == APIResponses {
-		return p.Responses(ctx, responsesRequestFromChat(req))
+		return p.responses(ctx, req)
 	}
-	wire, err := p.buildRequest(req, false)
-	if err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
-	}
-	body, err := json.Marshal(wire)
-	if err != nil {
-		return nil, fmt.Errorf("openai: marshal request: %w", err)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.url("/chat/completions"), bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("openai: create request: %w", err)
-	}
-	if err := p.setHeaders(ctx, httpReq); err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
-	}
-	resp, err := p.cfg.HTTPClient.Do(httpReq)
-	if err != nil {
-		return nil, litellm.NewNetworkError(p.Name(), "request failed", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		return nil, litellm.NewHTTPError(p.Name(), resp.StatusCode, string(data))
-	}
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, litellm.NewNetworkError(p.Name(), "read response failed", err)
-	}
-	var parsed chatResponse
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		return nil, litellm.NewProviderErrorWithCause(p.Name(), litellm.ErrorTypeProvider, "openai: decode response", err)
-	}
-	out, err := convertResponse(&parsed, req)
-	if err != nil {
-		return nil, litellm.WrapError(err, p.Name())
-	}
-	litellm.CaptureRawResponse(req, out, data)
-	return out, nil
+	return p.chat.Chat(ctx, req)
 }
 
+// Stream sends a streaming request through the selected API.
 func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.Stream, error) {
+	if err := p.checkOptions(req); err != nil {
+		return nil, err
+	}
 	if p.cfg.API == APIResponses {
-		return p.ResponsesStream(ctx, responsesRequestFromChat(req))
+		return p.responsesStream(ctx, req)
 	}
-	wire, err := p.buildRequest(req, true)
-	if err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
-	}
-	body, err := json.Marshal(wire)
-	if err != nil {
-		return nil, fmt.Errorf("openai: marshal stream request: %w", err)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.url("/chat/completions"), bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("openai: create stream request: %w", err)
-	}
-	if err := p.setHeaders(ctx, httpReq); err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
-	}
-	resp, err := p.cfg.HTTPClient.Do(httpReq)
-	if err != nil {
-		return nil, litellm.NewNetworkError(p.Name(), "stream request failed", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, litellm.NewHTTPError(p.Name(), resp.StatusCode, string(data))
-	}
-	return newStream(resp, req), nil
+	return p.chat.Stream(ctx, req)
 }
 
-func normalizeAPI(api string) (string, error) {
-	api = strings.ToLower(strings.TrimSpace(api))
-	switch api {
-	case "", APIChat:
-		return APIChat, nil
-	case APIResponses:
-		return APIResponses, nil
-	default:
-		return "", fmt.Errorf("openai: api must be chat or responses, got %q", api)
-	}
-}
-
+// ListModels calls GET /models.
 func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.url("/models"), nil)
-	if err != nil {
-		return nil, fmt.Errorf("openai: create models request: %w", err)
-	}
-	if err := p.setHeaders(ctx, httpReq); err != nil {
-		return nil, litellm.WrapValidationError(p.Name(), err)
-	}
-	resp, err := p.cfg.HTTPClient.Do(httpReq)
-	if err != nil {
-		return nil, litellm.NewNetworkError(p.Name(), "models request failed", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		return nil, litellm.NewHTTPError(p.Name(), resp.StatusCode, string(data))
-	}
-	var payload modelList
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, litellm.NewProviderErrorWithCause(p.Name(), litellm.ErrorTypeProvider, "openai: decode models response", err)
-	}
-	models := make([]litellm.ModelInfo, 0, len(payload.Data))
-	for _, item := range payload.Data {
-		models = append(models, litellm.ModelInfo{
-			ID:       item.ID,
-			Name:     item.ID,
-			Provider: p.Name(),
-			Created:  item.Created,
-		})
-	}
-	return models, nil
+	return p.chat.ListModels(ctx)
 }
 
-func (p *Provider) setHeaders(ctx context.Context, req *http.Request) error {
-	key := p.cfg.APIKey
-	if p.cfg.APIKeyFunc != nil {
-		resolved, err := p.cfg.APIKeyFunc(ctx)
-		if err != nil {
-			return fmt.Errorf("openai: resolve api key: %w", err)
-		}
-		key = resolved
+// checkOptions points options of the other API to the Config.API that accepts
+// them.
+func (p *Provider) checkOptions(req *litellm.Request) error {
+	own, other, name := chatOptions, responsesOptions, APIResponses
+	if p.cfg.API == APIResponses {
+		own, other, name = responsesOptions, chatOptions, APIChat
 	}
-	if key == "" {
-		return fmt.Errorf("openai: api key is required")
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+key)
-	req.Header.Set("User-Agent", p.cfg.UserAgent)
-	for name, value := range p.cfg.Headers {
-		name = strings.TrimSpace(name)
-		value = strings.TrimSpace(value)
-		if name == "" {
-			return fmt.Errorf("openai: header name cannot be empty")
+	for key := range req.ProviderOptions {
+		if !slices.Contains(own, key) && slices.Contains(other, key) {
+			return litellm.NewError(p.Name(), litellm.ErrorTypeValidation, fmt.Sprintf("provider option %q requires Config.API %q", key, name), nil)
 		}
-		if value == "" {
-			continue
-		}
-		req.Header.Set(name, value)
 	}
 	return nil
 }
 
-func (p *Provider) url(path string) string {
-	baseURL := strings.TrimRight(p.cfg.BaseURL, "/")
-	// A bare origin keeps the historical OpenAI default. Once the caller has
-	// supplied a path, it is the complete API root (for example Volcengine's
-	// /api/v3) and must not be rewritten to /api/v3/v1.
-	if parsed, err := url.Parse(baseURL); err == nil && (parsed.Path == "" || parsed.Path == "/") {
-		baseURL += "/v1"
+// post sends a Responses request and returns the successful response.
+func (p *Provider) post(ctx context.Context, body []byte, stream bool) (*http.Response, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.cfg.BaseURL, "/")+"/responses", bytes.NewReader(body))
+	if err != nil {
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeInternal, "create request", err)
 	}
-	return baseURL + path
+	key, err := wire.APIKey(ctx, p.cfg.APIKey, p.cfg.APIKeyFunc, true)
+	if err != nil {
+		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+key)
+	httpReq.Header.Set("User-Agent", p.cfg.UserAgent)
+	if stream {
+		httpReq.Header.Set("Accept", "text/event-stream")
+	} else {
+		httpReq.Header.Set("Accept", "application/json")
+	}
+	if err := wire.SetHeaders(httpReq.Header, p.cfg.Headers); err != nil {
+		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
+	}
+	return wire.Do(p.cfg.HTTPClient, httpReq, p.Name(), "request")
 }
 
-// NewClient builds the provider from cfg and wraps it in a ready *litellm.Client.
-// It is a convenience for the common single-provider case. It calls New(cfg)
-// and then litellm.New(provider, opts...).
-func NewClient(cfg Config, opts ...litellm.ClientOption) (*litellm.Client, error) {
-	p, err := New(cfg)
-	if err != nil {
-		return nil, err
+// promptCacheBreakpoint marks an explicit prompt cache breakpoint. OpenAI sets
+// the TTL for the whole request through prompt_cache_options.
+func promptCacheBreakpoint(cache *litellm.CacheControl) (map[string]any, error) {
+	if cache.TTL != "" {
+		return nil, errors.New("cache breakpoint TTL is set through the prompt_cache_options provider option")
 	}
-	return litellm.New(p, opts...)
+	return map[string]any{"prompt_cache_breakpoint": map[string]any{"mode": "explicit"}}, nil
+}
+
+func (p *Provider) readResponse(resp *http.Response) ([]byte, error) {
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, litellm.NewNetworkError(p.Name(), "read response failed", err)
+	}
+	return data, nil
 }

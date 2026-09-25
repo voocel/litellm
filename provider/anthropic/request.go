@@ -1,173 +1,158 @@
 package anthropic
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"math"
-	"strings"
+	"slices"
 
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/internal/claude"
+	"github.com/voocel/litellm/internal/wire"
 )
 
-type anthropicRequest struct {
+// ProviderOptions are native Messages API fields copied into the body. An
+// option naming a generated object or array is merged into or appended to it,
+// e.g. server tools under "tools".
+const (
+	ProviderOptionMetadata          = "metadata"
+	ProviderOptionServiceTier       = "service_tier"
+	ProviderOptionTopK              = "top_k"
+	ProviderOptionContextManagement = "context_management"
+	ProviderOptionContainer         = "container"
+	ProviderOptionMCPServers        = "mcp_servers"
+	ProviderOptionTools             = "tools"
+	ProviderOptionOutputConfig      = "output_config"
+	// ProviderOptionToolChoice is merged into the generated tool_choice, e.g.
+	// {"disable_parallel_tool_use": true}.
+	ProviderOptionToolChoice = "tool_choice"
+)
+
+var providerOptions = []string{
+	ProviderOptionMetadata, ProviderOptionServiceTier, ProviderOptionTopK, ProviderOptionContextManagement,
+	ProviderOptionContainer, ProviderOptionMCPServers, ProviderOptionTools, ProviderOptionOutputConfig,
+	ProviderOptionToolChoice,
+}
+
+func sortedOptions() []string {
+	out := slices.Clone(providerOptions)
+	slices.Sort(out)
+	return out
+}
+
+type request struct {
 	Model         string                 `json:"model"`
 	System        any                    `json:"system,omitempty"`
 	MaxTokens     int                    `json:"max_tokens"`
-	Messages      []anthropicMessage     `json:"messages"`
+	Messages      []message              `json:"messages"`
 	Stream        bool                   `json:"stream,omitempty"`
 	Temperature   *float64               `json:"temperature,omitempty"`
 	TopP          *float64               `json:"top_p,omitempty"`
-	Tools         []anthropicTool        `json:"tools,omitempty"`
-	ToolChoice    any                    `json:"tool_choice,omitempty"`
+	Tools         []tool                 `json:"tools,omitempty"`
+	ToolChoice    map[string]any         `json:"tool_choice,omitempty"`
 	StopSequences []string               `json:"stop_sequences,omitempty"`
-	Thinking      *anthropicThinking     `json:"thinking,omitempty"`
-	OutputConfig  *anthropicOutputConfig `json:"output_config,omitempty"`
-	Metadata      map[string]any         `json:"metadata,omitempty"`
+	Thinking      *claude.ThinkingConfig `json:"thinking,omitempty"`
+	OutputConfig  map[string]any         `json:"output_config,omitempty"`
 }
 
-type anthropicMessage struct {
-	Role    string             `json:"role"`
-	Content []anthropicContent `json:"content"`
+type message struct {
+	Role    string    `json:"role"`
+	Content []content `json:"content"`
 }
 
-type anthropicContent struct {
-	Type         string                 `json:"type"`
-	Text         string                 `json:"text,omitempty"`
-	Source       *anthropicImageSource  `json:"source,omitempty"`
-	Thinking     string                 `json:"thinking,omitempty"`
-	Signature    string                 `json:"signature,omitempty"`
-	Data         string                 `json:"data,omitempty"`
-	ID           string                 `json:"id,omitempty"`
-	ToolUseID    string                 `json:"tool_use_id,omitempty"`
-	Name         string                 `json:"name,omitempty"`
-	Input        *map[string]any        `json:"input,omitempty"`
-	Content      any                    `json:"content,omitempty"`
-	ToolName     string                 `json:"tool_name,omitempty"`
-	IsError      bool                   `json:"is_error,omitempty"`
-	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+type content struct {
+	Type         string          `json:"type"`
+	Text         string          `json:"text,omitempty"`
+	Source       *imageSource    `json:"source,omitempty"`
+	Thinking     string          `json:"thinking,omitempty"`
+	Signature    string          `json:"signature,omitempty"`
+	Data         string          `json:"data,omitempty"`
+	ID           string          `json:"id,omitempty"`
+	ToolUseID    string          `json:"tool_use_id,omitempty"`
+	Name         string          `json:"name,omitempty"`
+	Input        json.RawMessage `json:"input,omitempty"`
+	Content      any             `json:"content,omitempty"`
+	ToolName     string          `json:"tool_name,omitempty"`
+	IsError      bool            `json:"is_error,omitempty"`
+	CacheControl *cacheControl   `json:"cache_control,omitempty"`
+	// Citations is read from responses only.
+	Citations []json.RawMessage `json:"citations,omitempty"`
 }
 
-type anthropicImageSource struct {
+type imageSource struct {
 	Type      string `json:"type"`
 	MediaType string `json:"media_type,omitempty"`
 	Data      string `json:"data,omitempty"`
 	URL       string `json:"url,omitempty"`
 }
 
-type anthropicCacheControl struct {
+type cacheControl struct {
 	Type string `json:"type"`
 	TTL  string `json:"ttl,omitempty"`
 }
 
-type anthropicTool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"input_schema"`
-	Strict      *bool          `json:"strict,omitempty"`
+type tool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema"`
+	Strict      *bool           `json:"strict,omitempty"`
 }
 
-type anthropicThinking struct {
-	Type    string `json:"type"`
-	Display string `json:"display,omitempty"`
-}
-
-type anthropicOutputConfig struct {
-	Effort string                 `json:"effort,omitempty"`
-	Format *anthropicOutputFormat `json:"format,omitempty"`
-}
-
-type anthropicOutputFormat struct {
-	Type   string          `json:"type"`
-	Schema json.RawMessage `json:"schema,omitempty"`
-}
-
-func warning(code, message string) litellm.Warning {
-	return litellm.Warning{Code: code, Provider: "anthropic", Message: message}
-}
-
-const (
-	ProviderOptionMetadata       = "metadata"
-	ProviderOptionMetadataUserID = "metadata_user_id"
-)
-
-func (p *Provider) buildRequest(req *litellm.Request, stream bool) (*anthropicRequest, []litellm.Warning, error) {
+func buildRequest(req *litellm.Request, stream bool) ([]byte, error) {
 	if req.MaxTokens == nil {
-		return nil, nil, fmt.Errorf("anthropic: max_tokens is required")
+		return nil, errors.New("max_tokens is required by the Messages API")
 	}
-	if req.Temperature != nil && req.TopP != nil {
-		return nil, nil, fmt.Errorf("anthropic: temperature and top_p cannot both be set")
-	}
-	metadata, err := anthropicMetadata(req.ProviderOptions)
+	opts, err := req.ProviderOptions.Decode()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	temperature, topP := req.Temperature, req.TopP
-	if err := validateSampling(temperature, topP); err != nil {
-		return nil, nil, err
+	if err := wire.CheckOptions(opts, providerOptions); err != nil {
+		return nil, err
 	}
-	toolChoice, err := convertToolChoice(req.ToolChoice)
-	if err != nil {
-		return nil, nil, err
-	}
-	out := &anthropicRequest{
+	out := &request{
 		Model:         req.Model,
 		MaxTokens:     *req.MaxTokens,
 		Stream:        stream,
-		Temperature:   temperature,
-		TopP:          topP,
-		StopSequences: append([]string(nil), req.Stop...),
-		ToolChoice:    toolChoice,
-		Metadata:      metadata,
+		Temperature:   req.Temperature,
+		TopP:          req.TopP,
+		StopSequences: req.Stop,
+		Thinking:      claude.Thinking(req.Thinking),
 	}
-	thinking, effort, err := convertThinking(req.Thinking)
-	if err != nil {
-		return nil, nil, err
+	if choice := req.ToolChoice; choice != nil {
+		out.ToolChoice = convertToolChoice(choice)
 	}
-	out.Thinking = thinking
-	format, err := convertResponseFormat(req.ResponseFormat)
-	if err != nil {
-		return nil, nil, err
+	if out.Thinking != nil && out.Thinking.Effort != "" {
+		out.OutputConfig = map[string]any{"effort": out.Thinking.Effort}
 	}
-	if effort != "" || format != nil {
-		out.OutputConfig = &anthropicOutputConfig{Effort: effort, Format: format}
-	}
-	if len(req.Tools) > 0 {
-		out.Tools = make([]anthropicTool, 0, len(req.Tools))
-		for _, tool := range req.Tools {
-			converted, err := convertTool(tool)
-			if err != nil {
-				return nil, nil, err
-			}
-			out.Tools = append(out.Tools, converted)
+	if format, err := convertResponseFormat(req.ResponseFormat); err != nil {
+		return nil, err
+	} else if format != nil {
+		if out.OutputConfig == nil {
+			out.OutputConfig = map[string]any{}
 		}
+		out.OutputConfig["format"] = format
 	}
-	system, messages, err := convertMessages(req.Messages)
-	if err != nil {
-		return nil, nil, err
+	for _, t := range req.Tools {
+		out.Tools = append(out.Tools, convertTool(t))
 	}
-	out.System = system
-	out.Messages = messages
-	return out, nil, nil
-}
-
-func convertToolChoice(choice *litellm.ToolChoice) (any, error) {
-	if err := choice.Validate(); err != nil {
+	if out.System, out.Messages, err = convertMessages(req.Messages); err != nil {
 		return nil, err
 	}
-	if choice == nil {
-		return nil, nil
-	}
-	if choice.Name != "" {
-		return map[string]any{"type": "tool", "name": choice.Name}, nil
-	}
-	mode := string(choice.Mode)
-	if choice.Mode == litellm.ToolChoiceRequired {
-		mode = "any"
-	}
-	return map[string]any{"type": mode}, nil
+	return wire.MarshalBody(out, opts)
 }
 
-func convertResponseFormat(format *litellm.ResponseFormat) (*anthropicOutputFormat, error) {
+func convertToolChoice(choice *litellm.ToolChoice) map[string]any {
+	if choice.Name != "" {
+		return map[string]any{"type": "tool", "name": choice.Name}
+	}
+	if choice.Mode == litellm.ToolChoiceRequired {
+		return map[string]any{"type": "any"}
+	}
+	return map[string]any{"type": string(choice.Mode)}
+}
+
+func convertResponseFormat(format *litellm.ResponseFormat) (map[string]any, error) {
 	if format == nil {
 		return nil, nil
 	}
@@ -175,315 +160,117 @@ func convertResponseFormat(format *litellm.ResponseFormat) (*anthropicOutputForm
 	case "", litellm.ResponseFormatText:
 		return nil, nil
 	case litellm.ResponseFormatJSONSchema:
-		if format.JSONSchema == nil || len(format.JSONSchema.Schema) == 0 {
-			return nil, fmt.Errorf("anthropic: response_format json_schema requires a schema")
+		out := map[string]any{"type": "json_schema"}
+		if len(format.JSONSchema.Schema) > 0 {
+			out["schema"] = json.RawMessage(format.JSONSchema.Schema)
 		}
-		return &anthropicOutputFormat{Type: "json_schema", Schema: json.RawMessage(format.JSONSchema.Schema)}, nil
+		return out, nil
 	case litellm.ResponseFormatJSONObject:
-		return nil, fmt.Errorf("anthropic: response_format json_object is not supported; use json_schema")
+		return nil, errors.New("response_format json_object has no Messages API equivalent; use json_schema")
 	default:
-		return nil, fmt.Errorf("anthropic: unsupported response format %q", format.Type)
+		return nil, fmt.Errorf("unsupported response format %q", format.Type)
 	}
 }
 
-func anthropicMetadata(rawOptions litellm.ProviderOptions) (map[string]any, error) {
-	options, err := rawOptions.Decode()
-	if err != nil {
-		return nil, err
+func convertTool(t litellm.Tool) tool {
+	out := tool{Name: t.Name, Description: t.Description, InputSchema: json.RawMessage(`{"type":"object"}`)}
+	if len(t.Parameters) > 0 {
+		out.InputSchema = json.RawMessage(t.Parameters)
 	}
-
-	if len(options) == 0 {
-		return nil, nil
-	}
-	for key := range options {
-		switch key {
-		case ProviderOptionMetadata, ProviderOptionMetadataUserID:
-		default:
-			return nil, fmt.Errorf("anthropic: unsupported provider option %q", key)
-		}
-	}
-	var metadata map[string]any
-	if raw, ok := options[ProviderOptionMetadata]; ok && raw != nil {
-		switch value := raw.(type) {
-		case map[string]any:
-			metadata = make(map[string]any, len(value))
-			for k, v := range value {
-				if k == "" {
-					return nil, fmt.Errorf("anthropic: metadata key cannot be empty")
-				}
-				metadata[k] = v
-			}
-		case map[string]string:
-			metadata = make(map[string]any, len(value))
-			for k, v := range value {
-				if k == "" {
-					return nil, fmt.Errorf("anthropic: metadata key cannot be empty")
-				}
-				metadata[k] = v
-			}
-		default:
-			return nil, fmt.Errorf("anthropic: provider option %q must be object", "metadata")
-		}
-	}
-	if raw, ok := options[ProviderOptionMetadataUserID]; ok && raw != nil {
-		userID, ok := raw.(string)
-		if !ok {
-			return nil, fmt.Errorf("anthropic: provider option %q must be string", "metadata_user_id")
-		}
-		if userID != "" {
-			if metadata == nil {
-				metadata = map[string]any{}
-			}
-			metadata["user_id"] = userID
-		}
-	}
-	if len(metadata) == 0 {
-		return nil, nil
-	}
-	return metadata, nil
-}
-
-func validateSampling(temperature, topP *float64) error {
-	if temperature != nil && *temperature != 1 {
-		return fmt.Errorf("anthropic: temperature must be 1 on current Claude models, got %g", *temperature)
-	}
-	if topP != nil && (math.IsNaN(*topP) || *topP < 0.99 || *topP > 1) {
-		return fmt.Errorf("anthropic: top_p must be between 0.99 and 1 on current Claude models, got %g", *topP)
-	}
-	return nil
-}
-
-func convertThinking(thinking *litellm.Thinking) (*anthropicThinking, string, error) {
-	if err := thinking.Validate(); err != nil {
-		return nil, "", fmt.Errorf("anthropic: %w", err)
-	}
-	if thinking == nil || thinking.Mode == litellm.ThinkingUnspecified {
-		return nil, "", nil
-	}
-	if thinking.Mode == litellm.ThinkingDisabled {
-		return &anthropicThinking{Type: "disabled"}, "", nil
-	}
-	if thinking.BudgetTokens != nil {
-		return nil, "", fmt.Errorf("anthropic: budget_tokens is not supported; use effort with adaptive thinking")
-	}
-	effort, err := adaptiveEffort(thinking.Effort)
-	if err != nil {
-		return nil, "", err
-	}
-	out := &anthropicThinking{Type: "adaptive"}
-	if thinking.IncludeOutput {
-		out.Display = "summarized"
-	}
-	return out, effort, nil
-}
-
-func adaptiveEffort(effort string) (string, error) {
-	value := strings.ToLower(strings.TrimSpace(effort))
-	switch value {
-	case "":
-		return "", nil
-	case "minimal":
-		return "", fmt.Errorf(`anthropic: thinking effort "minimal" is not supported with adaptive thinking`)
-	case "low", "medium", "high", "xhigh", "max":
-		return value, nil
-	default:
-		return "", fmt.Errorf("anthropic: unknown thinking effort %q", effort)
-	}
-}
-
-func convertTool(tool litellm.Tool) (anthropicTool, error) {
-	if tool.Name == "" {
-		return anthropicTool{}, fmt.Errorf("anthropic: tool name is required")
-	}
-	var schema map[string]any
-	if len(tool.Parameters) == 0 {
-		schema = map[string]any{"type": "object"}
-	} else if err := json.Unmarshal(tool.Parameters, &schema); err != nil {
-		return anthropicTool{}, fmt.Errorf("anthropic: tool %q parameters must be object schema: %w", tool.Name, err)
-	}
-	out := anthropicTool{Name: tool.Name, Description: tool.Description, InputSchema: schema}
-	switch tool.Strict {
-	case litellm.StrictEnabled:
-		out.Strict = litellm.Bool(true)
-	case litellm.StrictDisabled:
-		out.Strict = litellm.Bool(false)
-	}
-	return out, nil
-}
-
-func convertMessages(messages []litellm.Message) (any, []anthropicMessage, error) {
-	var system []anthropicContent
-	out := make([]anthropicMessage, 0, len(messages))
-	for _, msg := range messages {
-		content, err := convertBlocks(msg.Blocks)
-		if err != nil {
-			return nil, nil, err
-		}
-		switch msg.Role {
-		case litellm.RoleSystem:
-			system = append(system, content...)
-		case litellm.RoleAssistant:
-			out = append(out, anthropicMessage{Role: "assistant", Content: content})
-		case litellm.RoleUser:
-			out = append(out, anthropicMessage{Role: "user", Content: content})
-		case litellm.RoleTool:
-			out = append(out, anthropicMessage{Role: "user", Content: content})
-		default:
-			return nil, nil, fmt.Errorf("anthropic: unsupported role %q", msg.Role)
-		}
-	}
-	out = mergeSameRoleMessages(out)
-	if err := validateCacheOrder(system, out); err != nil {
-		return nil, nil, err
-	}
-	return systemValue(system), out, nil
-}
-
-func validateCacheOrder(system []anthropicContent, messages []anthropicMessage) error {
-	seenShort := false
-	check := func(block anthropicContent) error {
-		if block.CacheControl != nil {
-			switch block.CacheControl.TTL {
-			case litellm.CacheTTL1h:
-				if seenShort {
-					return fmt.Errorf("anthropic: 1h cache_control must appear before 5m cache_control")
-				}
-			case "", litellm.CacheTTL5m:
-				seenShort = true
-			}
-		}
-		return nil
-	}
-	var walk func([]anthropicContent) error
-	walk = func(blocks []anthropicContent) error {
-		for _, block := range blocks {
-			if err := check(block); err != nil {
-				return err
-			}
-			if nested, ok := block.Content.([]anthropicContent); ok {
-				if err := walk(nested); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-	if err := walk(system); err != nil {
-		return err
-	}
-	for _, msg := range messages {
-		if err := walk(msg.Content); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func systemValue(system []anthropicContent) any {
-	if len(system) == 0 {
-		return nil
-	}
-	if len(system) == 1 && system[0].Type == "text" && system[0].CacheControl == nil {
-		return system[0].Text
-	}
-	return system
-}
-
-// mergeSameRoleMessages folds consecutive same-role messages into one turn.
-// The Messages API requires alternating roles, and parallel tool results must
-// all land in a single user message.
-func mergeSameRoleMessages(messages []anthropicMessage) []anthropicMessage {
-	if len(messages) <= 1 {
-		return messages
-	}
-	out := make([]anthropicMessage, 0, len(messages))
-	out = append(out, messages[0])
-	for i := 1; i < len(messages); i++ {
-		last := &out[len(out)-1]
-		if last.Role == messages[i].Role {
-			last.Content = append(last.Content, messages[i].Content...)
-			continue
-		}
-		out = append(out, messages[i])
+	if strict, ok := t.Strict.Value(); ok {
+		out.Strict = &strict
 	}
 	return out
 }
 
-func convertBlocks(blocks []litellm.Block) ([]anthropicContent, error) {
-	out := make([]anthropicContent, 0, len(blocks))
+func convertMessages(messages []litellm.Message) (any, []message, error) {
+	var system []content
+	out := make([]message, 0, len(messages))
+	for i, msg := range messages {
+		blocks, err := convertBlocks(msg.Blocks)
+		if err != nil {
+			return nil, nil, fmt.Errorf("messages[%d]: %w", i, err)
+		}
+		role := "user"
+		switch msg.Role {
+		case litellm.RoleSystem:
+			system = append(system, blocks...)
+			continue
+		case litellm.RoleAssistant:
+			role = "assistant"
+		}
+		// Roles must alternate, and parallel tool results share one user turn.
+		if n := len(out); n > 0 && out[n-1].Role == role {
+			out[n-1].Content = append(out[n-1].Content, blocks...)
+			continue
+		}
+		out = append(out, message{Role: role, Content: blocks})
+	}
+	if len(system) == 1 && system[0].Type == "text" && system[0].CacheControl == nil {
+		return system[0].Text, out, nil
+	}
+	if len(system) == 0 {
+		return nil, out, nil
+	}
+	return system, out, nil
+}
+
+func convertBlocks(blocks []litellm.Block) ([]content, error) {
+	out := make([]content, 0, len(blocks))
 	for _, block := range blocks {
+		var c content
 		switch b := block.(type) {
 		case litellm.TextBlock:
-			cache, err := cacheControl(b.Cache)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, anthropicContent{Type: "text", Text: b.Text, CacheControl: cache})
+			c = content{Type: "text", Text: b.Text, CacheControl: convertCache(b.Cache)}
 		case litellm.ImageBlock:
-			source, err := imageSource(b)
+			source, err := convertImage(b)
 			if err != nil {
 				return nil, err
 			}
-			cache, err := cacheControl(b.Cache)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, anthropicContent{Type: "image", Source: source, CacheControl: cache})
+			c = content{Type: "image", Source: source, CacheControl: convertCache(b.Cache)}
 		case litellm.ReasoningBlock:
-			cache, err := cacheControl(b.Cache)
-			if err != nil {
-				return nil, err
-			}
+			c = content{Type: "thinking", Thinking: b.Text, Signature: b.Signature, CacheControl: convertCache(b.Cache)}
 			if len(b.Redacted) > 0 {
-				out = append(out, anthropicContent{Type: "redacted_thinking", Data: string(b.Redacted), CacheControl: cache})
-			} else {
-				out = append(out, anthropicContent{Type: "thinking", Thinking: b.Text, Signature: b.Signature, CacheControl: cache})
+				c = content{Type: "redacted_thinking", Data: string(b.Redacted), CacheControl: convertCache(b.Cache)}
 			}
 		case litellm.ToolUseBlock:
-			if err := validateToolID(b.ID); err != nil {
-				return nil, err
-			}
-			input := map[string]any{}
-			if len(b.Arguments) > 0 {
-				if err := json.Unmarshal(b.Arguments, &input); err != nil {
-					return nil, fmt.Errorf("anthropic: tool use %q arguments must be object: %w", b.ID, err)
-				}
-				if input == nil {
-					return nil, fmt.Errorf("anthropic: tool use %q arguments must be object", b.ID)
-				}
-			}
-			cache, err := cacheControl(b.Cache)
+			input, err := toolInput(b)
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, anthropicContent{Type: "tool_use", ID: b.ID, Name: b.Name, Input: &input, CacheControl: cache})
+			c = content{Type: "tool_use", ID: b.ID, Name: b.Name, Input: input, CacheControl: convertCache(b.Cache)}
 		case litellm.ToolResultBlock:
-			if err := validateToolID(b.ToolUseID); err != nil {
-				return nil, err
-			}
-			content, err := convertToolResultContent(b.Content)
+			result, err := convertToolResult(b.Content)
 			if err != nil {
 				return nil, err
 			}
-			cache, err := cacheControl(b.Cache)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, anthropicContent{Type: "tool_result", ToolUseID: b.ToolUseID, Content: content, IsError: b.IsError, CacheControl: cache})
+			c = content{Type: "tool_result", ToolUseID: b.ToolUseID, Content: result, IsError: b.IsError, CacheControl: convertCache(b.Cache)}
 		case litellm.ToolReferenceBlock:
-			cache, err := cacheControl(b.Cache)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, anthropicContent{Type: "tool_reference", ToolName: b.ToolName, CacheControl: cache})
+			c = content{Type: "tool_reference", ToolName: b.ToolName, CacheControl: convertCache(b.Cache)}
 		default:
-			return nil, fmt.Errorf("anthropic: unsupported block %T", block)
+			return nil, fmt.Errorf("unsupported block %T", block)
 		}
+		out = append(out, c)
 	}
 	return out, nil
 }
 
-func convertToolResultContent(blocks []litellm.Block) (any, error) {
+// toolInput returns the arguments as the input object the protocol requires.
+func toolInput(b litellm.ToolUseBlock) (json.RawMessage, error) {
+	if len(b.Arguments) == 0 {
+		return json.RawMessage("{}"), nil
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(b.Arguments, &object) != nil || object == nil {
+		return nil, fmt.Errorf("tool use %q arguments must be a JSON object", b.ID)
+	}
+	return json.RawMessage(b.Arguments), nil
+}
+
+func convertToolResult(blocks []litellm.Block) (any, error) {
+	if len(blocks) == 0 {
+		return nil, nil
+	}
 	if len(blocks) == 1 {
 		if text, ok := blocks[0].(litellm.TextBlock); ok && text.Cache == nil {
 			return text.Text, nil
@@ -492,11 +279,25 @@ func convertToolResultContent(blocks []litellm.Block) (any, error) {
 	return convertBlocks(blocks)
 }
 
-func validateToolID(id string) error {
-	if id == "" || strings.IndexFunc(id, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-')
-	}) >= 0 {
-		return fmt.Errorf("anthropic: tool id %q must contain only letters, digits, underscores or hyphens", id)
+func convertCache(cache *litellm.CacheControl) *cacheControl {
+	if cache == nil {
+		return nil
 	}
-	return nil
+	return &cacheControl{Type: "ephemeral", TTL: cache.TTL}
+}
+
+func convertImage(block litellm.ImageBlock) (*imageSource, error) {
+	switch {
+	case block.URL != "":
+		return &imageSource{Type: "url", URL: block.URL}, nil
+	case len(block.Data) > 0:
+		if block.MIME == "" {
+			return nil, errors.New("inline image requires MIME")
+		}
+		return &imageSource{Type: "base64", MediaType: block.MIME, Data: base64.StdEncoding.EncodeToString(block.Data)}, nil
+	case block.FileURI != "":
+		return nil, errors.New("image FileURI is not supported")
+	default:
+		return nil, errors.New("image requires URL or data")
+	}
 }

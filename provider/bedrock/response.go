@@ -1,67 +1,47 @@
 package bedrock
 
 import (
-	"encoding/json"
-	"fmt"
-
 	"github.com/voocel/litellm"
-	"github.com/voocel/litellm/internal/tokenusage"
+	"github.com/voocel/litellm/internal/wire"
 )
 
-func convertResponse(resp *response, model string) (*litellm.Response, error) {
-	if resp == nil {
-		return nil, fmt.Errorf("bedrock: response cannot be nil")
-	}
+func convertResponse(resp *response, model string) *litellm.Response {
 	out := &litellm.Response{
-		Model:        model,
-		Provider:     "bedrock",
-		FinishReason: litellm.NormalizeFinishReason(resp.StopReason),
-		Usage:        convertUsage(resp.Usage, model),
+		Model:           model,
+		Provider:        "bedrock",
+		FinishReason:    wire.FinishReason(resp.StopReason),
+		FinishReasonRaw: resp.StopReason,
+		Usage:           convertUsage(resp.Usage),
 	}
-	for _, block := range resp.Output.Message.Content {
-		if block.Text != "" {
-			out.Blocks = append(out.Blocks, litellm.TextBlock{Text: block.Text})
-		}
-		if block.ReasoningContent != nil {
-			out.Blocks = append(out.Blocks, convertReasoningBlock(block.ReasoningContent))
-		}
-		if block.ToolUse != nil {
-			args, err := json.Marshal(block.ToolUse.Input)
-			if err != nil {
-				return nil, fmt.Errorf("bedrock: marshal tool use %q arguments: %w", block.ToolUse.Name, err)
-			}
-			out.Blocks = append(out.Blocks, litellm.ToolUseBlock{
-				ID:        block.ToolUse.ToolUseID,
-				Name:      block.ToolUse.Name,
-				Arguments: args,
-			})
+	for _, c := range resp.Output.Message.Content {
+		switch {
+		case c.Text != "":
+			out.Blocks = append(out.Blocks, litellm.TextBlock{Text: c.Text})
+		case c.ReasoningContent != nil:
+			out.Blocks = append(out.Blocks, convertReasoning(c.ReasoningContent))
+		case c.ToolUse != nil:
+			out.Blocks = append(out.Blocks, litellm.ToolUseBlock{ID: c.ToolUse.ToolUseID, Name: c.ToolUse.Name, Arguments: c.ToolUse.Input})
 		}
 	}
-	return out, nil
+	return out
 }
 
-func convertReasoningBlock(block *reasoningContent) litellm.ReasoningBlock {
-	if block == nil {
-		return litellm.ReasoningBlock{}
+func convertReasoning(r *reasoningContent) litellm.ReasoningBlock {
+	if r.ReasoningText != nil {
+		return litellm.ReasoningBlock{Text: r.ReasoningText.Text, Signature: r.ReasoningText.Signature}
 	}
-	if block.ReasoningText != nil {
-		return litellm.ReasoningBlock{
-			Text:      block.ReasoningText.Text,
-			Signature: block.ReasoningText.Signature,
-		}
-	}
-	if len(block.RedactedContent) > 0 {
-		return litellm.ReasoningBlock{Redacted: append([]byte(nil), block.RedactedContent...)}
-	}
-	return litellm.ReasoningBlock{}
+	return litellm.ReasoningBlock{Redacted: r.RedactedContent}
 }
 
-func convertUsage(u usage, model string) litellm.Usage {
-	input := tokenusage.AddDetails(u.InputTokens, u.CacheReadInputTokens, u.CacheWriteInputTokens)
+// convertUsage reports input as the total: Bedrock counts cache reads and
+// writes separately from uncached input.
+func convertUsage(u usage) litellm.Usage {
+	input := wire.AddTokenDetails(u.InputTokens, u.CacheReadInputTokens, u.CacheWriteInputTokens)
 	return litellm.Usage{
-		InputTokens: input, OutputTokens: u.OutputTokens,
-		TotalTokens:     tokenusage.Sum(input, u.OutputTokens),
-		CacheReadTokens: u.CacheReadInputTokens, CacheWriteTokens: u.CacheWriteInputTokens,
-		Provider: "bedrock", Model: model,
+		InputTokens:      input,
+		OutputTokens:     u.OutputTokens,
+		TotalTokens:      wire.SumTokens(input, u.OutputTokens),
+		CacheReadTokens:  u.CacheReadInputTokens,
+		CacheWriteTokens: u.CacheWriteInputTokens,
 	}
 }

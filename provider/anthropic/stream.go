@@ -1,89 +1,55 @@
 package anthropic
 
 import (
-	"bufio"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/voocel/litellm"
-	"github.com/voocel/litellm/internal/tokenusage"
+	"github.com/voocel/litellm/internal/wire"
 )
 
+type streamEvent struct {
+	Type         string   `json:"type"`
+	Index        int      `json:"index"`
+	ContentBlock *content `json:"content_block"`
+	Delta        *struct {
+		Type        string          `json:"type"`
+		Text        string          `json:"text"`
+		Thinking    string          `json:"thinking"`
+		Signature   string          `json:"signature"`
+		PartialJSON string          `json:"partial_json"`
+		StopReason  string          `json:"stop_reason"`
+		Citation    json.RawMessage `json:"citation"`
+	} `json:"delta"`
+	Usage   *usage `json:"usage"`
+	Message *struct {
+		Model string `json:"model"`
+		Usage *usage `json:"usage"`
+	} `json:"message"`
+	Error *struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
 type stream struct {
-	resp             *http.Response
-	scanner          *bufio.Scanner
-	includeReasoning bool
-	pending          []litellm.Event
-	done             bool
-	model            string
-	usage            litellm.Usage
-	wireUsage        anthropicUsage
-	finish           litellm.FinishReason
-	contentBlocks    map[int]bool
-	finishRaw        string
-	toolIDs          map[int]string
-	toolNames        map[int]string
+	resp       *http.Response
+	sse        *wire.SSEReader
+	pending    []litellm.Event
+	done       bool
+	model      string
+	usage      usage
+	finish     litellm.FinishReason
+	finishRaw  string
+	blocks     wire.BlockTracker[int] // native index to litellm index
+	signatures map[int]string
+	citations  map[int][]json.RawMessage
 }
 
-type streamChunk struct {
-	Type         string          `json:"type"`
-	Index        int             `json:"index,omitempty"`
-	Delta        *streamDelta    `json:"delta,omitempty"`
-	Usage        *anthropicUsage `json:"usage,omitempty"`
-	Message      *streamMessage  `json:"message,omitempty"`
-	Error        *streamError    `json:"error,omitempty"`
-	ContentBlock *struct {
-		Type      string         `json:"type"`
-		ID        string         `json:"id,omitempty"`
-		Name      string         `json:"name,omitempty"`
-		Input     map[string]any `json:"input,omitempty"`
-		Thinking  string         `json:"thinking,omitempty"`
-		Text      string         `json:"text,omitempty"`
-		Signature string         `json:"signature,omitempty"`
-		Data      string         `json:"data,omitempty"`
-	} `json:"content_block,omitempty"`
-}
-
-type streamMessage struct {
-	ID    string          `json:"id,omitempty"`
-	Model string          `json:"model,omitempty"`
-	Usage *anthropicUsage `json:"usage,omitempty"`
-}
-
-type streamError struct {
-	Type    string `json:"type"`
-	Message string `json:"message"`
-}
-
-type streamDelta struct {
-	Type        string `json:"type"`
-	Text        string `json:"text,omitempty"`
-	Thinking    string `json:"thinking,omitempty"`
-	Signature   string `json:"signature,omitempty"`
-	PartialJSON string `json:"partial_json,omitempty"`
-	StopReason  string `json:"stop_reason,omitempty"`
-}
-
-func newStream(resp *http.Response, req *litellm.Request, warnings []litellm.Warning) *stream {
-	scanner := bufio.NewScanner(resp.Body)
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
-	s := &stream{
-		resp:             resp,
-		scanner:          scanner,
-		includeReasoning: req == nil || req.Thinking == nil || req.Thinking.Mode != litellm.ThinkingDisabled,
-		model:            req.Model,
-		contentBlocks:    make(map[int]bool),
-		toolIDs:          make(map[int]string),
-		toolNames:        make(map[int]string),
-	}
-	for _, w := range warnings {
-		s.pending = append(s.pending, litellm.WarningEvent{Warning: w})
-	}
-	return s
+func newStream(resp *http.Response, model string) *stream {
+	return &stream{resp: resp, sse: wire.NewSSEReader(resp.Body, "anthropic"), model: model, signatures: make(map[int]string), citations: make(map[int][]json.RawMessage)}
 }
 
 func (s *stream) Next() (event litellm.Event, err error) {
@@ -92,48 +58,28 @@ func (s *stream) Next() (event litellm.Event, err error) {
 			s.done = true
 		}
 	}()
-	if len(s.pending) > 0 {
-		event := s.pending[0]
-		s.pending = s.pending[1:]
-		return event, nil
-	}
-	if s.done {
-		return nil, io.EOF
-	}
-	for s.scanner.Scan() {
-		line := s.scanner.Text()
-		if line == "" || strings.HasPrefix(line, "event: ") || line[0] == ':' {
-			continue
+	for len(s.pending) == 0 {
+		if s.done {
+			return nil, io.EOF
 		}
-		data, ok := strings.CutPrefix(line, "data: ")
-		if !ok {
-			if trimmed, found := strings.CutPrefix(line, "data:"); found {
-				data = strings.TrimSpace(trimmed)
-				ok = true
-			}
+		frame, err := s.sse.Next()
+		if errors.Is(err, io.EOF) {
+			return nil, litellm.NewError("anthropic", litellm.ErrorTypeProvider, "stream ended before message_stop", nil)
 		}
-		if !ok || data == "" {
-			continue
-		}
-		var chunk streamChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			return nil, litellm.NewProviderErrorWithCause("anthropic", litellm.ErrorTypeProvider, "anthropic: parse stream chunk", err)
-		}
-		events, err := s.events(chunk, json.RawMessage(data))
 		if err != nil {
 			return nil, err
 		}
-		if len(events) == 0 {
-			continue
+		var e streamEvent
+		if err := json.Unmarshal([]byte(frame.Data), &e); err != nil {
+			return nil, litellm.NewError("anthropic", litellm.ErrorTypeProvider, "parse stream event", err)
 		}
-		s.pending = append(s.pending, events[1:]...)
-		return events[0], nil
+		if s.pending, err = s.events(s.pending, e, json.RawMessage(frame.Data)); err != nil {
+			return nil, err
+		}
 	}
-	if err := s.scanner.Err(); err != nil {
-		return nil, litellm.NewNetworkError("anthropic", "stream read error", err)
-	}
-	s.done = true
-	return nil, litellm.NewProviderError("anthropic", litellm.ErrorTypeProvider, "anthropic: stream ended before message_stop")
+	event = s.pending[0]
+	s.pending = s.pending[1:]
+	return event, nil
 }
 
 func (s *stream) Close() error {
@@ -142,138 +88,103 @@ func (s *stream) Close() error {
 	return s.resp.Body.Close()
 }
 
-func (s *stream) events(chunk streamChunk, raw json.RawMessage) ([]litellm.Event, error) {
-	switch chunk.Type {
+func (s *stream) events(events []litellm.Event, e streamEvent, raw json.RawMessage) ([]litellm.Event, error) {
+	switch e.Type {
 	case "message_start":
-		if chunk.Message != nil {
-			if chunk.Message.Model != "" {
-				s.model = chunk.Message.Model
+		if e.Message != nil {
+			if e.Message.Model != "" {
+				s.model = e.Message.Model
 			}
-			if chunk.Message.Usage != nil {
-				s.mergeUsage(chunk.Message.Usage)
-				return []litellm.Event{litellm.UsageEvent{Usage: s.usage}}, nil
+			if e.Message.Usage != nil {
+				return append(events, s.mergeUsage(e.Message.Usage)), nil
 			}
 		}
 	case "message_delta":
-		if chunk.Usage != nil {
-			s.mergeUsage(chunk.Usage)
+		if e.Delta != nil && e.Delta.StopReason != "" {
+			s.finish, s.finishRaw = wire.FinishReason(e.Delta.StopReason), e.Delta.StopReason
 		}
-		if chunk.Delta != nil && chunk.Delta.StopReason != "" {
-			s.finish = litellm.NormalizeFinishReason(chunk.Delta.StopReason)
-			s.finishRaw = chunk.Delta.StopReason
-		}
-		if s.usage.HasTokens() {
-			return []litellm.Event{litellm.UsageEvent{Usage: s.usage}}, nil
+		if e.Usage != nil {
+			return append(events, s.mergeUsage(e.Usage)), nil
 		}
 	case "message_stop":
 		s.done = true
-		return []litellm.Event{litellm.DoneEvent{FinishReason: s.finish, FinishReasonRaw: s.finishRaw, Provider: "anthropic", Model: s.model}}, nil
+		events = s.blocks.CloseAll(events, nil)
+		return append(events, litellm.DoneEvent{FinishReason: s.finish, FinishReasonRaw: s.finishRaw, Provider: "anthropic", Model: s.model}), nil
 	case "content_block_start":
-		if chunk.ContentBlock == nil {
-			return nil, nil
+		if e.ContentBlock == nil {
+			return events, nil
 		}
-		switch chunk.ContentBlock.Type {
-		case "tool_use":
-			s.toolIDs[chunk.Index] = chunk.ContentBlock.ID
-			s.toolNames[chunk.Index] = chunk.ContentBlock.Name
-			return []litellm.Event{litellm.ToolUseStart{
-				ID:        chunk.ContentBlock.ID,
-				Name:      chunk.ContentBlock.Name,
-				Index:     litellm.IntPtr(chunk.Index),
-				Signature: chunk.ContentBlock.Signature,
-			}}, nil
-		case "thinking", "redacted_thinking", "text":
-			if chunk.ContentBlock.Type != "text" && !s.includeReasoning {
-				return nil, nil
-			}
-			var block litellm.Block
-			switch chunk.ContentBlock.Type {
-			case "text":
-				block = litellm.TextBlock{Text: chunk.ContentBlock.Text}
-			case "thinking":
-				block = litellm.ReasoningBlock{Text: chunk.ContentBlock.Thinking, Signature: chunk.ContentBlock.Signature}
-			case "redacted_thinking":
-				block = litellm.ReasoningBlock{Redacted: []byte(chunk.ContentBlock.Data)}
-			}
-			s.contentBlocks[chunk.Index] = true
-			return []litellm.Event{litellm.ContentStart{Block: block, ContentIndex: litellm.IntPtr(chunk.Index)}}, nil
-		default:
-			return []litellm.Event{litellm.ProviderEvent{Name: chunk.Type + "." + chunk.ContentBlock.Type, Raw: raw}}, nil
+		block, ok := convertContent(*e.ContentBlock)
+		if !ok {
+			events = append(events, litellm.WarningEvent{Warning: unsupportedBlock(e.ContentBlock.Type)})
+			break
 		}
+		// Tool input normally arrives through input_json_delta after an empty
+		// object; a non-empty initial input is streamed as the first delta.
+		tool, isTool := block.(litellm.ToolUseBlock)
+		if isTool {
+			block = litellm.ToolUseBlock{ID: tool.ID, Name: tool.Name}
+		}
+		events, index := s.blocks.Open(events, e.Index, block)
+		if isTool && len(tool.Arguments) > 0 && string(tool.Arguments) != "{}" {
+			events = append(events, litellm.ToolUseDelta{Index: index, Arguments: string(tool.Arguments)})
+		}
+		return events, nil
 	case "content_block_delta":
-		if chunk.Delta == nil {
-			return nil, nil
+		index, ok := s.blocks.Index(e.Index)
+		if !ok || e.Delta == nil {
+			break
 		}
-		switch chunk.Delta.Type {
+		switch e.Delta.Type {
 		case "text_delta":
-			return []litellm.Event{litellm.ContentDelta{Text: chunk.Delta.Text, ContentIndex: litellm.IntPtr(chunk.Index)}}, nil
+			return append(events, litellm.TextDelta{Index: index, Text: e.Delta.Text}), nil
 		case "thinking_delta":
-			if !s.includeReasoning {
-				return nil, nil
-			}
-			return []litellm.Event{litellm.ReasoningDelta{Text: chunk.Delta.Thinking, ContentIndex: litellm.IntPtr(chunk.Index)}}, nil
+			return append(events, litellm.ReasoningDelta{Index: index, Text: e.Delta.Thinking}), nil
 		case "signature_delta":
-			if !s.includeReasoning {
-				return nil, nil
-			}
-			return []litellm.Event{litellm.ReasoningDelta{Signature: chunk.Delta.Signature, ContentIndex: litellm.IntPtr(chunk.Index)}}, nil
+			s.signatures[e.Index] = e.Delta.Signature
+			return events, nil
+		case "citations_delta":
+			s.citations[e.Index] = append(s.citations[e.Index], e.Delta.Citation)
+			return events, nil
 		case "input_json_delta":
-			return []litellm.Event{litellm.ToolUseDelta{
-				ID:             s.toolIDs[chunk.Index],
-				Index:          litellm.IntPtr(chunk.Index),
-				ArgumentsDelta: []byte(chunk.Delta.PartialJSON),
-			}}, nil
-		default:
-			return []litellm.Event{litellm.ProviderEvent{Name: chunk.Type + "." + chunk.Delta.Type, Raw: raw}}, nil
+			return append(events, litellm.ToolUseDelta{Index: index, Arguments: e.Delta.PartialJSON}), nil
 		}
 	case "content_block_stop":
-		if s.contentBlocks[chunk.Index] {
-			return []litellm.Event{litellm.ContentEnd{ContentIndex: litellm.IntPtr(chunk.Index)}}, nil
-		}
-		if id := s.toolIDs[chunk.Index]; id != "" {
-			return []litellm.Event{litellm.ToolUseDone{ID: id, Index: litellm.IntPtr(chunk.Index)}}, nil
+		if _, ok := s.blocks.Index(e.Index); ok {
+			// Signatures and citations arrive as deltas and are delivered here.
+			var final litellm.Block
+			if signature := s.signatures[e.Index]; signature != "" {
+				final = litellm.ReasoningBlock{Signature: signature}
+			}
+			if citations := s.citations[e.Index]; len(citations) > 0 {
+				final = litellm.TextBlock{Annotations: annotations(citations)}
+			}
+			return s.blocks.Close(events, e.Index, final), nil
 		}
 	case "ping":
-		return nil, nil
+		return events, nil
 	case "error":
-		if chunk.Error != nil {
-			return nil, litellm.NewProviderError("anthropic", litellm.ErrorTypeProvider, fmt.Sprintf("anthropic: stream error: [%s] %s", chunk.Error.Type, chunk.Error.Message))
+		if e.Error == nil {
+			return nil, litellm.NewError("anthropic", litellm.ErrorTypeProvider, "unknown stream error", nil)
 		}
-		return nil, litellm.NewProviderError("anthropic", litellm.ErrorTypeProvider, "anthropic: unknown stream error")
-	default:
-		return []litellm.Event{litellm.ProviderEvent{Name: chunk.Type, Raw: raw}}, nil
+		return nil, wire.StreamError("anthropic", e.Error.Type, "stream error: "+e.Error.Message)
 	}
-	return nil, nil
+	return append(events, litellm.ProviderEvent{Name: e.Type, Raw: raw}), nil
 }
 
-func convertStreamUsage(u *anthropicUsage, model string) litellm.Usage {
-	if u == nil {
-		return litellm.Usage{}
-	}
-	// Anthropic reports uncached input separately from cache reads and creation.
-	input := tokenusage.AddDetails(u.InputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens)
-	return litellm.Usage{
-		InputTokens: input, OutputTokens: u.OutputTokens,
-		TotalTokens:      tokenusage.Sum(input, u.OutputTokens),
-		CacheReadTokens:  u.CacheReadInputTokens,
-		CacheWriteTokens: u.CacheCreationInputTokens,
-		Provider:         "anthropic", Model: model,
-	}
-}
-
-func (s *stream) mergeUsage(u *anthropicUsage) {
-	// Stream counters are cumulative snapshots; explicit zero overwrites earlier data.
+// mergeUsage folds a cumulative usage snapshot; an explicit zero overwrites.
+func (s *stream) mergeUsage(u *usage) litellm.Event {
 	if u.InputTokens != nil {
-		s.wireUsage.InputTokens = u.InputTokens
+		s.usage.InputTokens = u.InputTokens
 	}
 	if u.OutputTokens != nil {
-		s.wireUsage.OutputTokens = u.OutputTokens
+		s.usage.OutputTokens = u.OutputTokens
 	}
 	if u.CacheReadInputTokens != nil {
-		s.wireUsage.CacheReadInputTokens = u.CacheReadInputTokens
+		s.usage.CacheReadInputTokens = u.CacheReadInputTokens
 	}
 	if u.CacheCreationInputTokens != nil {
-		s.wireUsage.CacheCreationInputTokens = u.CacheCreationInputTokens
+		s.usage.CacheCreationInputTokens = u.CacheCreationInputTokens
 	}
-	s.usage = convertStreamUsage(&s.wireUsage, s.model)
+	return litellm.UsageEvent{Usage: convertUsage(s.usage)}
 }

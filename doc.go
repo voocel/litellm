@@ -2,7 +2,9 @@
 Package litellm provides a small, explicit multi-provider LLM SDK core.
 
 The root package owns the provider-agnostic domain model: Request, Response,
-Message, Block, Stream, Event, structured errors, warnings, and observers. Pricing lives in its optional subpackage. Concrete providers live in provider-specific subpackages.
+Message, Block, Stream, Event, structured errors, warnings, and observers.
+Concrete providers live in provider subpackages; compat connects any
+OpenAI-compatible endpoint. pricing and retry are optional utilities.
 
 # Quick Start
 
@@ -42,17 +44,16 @@ Create a provider with its package-specific config, then bind a Client:
 # Blocks
 
 Message and Response content is represented as ordered Blocks. This preserves
-the order of text, reasoning, tool use, tool results, cache markers, and opaque
-provider signatures across multi-turn agent workflows.
+the order of text, reasoning, tool use, and tool results, with provider
+signatures, across multi-turn agent workflows.
 
 # Streaming
 
-Providers stream typed Event values. Client streams retain validation state by
-default; complete content is retained only by explicit aggregation or observer
-content capture. Use a type switch for real-time handling
-or Collect to aggregate a stream into a Response:
-Stream is intended for single-goroutine consumption; do not call Next
-concurrently.
+A stream is a sequence of blocks. BlockStart opens the block at Index, the
+position it takes in Response.Blocks; deltas of the same kind grow it; BlockEnd
+closes it with the completed block. Blocks may interleave, and all end before
+DoneEvent. Handle aggregates the stream and passes each event to a callback;
+Collect only aggregates. Stream is for single-goroutine consumption.
 
 	stream, err := client.Stream(ctx, req)
 	if err != nil {
@@ -60,29 +61,20 @@ concurrently.
 	}
 	defer stream.Close()
 
-	for {
-	    event, err := stream.Next()
-	    if err != nil {
-	        panic(err)
-	    }
-	    switch e := event.(type) {
-	    case litellm.ContentStart:
-	        if text, ok := e.Block.(litellm.TextBlock); ok {
-	            fmt.Print(text.Text)
-	        }
-	    case litellm.ContentDelta:
+	resp, err := litellm.Handle(stream, func(event litellm.Event) error {
+	    if e, ok := event.(litellm.TextDelta); ok {
 	        fmt.Print(e.Text)
-	    case litellm.DoneEvent:
-	        return
 	    }
-	}
+	    return nil
+	})
 
 # Design
 
 The SDK is intentionally not a gateway, router, agent runtime, account system,
 or request scheduler. It binds one Client to one Provider and exposes explicit
-configuration and structural validation. Message-history validation and repair
-are explicit utilities; the Client never rewrites conversation history. Provider
-options are JSON data, and optional usage counters distinguish unknown from zero.
+configuration and structural validation. It maps structure only: it does not
+infer model features, validate vendor values locally, or rewrite user input;
+the vendor API is the authority. ProviderOptions carry native wire fields, and
+optional usage counters distinguish unknown from zero.
 */
 package litellm

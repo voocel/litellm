@@ -1,6 +1,7 @@
 package exampleutil
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/voocel/litellm"
@@ -31,17 +32,26 @@ func (p *StreamPrinter) WriteAnswer(text string) {
 	fmt.Print(text)
 }
 
-func (p *StreamPrinter) Handler() litellm.StreamHandler {
-	return litellm.StreamHandler{
-		Reasoning: func(text string) error {
-			p.WriteReasoning(text)
-			return nil
-		},
-		Content: func(text string) error {
-			p.WriteAnswer(text)
-			return nil
-		},
+// Print is a litellm.Handle callback that prints reasoning and answer text.
+func (p *StreamPrinter) Print(event litellm.Event) error {
+	switch e := event.(type) {
+	case litellm.ReasoningDelta:
+		p.WriteReasoning(e.Text)
+	case litellm.TextDelta:
+		p.WriteAnswer(e.Text)
 	}
+	return nil
+}
+
+// Stream runs req and prints reasoning and answer text as they arrive.
+func Stream(ctx context.Context, client *litellm.Client, req litellm.Request) (*litellm.Response, error) {
+	stream, err := client.Stream(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	defer stream.Close()
+	var printer StreamPrinter
+	return litellm.Handle(stream, printer.Print)
 }
 
 func PrintUsage(usage litellm.Usage) {
@@ -49,18 +59,18 @@ func PrintUsage(usage litellm.Usage) {
 		return
 	}
 	fmt.Printf("usage: input=%s output=%s total=%s reasoning=%s cache_read=%s cache_write=%s\n",
-		tokenCount(usage.InputTokens),
-		tokenCount(usage.OutputTokens),
-		tokenCount(usage.TotalTokens),
-		tokenCount(usage.ReasoningTokens),
-		tokenCount(usage.CacheReadTokens),
-		tokenCount(usage.CacheWriteTokens),
+		tokenCount(usage.Input()),
+		tokenCount(usage.Output()),
+		tokenCount(usage.Total()),
+		tokenCount(usage.Reasoning()),
+		tokenCount(usage.CacheRead()),
+		tokenCount(usage.CacheWrite()),
 	)
 }
 
-func tokenCount(count *int) string {
-	if count == nil {
+func tokenCount(count int, known bool) string {
+	if !known {
 		return "unknown"
 	}
-	return fmt.Sprint(*count)
+	return fmt.Sprint(count)
 }

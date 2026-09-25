@@ -32,14 +32,13 @@ const (
 	attrErrorType        = "error.type"
 )
 
-func semanticOperation(meta litellm.CallInfo) string {
-	if meta.Provider == "gemini" {
+// semanticOperation names the operation: Gemini's API is generateContent, the
+// others are chat APIs.
+func semanticOperation(provider string) string {
+	if provider == "gemini" {
 		return "generate_content"
 	}
-	if meta.Streaming && meta.Operation == "stream" {
-		return "chat"
-	}
-	return meta.Operation
+	return "chat"
 }
 
 func semanticProvider(provider string) string {
@@ -78,7 +77,7 @@ func semanticErrorType(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "canceled"
 	}
-	var llmErr *litellm.LiteLLMError
+	var llmErr *litellm.Error
 	if errors.As(err, &llmErr) {
 		if llmErr.Code != "" {
 			return llmErr.Code
