@@ -350,6 +350,145 @@ func cloneBytes(b []byte) []byte {
 	return out
 }
 
+func cloneRequest(req Request) *Request {
+	out := req
+	out.MaxTokens = clonePtr(req.MaxTokens)
+	out.Temperature = clonePtr(req.Temperature)
+	out.TopP = clonePtr(req.TopP)
+	out.Messages = cloneMessages(req.Messages)
+	out.Stop = append([]string(nil), req.Stop...)
+	out.Tools = cloneTools(req.Tools)
+	if req.ToolChoice != nil {
+		choice := *req.ToolChoice
+		out.ToolChoice = &choice
+	}
+	out.ResponseFormat = cloneResponseFormat(req.ResponseFormat)
+	out.Thinking = cloneThinking(req.Thinking)
+	if req.ProviderOptions != nil {
+		out.ProviderOptions = make(ProviderOptions, len(req.ProviderOptions))
+		for k, v := range req.ProviderOptions {
+			out.ProviderOptions[k] = append(json.RawMessage(nil), v...)
+		}
+	}
+	return &out
+}
+
+func cloneMessages(messages []Message) []Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := make([]Message, len(messages))
+	for i, msg := range messages {
+		out[i] = Message{Role: msg.Role, Blocks: cloneBlocks(msg.Blocks)}
+	}
+	return out
+}
+
+func cloneBlocks(blocks []Block) []Block {
+	if len(blocks) == 0 {
+		return nil
+	}
+	out := make([]Block, len(blocks))
+	for i, block := range blocks {
+		out[i] = cloneBlock(block)
+	}
+	return out
+}
+
+func cloneBlock(block Block) Block {
+	switch b := block.(type) {
+	case TextBlock:
+		b.Logprobs = cloneBytes(b.Logprobs)
+		b.Annotations = append([]Annotation(nil), b.Annotations...)
+		for i := range b.Annotations {
+			b.Annotations[i].Extra = cloneBytes(b.Annotations[i].Extra)
+		}
+		b.State = cloneState(b.State)
+		b.Cache = cloneCacheControl(b.Cache)
+		return b
+	case ImageBlock:
+		b.Data = cloneBytes(b.Data)
+		b.Cache = cloneCacheControl(b.Cache)
+		return b
+	case ReasoningBlock:
+		b.State = cloneState(b.State)
+		b.Cache = cloneCacheControl(b.Cache)
+		return b
+	case ToolUseBlock:
+		b.Arguments = cloneBytes(b.Arguments)
+		b.State = cloneState(b.State)
+		b.Cache = cloneCacheControl(b.Cache)
+		return b
+	case ToolResultBlock:
+		b.Content = cloneBlocks(b.Content)
+		b.Cache = cloneCacheControl(b.Cache)
+		return b
+	case ToolReferenceBlock:
+		b.Cache = cloneCacheControl(b.Cache)
+		return b
+	default:
+		return block
+	}
+}
+
+func cloneTools(tools []Tool) []Tool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]Tool, len(tools))
+	for i, tool := range tools {
+		out[i] = tool
+		out[i].Parameters = Schema(cloneBytes(tool.Parameters))
+	}
+	return out
+}
+
+func clonePtr[T any](v *T) *T {
+	if v == nil {
+		return nil
+	}
+	return new(*v)
+}
+
+func cloneResponseFormat(format *ResponseFormat) *ResponseFormat {
+	if format == nil {
+		return nil
+	}
+	out := *format
+	if format.JSONSchema != nil {
+		schema := *format.JSONSchema
+		schema.Schema = Schema(cloneBytes(format.JSONSchema.Schema))
+		out.JSONSchema = &schema
+	}
+	return &out
+}
+
+func cloneThinking(thinking *Thinking) *Thinking {
+	if thinking == nil {
+		return nil
+	}
+	out := *thinking
+	out.BudgetTokens = clonePtr(thinking.BudgetTokens)
+	return &out
+}
+
+func cloneState(state *ProviderState) *ProviderState {
+	if state == nil {
+		return nil
+	}
+	out := *state
+	out.Data = cloneBytes(state.Data)
+	return &out
+}
+
+func cloneCacheControl(cache *CacheControl) *CacheControl {
+	if cache == nil {
+		return nil
+	}
+	out := *cache
+	return &out
+}
+
 // NewProviderOptions serializes values immediately, so subsequent mutations of
 // the supplied Go objects cannot change the request. Encoding errors are returned.
 func NewProviderOptions(values map[string]any) (ProviderOptions, error) {

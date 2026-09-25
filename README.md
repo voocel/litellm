@@ -66,7 +66,7 @@ msgs := []litellm.Message{
 }
 ```
 
-For multi-turn tool workflows, append the previous response blocks as they are. Data a vendor needs back, such as reasoning signatures and item ids, travels in each block's `State` and is sent only to the provider that produced it, so history can move between providers; see [providers.md](providers.md#replay-state). Keep `State` when you store history:
+For multi-turn tool workflows, append the previous response blocks as they are, and keep them whole when you store history:
 
 ```go
 msgs = append(msgs,
@@ -75,13 +75,13 @@ msgs = append(msgs,
 )
 ```
 
-The Client checks the shared model's structure and never rewrites history. Tool-call pairing and repair are conversation policy, owned by the layer that manages the session.
+Data a vendor needs back, such as a reasoning signature or an item id, travels in a block's `State` and is sent only to the provider that produced it, so history can move between providers ([details](providers.md#replay-state)). The Client checks the structure of messages and never rewrites history. Tool-call pairing and repair are conversation policy, owned by the layer that manages the session.
 
 Raw provider response bodies are kept only with `litellm.WithCaptureRawResponse(true)`.
 
 ## Streaming
 
-A stream is a sequence of blocks. `BlockStart` opens the block at `Index`, the position it takes in `Response.Blocks`; `TextDelta`, `ReasoningDelta` and `ToolUseDelta` grow it; `BlockEnd` closes it with the completed block, including late metadata such as signatures. Blocks may interleave, and all end before `DoneEvent`. `UsageEvent`, `WarningEvent` and `ProviderEvent` (native events without a typed equivalent) carry the rest.
+A stream is a sequence of blocks. `BlockStart` opens the block at `Index`, the position it takes in `Response.Blocks`; `TextDelta`, `ReasoningDelta` and `ToolUseDelta` grow it; `BlockEnd` closes it with the completed block, including metadata that arrives late, such as `State`. Blocks may interleave, and all end before `DoneEvent`. `UsageEvent`, `WarningEvent` and `ProviderEvent` (native events without a typed equivalent) carry the rest.
 
 `Handle` aggregates a stream and passes each event to a callback; `Collect` only aggregates. On failure both return the partial response with the error.
 
@@ -196,8 +196,6 @@ resp, err := client.Chat(ctx, litellm.Request{
 })
 ```
 
-`client.Capabilities()` reports what the adapter can express (`ok` is false for a custom provider that declares nothing): whether `Thinking`, `ThinkingDisabled`, `Effort` and `BudgetTokens` are sent, and the accepted option keys. It is static per provider; whether a model honors a request is still the vendor's call.
-
 ## Providers
 
 | Package | API |
@@ -225,7 +223,9 @@ bedrock.New(bedrock.Config{
 })
 ```
 
-`openai` speaks the official protocol only (`max_completion_tokens`, `prompt_cache_breakpoint`). `compat` sends `max_tokens` and passes every provider option through unchecked, since it cannot know the server's fields.
+`openai` follows the official protocol only. `compat` is for any other OpenAI-compatible server and passes provider options through unchecked, since it cannot know the server's fields.
+
+`client.Capabilities()` reports what the adapter can express: whether `Thinking`, `ThinkingDisabled`, `Effort` and `BudgetTokens` are sent, and the accepted option keys. It is static per provider (`ok` is false for a custom provider that declares nothing); whether a model honors a request is still the vendor's call.
 
 ### OpenAI Responses
 
@@ -239,8 +239,6 @@ options, err := litellm.NewProviderOptions(map[string]any{
 	openai.ProviderOptionTools:              []any{map[string]any{"type": "web_search"}},
 })
 ```
-
-Hosted tools in `tools` are appended to the generated function tools; `text` and `reasoning` objects merge into the generated ones.
 
 ## Model Listing
 
@@ -280,7 +278,9 @@ provider, err := openai.New(openai.Config{
 })
 ```
 
-The transport retries complete responses the provider would report as temporary (408, 429, 500, 502, 503, 504 and 529, unless the body shows exhausted quota, an auth failure, content filtering or context overflow), never network failures or interrupted streams. A request body that cannot be resent returns the original response, and so does a `Retry-After` beyond `MaxRetryAfter` (60s by default) when `RespectRetryAfter` is set, as it is in `DefaultPolicy`. For Bedrock, the retried request carries its SigV4 signature, which stays valid for five minutes.
+- Retried: complete 408, 429, 500, 502, 503, 504 and 529 responses, unless the body shows exhausted quota, an auth failure, content filtering or context overflow.
+- Not retried, returning the original response or error: network failures, interrupted streams, requests whose body cannot be resent, and, with `RespectRetryAfter` (on in `DefaultPolicy`), a `Retry-After` beyond `MaxRetryAfter` (60s by default).
+- Bedrock: the retried request reuses its SigV4 signature, which stays valid for five minutes.
 
 ## Observers And OTel
 
@@ -307,8 +307,6 @@ import litellmotel "github.com/voocel/litellm/otel"
 
 observer := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
 ```
-
-During development `otel/go.mod` replaces the core module with `..`; release the core first, then update OTel's requirement and drop the replacement.
 
 ## Usage And Pricing
 

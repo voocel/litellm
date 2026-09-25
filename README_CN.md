@@ -66,7 +66,7 @@ msgs := []litellm.Message{
 }
 ```
 
-多轮工具调用时，直接追加上一轮的响应块。推理签名、item id 等厂商需要原样取回的数据放在块的 `State` 中，只回传给产生它的 Provider，因此历史可以在 Provider 之间切换，详见 [providers.md](providers.md#replay-state)。持久化历史时请保留 `State`：
+多轮工具调用时，直接追加上一轮的响应块，持久化历史时保持块完整：
 
 ```go
 msgs = append(msgs,
@@ -75,13 +75,13 @@ msgs = append(msgs,
 )
 ```
 
-Client 只校验共享模型的结构，从不改写历史。工具调用配对与修复属于会话策略，由持有会话的上层负责。
+推理签名、item id 等厂商需要原样取回的数据放在块的 `State` 中，只回传给产生它的 Provider，因此历史可以在 Provider 之间切换（[详见](providers.md#replay-state)）。Client 只校验消息结构，从不改写历史。工具调用配对与修复属于会话策略，由持有会话的上层负责。
 
 原始响应体仅在 `litellm.WithCaptureRawResponse(true)` 时保留。
 
 ## 流式
 
-流是一串块。`BlockStart` 打开 `Index` 处的块，`Index` 即它在 `Response.Blocks` 中的位置；`TextDelta`、`ReasoningDelta`、`ToolUseDelta` 追加内容；`BlockEnd` 以完整块（含签名等后到的元数据）关闭它。块可以交错，但都在 `DoneEvent` 之前结束。`UsageEvent`、`WarningEvent` 与 `ProviderEvent`（无类型对应的原生事件）承载其余信息。
+流是一串块。`BlockStart` 打开 `Index` 处的块，`Index` 即它在 `Response.Blocks` 中的位置；`TextDelta`、`ReasoningDelta`、`ToolUseDelta` 追加内容；`BlockEnd` 以完整块（含 `State` 等后到的元数据）关闭它。块可以交错，但都在 `DoneEvent` 之前结束。`UsageEvent`、`WarningEvent` 与 `ProviderEvent`（无类型对应的原生事件）承载其余信息。
 
 `Handle` 聚合流并把每个事件交给回调；`Collect` 只聚合。失败时两者都返回部分响应和错误。
 
@@ -196,8 +196,6 @@ resp, err := client.Chat(ctx, litellm.Request{
 })
 ```
 
-`client.Capabilities()` 报告适配器能表达什么（自定义 Provider 未声明时 `ok` 为 false）：是否发送 `Thinking`、`ThinkingDisabled`、`Effort`、`BudgetTokens`，以及可接受的选项键。它按 Provider 静态固定；模型是否接受仍由厂商裁决。
-
 ## Providers
 
 | 包 | API |
@@ -225,7 +223,9 @@ bedrock.New(bedrock.Config{
 })
 ```
 
-`openai` 只讲官方协议（`max_completion_tokens`、`prompt_cache_breakpoint`）。`compat` 发送 `max_tokens`，并且不检查、原样透传所有 provider option，因为它无从知道服务端字段。
+`openai` 只讲官方协议。`compat` 用于其他任意 OpenAI 兼容服务，provider option 不检查、原样透传，因为它无从知道服务端字段。
+
+`client.Capabilities()` 报告适配器能表达什么：是否发送 `Thinking`、`ThinkingDisabled`、`Effort`、`BudgetTokens`，以及可接受的选项键。它按 Provider 静态固定（自定义 Provider 未声明时 `ok` 为 false）；模型是否接受仍由厂商裁决。
 
 ### OpenAI Responses
 
@@ -239,8 +239,6 @@ options, err := litellm.NewProviderOptions(map[string]any{
 	openai.ProviderOptionTools:              []any{map[string]any{"type": "web_search"}},
 })
 ```
-
-`tools` 中的托管工具追加到生成的函数工具之后；`text` 与 `reasoning` 对象合并进生成的对象。
 
 ## 模型列表
 
@@ -280,7 +278,9 @@ provider, err := openai.New(openai.Config{
 })
 ```
 
-该传输层只重试 Provider 会判为临时错误的完整响应（408、429、500、502、503、504、529，响应体表明额度耗尽、鉴权失败、内容过滤或上下文超限的除外），从不重试网络失败或中断的流。请求体无法重发时直接返回原响应；设置了 `RespectRetryAfter`（`DefaultPolicy` 默认开启）时，`Retry-After` 超过 `MaxRetryAfter`（默认 60 秒）也直接返回原响应。Bedrock 重试时沿用已签名的 SigV4 请求，签名五分钟内有效。
+- 重试：完整的 408、429、500、502、503、504、529 响应，响应体表明额度耗尽、鉴权失败、内容过滤或上下文超限的除外。
+- 不重试（原样返回响应或错误）：网络失败、中断的流、请求体无法重发的请求；开启 `RespectRetryAfter`（`DefaultPolicy` 默认开启）时，`Retry-After` 超过 `MaxRetryAfter`（默认 60 秒）的响应。
+- Bedrock：重试沿用已签名的 SigV4 请求，签名五分钟内有效。
 
 ## Observer 与 OTel
 
@@ -307,8 +307,6 @@ import litellmotel "github.com/voocel/litellm/otel"
 
 observer := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
 ```
-
-开发期间 `otel/go.mod` 用 replace 指向 `..`；发布时先发布核心模块，再更新 OTel 的依赖版本并移除 replace。
 
 ## 用量与计费
 

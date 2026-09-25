@@ -17,6 +17,18 @@ type Response struct {
 	Raw             json.RawMessage
 }
 
+func cloneResponse(resp *Response) *Response {
+	if resp == nil {
+		return nil
+	}
+	out := *resp
+	out.Blocks = cloneBlocks(resp.Blocks)
+	out.Usage = resp.Usage.Clone()
+	out.Warnings = append([]Warning(nil), resp.Warnings...)
+	out.Raw = cloneBytes(resp.Raw)
+	return &out
+}
+
 // Text concatenates the text blocks.
 func (r *Response) Text() string {
 	if r == nil {
