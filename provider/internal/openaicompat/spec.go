@@ -57,8 +57,16 @@ type Spec struct {
 	// replayed verbatim to this provider; history text is sent in the first
 	// other field.
 	ReasoningFields []string
-	// EmptyToolCallContent sends "content": "" on assistant tool call messages.
-	EmptyToolCallContent bool
+	// StringContentRoles requires string content for these roles. Text blocks
+	// are concatenated without separators; images are rejected.
+	StringContentRoles []litellm.Role
+	// ImageFileID encodes ImageBlock.FileURI as a file part with a file_id,
+	// instead of using it as image_url.url.
+	ImageFileID bool
+	// SchemaFallback moves JSON Schema into a prompt and uses this wire format:
+	// json_object enables JSON mode; text uses prompting alone. Empty keeps the
+	// native JSON Schema format. Neither fallback enforces schema adherence.
+	SchemaFallback litellm.ResponseFormatType
 	// OmitStreamOptions leaves stream_options out of stream requests.
 	OmitStreamOptions bool
 }

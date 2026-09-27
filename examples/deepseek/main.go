@@ -18,8 +18,8 @@ import (
 //	go run ./examples/deepseek stream   # token streaming (+ reasoning, usage)
 //	go run ./examples/deepseek tool      # function-calling round trip
 //
-// Override the model with DEEPSEEK_MODEL (e.g. deepseek-v4-pro for higher
-// quality). Reasoning is toggled in-request via Thinking, not by model name.
+// Override the model with DEEPSEEK_MODEL. Reasoning is toggled in-request via
+// Thinking, not by model name.
 func main() {
 	mode := "stream"
 	if len(os.Args) > 1 {
@@ -55,7 +55,7 @@ func model() string {
 	if m := os.Getenv("DEEPSEEK_MODEL"); m != "" {
 		return m
 	}
-	return "deepseek-v4-flash"
+	return "deepseek-flash"
 }
 
 // runChat is a basic non-streaming completion.
@@ -132,7 +132,8 @@ func runTool(ctx context.Context, client *litellm.Client) {
 		return
 	}
 
-	// Echo the assistant tool-call turn back, then answer each call.
+	// Keep every block, including reasoning_content, in every assistant turn.
+	// DeepSeek requires all prior reasoning whenever the request carries tools.
 	messages = append(messages, litellm.Assistant(resp.Blocks...))
 	for _, call := range calls {
 		fmt.Printf("tool call: %s(%s)\n", call.Name, string(call.Arguments))

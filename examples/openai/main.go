@@ -44,7 +44,7 @@ func model() string {
 	if m := os.Getenv("OPENAI_MODEL"); m != "" {
 		return m
 	}
-	return "gpt-5.4-mini"
+	return "gpt-6-luna"
 }
 
 func runChat(ctx context.Context, client *litellm.Client) {

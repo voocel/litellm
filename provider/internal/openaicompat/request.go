@@ -31,7 +31,12 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) ([]byte, erro
 		body = make(map[string]any)
 	}
 	body["model"] = req.Model
-	messages, err := p.convertMessages(req.Messages)
+	input, responseFormat := req.Messages, req.ResponseFormat
+	if p.spec.usesSchemaPrompt(responseFormat) {
+		input = withSchemaPrompt(input, responseFormat.JSONSchema)
+		responseFormat = &litellm.ResponseFormat{Type: p.spec.SchemaFallback}
+	}
+	messages, err := p.convertMessages(input)
 	if err != nil {
 		return nil, err
 	}
@@ -64,8 +69,8 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) ([]byte, erro
 	if req.ToolChoice != nil {
 		body["tool_choice"] = convertToolChoice(req.ToolChoice)
 	}
-	if req.ResponseFormat != nil {
-		format, err := convertResponseFormat(req.ResponseFormat)
+	if responseFormat != nil {
+		format, err := convertResponseFormat(responseFormat)
 		if err != nil {
 			return nil, err
 		}
@@ -143,6 +148,13 @@ func (p *Provider) convertMessage(msg litellm.Message) (map[string]any, error) {
 			}
 			parts = append(parts, part)
 		case litellm.ImageBlock:
+			if slices.Contains(p.spec.StringContentRoles, msg.Role) {
+				return nil, fmt.Errorf("%s messages do not support images", msg.Role)
+			}
+			if b.FileURI != "" && p.spec.ImageFileID {
+				parts = append(parts, map[string]any{"type": "file", "file_id": b.FileURI})
+				continue
+			}
 			url, err := ImageURL(b)
 			if err != nil {
 				return nil, err
@@ -169,12 +181,16 @@ func (p *Provider) convertMessage(msg litellm.Message) (map[string]any, error) {
 		}
 	}
 	switch {
+	case slices.Contains(p.spec.StringContentRoles, msg.Role):
+		var text strings.Builder
+		for _, part := range parts {
+			text.WriteString(part["text"].(string))
+		}
+		out["content"] = text.String()
 	case len(parts) == 1 && len(parts[0]) == 2 && parts[0]["type"] == "text":
 		out["content"] = parts[0]["text"]
 	case len(parts) > 0:
 		out["content"] = parts
-	case len(toolCalls) > 0 && p.spec.EmptyToolCallContent:
-		out["content"] = ""
 	}
 	if len(toolCalls) > 0 {
 		out["tool_calls"] = toolCalls

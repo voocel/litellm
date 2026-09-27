@@ -5,7 +5,7 @@
       "role": "user"
     }
   ],
-  "model": "deepseek-reasoner",
+  "model": "deepseek-flash",
   "reasoning_effort": "max",
   "thinking": {
     "type": "enabled"

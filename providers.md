@@ -1,6 +1,6 @@
 # Provider Mapping
 
-Each adapter maps the shared `litellm.Request` onto its vendor's wire format and nothing more. It does not infer what a model supports and does not check vendor values; whatever is sent is judged by the vendor API, and its error is returned as is. This page records the mapping so you can predict the request an adapter sends.
+Each adapter maps the shared `litellm.Request` onto its vendor's wire format, including the documented JSON Schema prompt fallback below. It does not infer what a model supports and does not check vendor values; whatever is sent is judged by the vendor API, and its error is returned as is. This page records the mapping so you can predict the request an adapter sends.
 
 `client.Capabilities()` reports the same static facts at runtime: whether `Thinking`, `ThinkingDisabled`, `Effort` and `BudgetTokens` can be expressed (the table below), and the accepted `ProviderOptions` keys.
 
@@ -69,9 +69,32 @@ The replay rule is the same for every adapter: portable content (text, reasoning
 
 - **OpenAI Responses** pairs a reasoning item with the ids of the items after it, and only the model that produced the reasoning accepts it. An assistant message holding reasoning from the requested model (`State.Model == Request.Model`) is replayed whole, reasoning and ids included; any other is sent as plain content without reasoning or ids. A message's `phase` is always kept.
 - **Gemini** requires a signature on the first function call of each model turn. A turn whose first call has none, such as one from another provider, gets the documented placeholder `skip_thought_signature_validator`, sent as that literal string.
+- **DeepSeek** requires the full `reasoning_content` of all previous assistant turns whenever a request carries `tools`, including turns without tool calls. Append `litellm.Assistant(resp.Blocks...)` to history after both `Chat` and collected streams. Without tools, DeepSeek ignores replayed reasoning. See [Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode/).
 - **MiniMax, OpenRouter** stream `reasoning_details` in fragments; they are merged into the entries a non-streaming response returns.
 - Empty text is not sent, and a message left with nothing to send, such as one holding only reasoning the target cannot carry, is omitted.
 - A `ProviderState` with an empty `Provider` or invalid JSON `Data` fails validation.
+
+## Structured Output
+
+Callers use `ResponseFormatJSONSchema` with the same `JSONSchema` across providers. The adapter chooses how to send it:
+
+| Provider | JSON Schema mapping |
+| --- | --- |
+| OpenAI, Anthropic, Gemini, Bedrock, Grok, Qwen, Ollama, OpenRouter, compat | Native schema field; availability and supported schema features depend on the model and endpoint |
+| DeepSeek, GLM, MiMo | Schema in a prompt + `response_format: {"type":"json_object"}` |
+| MiniMax | Schema in a prompt; no `response_format` field |
+
+The fallback appends the schema name, description and full document to the last user message, or adds a user message if none exists. It preserves the caller's messages and reasoning/tool history. Both `Chat` and `Stream` use this mapping; fallback requests return `litellm.schema_prompt_fallback` in `Response.Warnings` or as a `WarningEvent` (also retained by `Collect`).
+
+Prompting is best effort, including with `StrictEnabled`: JSON mode constrains JSON syntax, not schema adherence, and prompting alone guarantees neither. The SDK does not validate or retry generated output; callers needing schema guarantees must validate it. Native adapters do not automatically retry with prompting when a particular model rejects a schema request.
+
+## DeepSeek Request Formats
+
+The default example model is `deepseek-flash`. Per the [Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/), system and assistant text blocks are concatenated without separators into a string; images in those roles are rejected. User messages support text and images. URL and inline images use `image_url`; set `ImageBlock.FileURI` to an uploaded `file-api-...` ID to send a `file` part with `file_id` (see [Vision](https://api-docs.deepseek.com/guides/vision/)). File upload itself is outside this provider's API.
+
+The API supports `text` and `json_object`; the SDK maps `json_schema` to the prompt fallback described above. When using `json_object` directly, also instruct the model to produce JSON in a system or user message.
+
+For strict tool calls, set `deepseek.Config.BaseURL` to `https://api.deepseek.com/beta` and use `litellm.StrictEnabled` on every tool. The provider sends the selected strict flags and uses the configured endpoint; DeepSeek validates the tool schemas. See [Tool Calls](https://api-docs.deepseek.com/guides/tool_calls/).
 
 ## System Messages
 

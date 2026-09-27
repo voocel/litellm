@@ -246,7 +246,9 @@ func (c *ToolChoice) validate() error {
 }
 
 // ResponseFormat constrains the output format. JSONSchema is used with
-// ResponseFormatJSONSchema.
+// ResponseFormatJSONSchema. Providers without native schema support may use a
+// prompt instead and report a Warning; this does not enforce schema adherence,
+// including when StrictEnabled is set. See providers.md for the mapping.
 type ResponseFormat struct {
 	Type       ResponseFormatType
 	JSONSchema *JSONSchema

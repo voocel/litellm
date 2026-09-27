@@ -2,6 +2,7 @@
 package deepseek
 
 import (
+	"github.com/voocel/litellm"
 	"github.com/voocel/litellm/provider/compat"
 	"github.com/voocel/litellm/provider/internal/openaicompat"
 )
@@ -23,7 +24,9 @@ const (
 
 // New connects to https://api.deepseek.com. Thinking maps to thinking.type
 // "enabled" or "disabled" with Effort as reasoning_effort; BudgetTokens is
-// rejected.
+// rejected. Strict tools require BaseURL "https://api.deepseek.com/beta" and
+// StrictEnabled on every tool. JSON Schema output uses a prompt with JSON mode;
+// schema adherence is not enforced.
 func New(cfg Config) (*Provider, error) {
 	return openaicompat.New(cfg, openaicompat.Spec{
 		Name:           "deepseek",
@@ -34,7 +37,9 @@ func New(cfg Config) (*Provider, error) {
 			ProviderOptionLogprobs, ProviderOptionTopLogprobs, ProviderOptionUserID,
 			ProviderOptionFrequencyPenalty, ProviderOptionPresencePenalty,
 		},
-		ReasoningFields:      []string{"reasoning_content"},
-		EmptyToolCallContent: true,
+		ReasoningFields:    []string{"reasoning_content"},
+		StringContentRoles: []litellm.Role{litellm.RoleSystem, litellm.RoleAssistant},
+		ImageFileID:        true,
+		SchemaFallback:     litellm.ResponseFormatJSONObject,
 	})
 }

@@ -251,7 +251,7 @@ func TestAssistantMessage(t *testing.T) {
 		want   string
 	}{
 		{name: "tool call without content", blocks: []litellm.Block{call}, want: `{"role": "assistant", "tool_calls": ` + toolCalls + `}`},
-		{name: "empty tool call content", spec: openaicompat.Spec{EmptyToolCallContent: true}, blocks: []litellm.Block{call}, want: `{"role": "assistant", "content": "", "tool_calls": ` + toolCalls + `}`},
+		{name: "empty tool call content", spec: openaicompat.Spec{StringContentRoles: []litellm.Role{litellm.RoleAssistant}}, blocks: []litellm.Block{call}, want: `{"role": "assistant", "content": "", "tool_calls": ` + toolCalls + `}`},
 		{name: "reasoning dropped without fields", blocks: []litellm.Block{details, litellm.Text("ok")}, want: `{"role": "assistant", "content": "ok"}`},
 		{name: "reasoning text", spec: openaicompat.Spec{ReasoningFields: []string{"reasoning_content"}}, blocks: []litellm.Block{litellm.ReasoningBlock{Text: "a"}, litellm.ReasoningBlock{Text: "b"}}, want: `{"role": "assistant", "reasoning_content": "a\n\nb"}`},
 		{name: "state ignored without details field", spec: openaicompat.Spec{ReasoningFields: []string{"reasoning_content"}}, blocks: []litellm.Block{details}, want: `{"role": "assistant", "reasoning_content": "t"}`},

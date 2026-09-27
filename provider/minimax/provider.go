@@ -2,6 +2,7 @@
 package minimax
 
 import (
+	"github.com/voocel/litellm"
 	"github.com/voocel/litellm/provider/compat"
 	"github.com/voocel/litellm/provider/internal/openaicompat"
 )
@@ -28,5 +29,6 @@ func New(cfg Config) (*Provider, error) {
 		Fields:          map[string]any{"reasoning_split": true},
 		Options:         []string{ProviderOptionServiceTier},
 		ReasoningFields: []string{"reasoning_details", "reasoning_content"},
+		SchemaFallback:  litellm.ResponseFormatText,
 	})
 }

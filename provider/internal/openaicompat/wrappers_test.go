@@ -33,7 +33,7 @@ var wrappers = []struct {
 		name: "deepseek", newFn: deepseek.New,
 		caps: litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true, ProviderOptions: []string{"frequency_penalty", "logprobs", "presence_penalty", "top_logprobs", "user_id"}},
 		request: func(r *litellm.Request) {
-			r.Model, r.Thinking = "deepseek-reasoner", &litellm.Thinking{Effort: "max"}
+			r.Model, r.Thinking = "deepseek-flash", &litellm.Thinking{Effort: "max"}
 			r.Tools = []litellm.Tool{{Name: "lookup", Description: "Lookup.", Strict: litellm.StrictEnabled}}
 		},
 	},

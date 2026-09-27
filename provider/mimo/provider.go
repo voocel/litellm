@@ -2,6 +2,7 @@
 package mimo
 
 import (
+	"github.com/voocel/litellm"
 	"github.com/voocel/litellm/provider/compat"
 	"github.com/voocel/litellm/provider/internal/openaicompat"
 )
@@ -31,6 +32,7 @@ func New(cfg Config) (*Provider, error) {
 		Thinking:          openaicompat.ThinkingType("enabled", false),
 		Options:           []string{ProviderOptionAudio, ProviderOptionFrequencyPenalty, ProviderOptionPresencePenalty},
 		ReasoningFields:   []string{"reasoning_content"},
+		SchemaFallback:    litellm.ResponseFormatJSONObject,
 		OmitStreamOptions: true,
 	})
 }

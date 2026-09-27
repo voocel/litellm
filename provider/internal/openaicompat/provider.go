@@ -90,6 +90,9 @@ func (p *Provider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Res
 		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeProvider, err)
 	}
 	out.Raw = data
+	if p.spec.usesSchemaPrompt(req.ResponseFormat) {
+		out.Warnings = append(out.Warnings, p.spec.schemaWarning())
+	}
 	return out, nil
 }
 
@@ -103,7 +106,11 @@ func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.St
 	if err != nil {
 		return nil, err
 	}
-	return newStream(resp, req, p.spec), nil
+	s := newStream(resp, req, p.spec)
+	if p.spec.usesSchemaPrompt(req.ResponseFormat) {
+		s.pending = append(s.pending, litellm.WarningEvent{Warning: p.spec.schemaWarning()})
+	}
+	return s, nil
 }
 
 // ListModels calls GET /models.
