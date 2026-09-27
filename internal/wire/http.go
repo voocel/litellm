@@ -1,12 +1,14 @@
 package wire
 
 import (
+	"bufio"
 	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strings"
 
@@ -17,8 +19,8 @@ import (
 const MaxErrorBody = 1 << 20
 
 // Do sends req. A transport failure becomes a network error and a non-2xx
-// response an HTTP error with its body closed. On success the caller owns
-// resp.Body.
+// response an HTTP error with its body closed, as does a 2xx HTML page. On
+// success the caller owns resp.Body.
 func Do(client litellm.HTTPClient, req *http.Request, provider, operation string) (*http.Response, error) {
 	resp, err := client.Do(req)
 	if err != nil {
@@ -29,7 +31,39 @@ func Do(client litellm.HTTPClient, req *http.Request, provider, operation string
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, MaxErrorBody))
 		return nil, HTTPError(provider, resp.StatusCode, resp.Header, string(data))
 	}
+	if isHTMLPage(resp) {
+		resp.Body.Close()
+		endpoint := req.URL.Scheme + "://" + req.URL.Host + req.URL.Path
+		return nil, litellm.NewError(provider, litellm.ErrorTypeProvider, fmt.Sprintf("%s returned an HTML page instead of an API response; check BaseURL", endpoint), nil)
+	}
 	return resp, nil
+}
+
+// isHTMLPage reports a web page, typically a gateway console served because
+// BaseURL lacks the API path, which would otherwise surface as a decode error
+// or an empty stream. The body must start with markup, since some servers
+// label JSON as text/html; a body that does not is kept for the caller.
+func isHTMLPage(resp *http.Response) bool {
+	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if mediaType != "text/html" {
+		return false
+	}
+	br := bufio.NewReader(resp.Body)
+	resp.Body = struct {
+		io.Reader
+		io.Closer
+	}{br, resp.Body}
+	for n := 1; ; n++ {
+		b, err := br.Peek(n)
+		if err != nil {
+			return false
+		}
+		switch c := b[n-1]; c {
+		case ' ', '\t', '\r', '\n':
+		default:
+			return c == '<'
+		}
+	}
 }
 
 // ErrorField converts the error member of an OpenAI-style response body or

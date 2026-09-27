@@ -59,6 +59,42 @@ func TestDoReturnsSuccessfulResponseOpen(t *testing.T) {
 	}
 }
 
+func TestDoRejectsHTMLPage(t *testing.T) {
+	body := &trackingBody{Reader: strings.NewReader("\n  <!doctype html><html></html>")}
+	client := doerFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/html; charset=utf-8"}}, Body: body}, nil
+	})
+	req, _ := http.NewRequest(http.MethodPost, "https://example.test/chat/completions?key=secret", nil)
+	_, err := Do(client, req, "test", "request")
+	want := "test: https://example.test/chat/completions returned an HTML page instead of an API response; check BaseURL"
+	if !litellm.IsProviderError(err) || err.Error() != want {
+		t.Fatalf("err = %v", err)
+	}
+	if !body.closed {
+		t.Fatal("HTML response body not closed")
+	}
+}
+
+func TestDoKeepsJSONLabeledAsHTML(t *testing.T) {
+	body := &trackingBody{Reader: strings.NewReader(` {"ok":true}`)}
+	client := doerFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/html"}}, Body: body}, nil
+	})
+	req, _ := http.NewRequest(http.MethodPost, "https://example.test", nil)
+	resp, err := Do(client, req, "test", "request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := io.ReadAll(resp.Body)
+	if string(data) != ` {"ok":true}` {
+		t.Fatalf("body = %q", data)
+	}
+	resp.Body.Close()
+	if !body.closed {
+		t.Fatal("underlying body not closed")
+	}
+}
+
 func TestStreamErrorClassifiesErrorFields(t *testing.T) {
 	tests := map[string]struct {
 		raw string
