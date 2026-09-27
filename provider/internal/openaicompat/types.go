@@ -10,14 +10,16 @@ type chatResponse struct {
 }
 
 type choice struct {
-	Message      message `json:"message"`
-	FinishReason string  `json:"finish_reason"`
+	Message      message         `json:"message"`
+	FinishReason string          `json:"finish_reason"`
+	Logprobs     json.RawMessage `json:"logprobs"`
 }
 
 type message struct {
-	Content   json.RawMessage `json:"content"`
-	Refusal   string          `json:"refusal"`
-	ToolCalls []toolCall      `json:"tool_calls"`
+	Content     json.RawMessage   `json:"content"`
+	Refusal     string            `json:"refusal"`
+	ToolCalls   []toolCall        `json:"tool_calls"`
+	Annotations []json.RawMessage `json:"annotations"`
 	// Fields keeps every member so vendor reasoning fields can be read by name.
 	Fields map[string]json.RawMessage `json:"-"`
 }
@@ -69,15 +71,24 @@ type streamChunk struct {
 }
 
 type streamChoice struct {
-	Delta        delta  `json:"delta"`
-	FinishReason string `json:"finish_reason"`
+	Delta        delta         `json:"delta"`
+	FinishReason string        `json:"finish_reason"`
+	Logprobs     *chatLogprobs `json:"logprobs"`
+}
+
+// Tokens stay raw so byte arrays, alternative tokens and vendor extensions
+// survive aggregation without reinterpreting their values.
+type chatLogprobs struct {
+	Content []json.RawMessage `json:"content"`
+	Refusal []json.RawMessage `json:"refusal"`
 }
 
 type delta struct {
-	Content   string                     `json:"content"`
-	Refusal   string                     `json:"refusal"`
-	ToolCalls []toolCallDelta            `json:"tool_calls"`
-	Fields    map[string]json.RawMessage `json:"-"`
+	Content     string                     `json:"content"`
+	Refusal     string                     `json:"refusal"`
+	ToolCalls   []toolCallDelta            `json:"tool_calls"`
+	Annotations []json.RawMessage          `json:"annotations"`
+	Fields      map[string]json.RawMessage `json:"-"`
 }
 
 func (d *delta) UnmarshalJSON(data []byte) error {

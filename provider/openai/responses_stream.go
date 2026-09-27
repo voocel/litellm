@@ -46,7 +46,8 @@ type responsesStream struct {
 	requested string // the requested model, for ProviderState
 	model     string
 	blocks    wire.BlockTracker[partKey]
-	messages  map[int]itemState // message items by output index
+	messages  map[int]itemState             // message items by output index
+	parts     map[partKey]litellm.TextBlock // final content metadata, awaiting the message's phase
 	tools     map[int]litellm.ToolUseBlock
 	streamed  map[int]bool // function calls whose arguments arrived as deltas
 	summaries map[int]int  // last summary index per reasoning item
@@ -62,6 +63,7 @@ func newResponsesStream(resp *http.Response, model string) *responsesStream {
 		requested: model,
 		model:     model,
 		messages:  make(map[int]itemState),
+		parts:     make(map[partKey]litellm.TextBlock),
 		tools:     make(map[int]litellm.ToolUseBlock),
 		streamed:  make(map[int]bool),
 		summaries: make(map[int]int),
@@ -131,6 +133,21 @@ func (s *responsesStream) events(events []litellm.Event, e responsesEvent, raw j
 	case "response.output_item.done":
 		if e.Item != nil {
 			switch e.Item.Type {
+			case "message":
+				previous := s.messages[e.OutputIndex]
+				s.messages[e.OutputIndex] = itemState{cmp.Or(e.Item.ID, previous.ID), cmp.Or(e.Item.Phase, previous.Phase)}
+				for i, part := range e.Item.Content {
+					if final, refused, ok := contentPartBlock(part); ok {
+						key := partKey{e.OutputIndex, i}
+						final.Text = "" // content was already delivered by deltas
+						s.parts[key] = final
+						s.refused = s.refused || refused
+						events = s.blocks.Close(events, key, s.finalText(key))
+						delete(s.parts, key)
+					}
+				}
+				delete(s.messages, e.OutputIndex)
+				return events, nil
 			case "function_call":
 				final := litellm.ToolUseBlock{ID: e.Item.CallID, Name: e.Item.Name, State: itemState{ID: e.Item.ID}.state(s.requested)}
 				return s.blocks.Close(events, itemKey(e.OutputIndex), final), nil
@@ -147,8 +164,13 @@ func (s *responsesStream) events(events []litellm.Event, e responsesEvent, raw j
 		}
 	case "response.content_part.done":
 		if e.Part != nil && (e.Part.Type == "output_text" || e.Part.Type == "refusal") {
-			final, _, _ := contentPartBlock(*e.Part)
-			return s.blocks.Close(events, partKey{e.OutputIndex, e.ContentIndex}, final), nil
+			// The message's phase can arrive after its content. Keep the block
+			// open until output_item.done so BlockEnd carries all replay state.
+			final, refused, _ := contentPartBlock(*e.Part)
+			final.Text = ""
+			s.parts[partKey{e.OutputIndex, e.ContentIndex}] = final
+			s.refused = s.refused || refused
+			return events, nil
 		}
 	case "response.output_text.delta", "response.refusal.delta":
 		s.refused = s.refused || e.Type == "response.refusal.delta"
@@ -186,7 +208,12 @@ func (s *responsesStream) events(events []litellm.Event, e responsesEvent, raw j
 		status = cmp.Or(status, e.Type[len("response."):])
 		reasonCode, reasonRaw := finish(status, reason, s.toolCalls, s.refused)
 		events = append(events, litellm.UsageEvent{Usage: usage})
-		events = s.blocks.CloseAll(events, nil)
+		events = s.blocks.CloseAll(events, func(key partKey) litellm.Block {
+			if key.content >= 0 {
+				return s.finalText(key)
+			}
+			return nil
+		})
 		s.done = true
 		return append(events, litellm.DoneEvent{FinishReason: reasonCode, FinishReasonRaw: reasonRaw, Provider: "openai", Model: s.model}), nil
 	case "response.failed":
@@ -210,6 +237,12 @@ func (s *responsesStream) events(events []litellm.Event, e responsesEvent, raw j
 // text opens a content part of the message item at output.
 func (s *responsesStream) text(output int) litellm.TextBlock {
 	return litellm.TextBlock{State: s.messages[output].state(s.requested)}
+}
+
+func (s *responsesStream) finalText(key partKey) litellm.TextBlock {
+	block := s.parts[key]
+	block.State = s.messages[key.output].state(s.requested)
+	return block
 }
 
 func (s *responsesStream) toolDelta(events []litellm.Event, output int, arguments string) []litellm.Event {

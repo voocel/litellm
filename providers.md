@@ -102,6 +102,23 @@ Anthropic requires tool call ids matching `[a-zA-Z0-9_-]+`, and Bedrock Converse
 | Bedrock | a `cachePoint: {"type": "default", "ttl": TTL}` block after the marked block |
 | others | dropped; Gemini uses the `cachedContent` option |
 
+OpenAI Responses sends cached tool results as `input_text` content parts. A
+breakpoint on `ToolResultBlock` marks the last part; breakpoints on individual
+text blocks mark those parts. Unmarked results remain strings.
+
+## OpenAI Response Metadata
+
+Chat Completions preserves message annotations and choice logprobs on the first
+text block. `Logprobs` keeps the native `{content, refusal}` object; streams
+concatenate token entries and deliver it with the annotations in `BlockEnd`.
+Responses keeps its native per-part logprobs array. Streamed Responses text
+blocks end at `response.output_item.done`, after the final message `phase` is
+known, so replay state matches non-streaming replies.
+
+`background: true` is supported only with Responses `Stream`. `Chat` returns a
+completed reply and rejects background jobs before sending a request; the SDK
+does not expose background job polling or stream resumption.
+
 ## Provider Options
 
 `ProviderOptions` carry native wire fields: each key is a top-level field of the vendor's request body. Keys are checked against the adapter's list and rejected when unknown, except in `compat`, which passes every key through. When a key names a field the adapter also generates, an object is merged into it and an array is appended to it; any other collision is an error. Generated JSON outside the merged objects is sent byte for byte, so schema property order is kept. The constants in each provider package name the accepted keys.

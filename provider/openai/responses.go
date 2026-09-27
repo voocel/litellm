@@ -34,6 +34,9 @@ func (p *Provider) responses(ctx context.Context, req *litellm.Request) (*litell
 	if parsed.Error != nil {
 		return nil, wire.StreamError(p.Name(), parsed.Error.Code, parsed.Error.Message)
 	}
+	if parsed.Status == "queued" || parsed.Status == "in_progress" {
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeProvider, "response is not complete: "+parsed.Status, nil)
+	}
 	out := convertResponsesResponse(&parsed, req.Model)
 	out.Raw = data
 	return out, nil
@@ -61,6 +64,11 @@ func buildResponsesRequest(req *litellm.Request, stream bool) ([]byte, error) {
 	}
 	if err := wire.CheckOptions(opts, responsesOptions); err != nil {
 		return nil, err
+	}
+	// Chat returns a completed reply; it has no asynchronous job handle or
+	// polling API. A background stream still delivers the terminal result.
+	if !stream && opts[ProviderOptionBackground] == true {
+		return nil, errors.New("background=true requires Stream; Chat does not support background jobs")
 	}
 	body := map[string]any{"model": req.Model}
 	if stream {
@@ -323,9 +331,36 @@ func appendToolResults(items []any, blocks []litellm.Block) ([]any, error) {
 		if !ok {
 			return nil, fmt.Errorf("tool role only supports ToolResultBlock, got %T", block)
 		}
-		output, _, ok := textContent(result.Content)
+		text, cached, ok := textContent(result.Content)
 		if !ok {
 			return nil, fmt.Errorf("tool result %q only supports text content", result.ToolUseID)
+		}
+		var output any = text
+		if cached || result.Cache != nil {
+			parts := make([]map[string]any, 0, len(result.Content))
+			for _, block := range result.Content {
+				b := block.(litellm.TextBlock) // checked by textContent
+				part := map[string]any{"type": "input_text", "text": b.Text}
+				if b.Cache != nil {
+					fields, err := promptCacheBreakpoint(b.Cache)
+					if err != nil {
+						return nil, err
+					}
+					maps.Copy(part, fields)
+				}
+				parts = append(parts, part)
+			}
+			if result.Cache != nil {
+				fields, err := promptCacheBreakpoint(result.Cache)
+				if err != nil {
+					return nil, err
+				}
+				if len(parts) == 0 {
+					parts = append(parts, map[string]any{"type": "input_text", "text": ""})
+				}
+				maps.Copy(parts[len(parts)-1], fields)
+			}
+			output = parts
 		}
 		items = append(items, map[string]any{"type": "function_call_output", "call_id": result.ToolUseID, "output": output})
 	}

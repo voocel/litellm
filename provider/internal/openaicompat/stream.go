@@ -42,7 +42,9 @@ type stream struct {
 	blocks    wire.BlockTracker[blockKey]
 	tools     map[int]*toolState
 	// details accumulates reasoning_details, delivered when the block ends.
-	details []map[string]json.RawMessage
+	details     []map[string]json.RawMessage
+	logprobs    *chatLogprobs
+	annotations []json.RawMessage
 }
 
 func newStream(resp *http.Response, req *litellm.Request, spec Spec) *stream {
@@ -130,6 +132,15 @@ func (s *stream) events(events []litellm.Event, chunk streamChunk) []litellm.Eve
 			events = s.text(events, choice.Delta.Refusal)
 			s.refused = true
 		}
+		if choice.Logprobs != nil {
+			if s.logprobs == nil {
+				s.logprobs = choice.Logprobs
+			} else {
+				s.logprobs.Content = append(s.logprobs.Content, choice.Logprobs.Content...)
+				s.logprobs.Refusal = append(s.logprobs.Refusal, choice.Logprobs.Refusal...)
+			}
+		}
+		s.annotations = append(s.annotations, choice.Delta.Annotations...)
 		for i, call := range choice.Delta.ToolCalls {
 			events = s.tool(events, i, call)
 		}
@@ -206,6 +217,14 @@ func (s *stream) tool(events []litellm.Event, position int, call toolCallDelta) 
 func (s *stream) closeAll(events []litellm.Event) []litellm.Event {
 	events = s.blocks.CloseAll(events, func(key blockKey) litellm.Block {
 		switch key.kind {
+		case textKind:
+			if s.logprobs != nil || len(s.annotations) > 0 {
+				block := litellm.TextBlock{Annotations: Annotations(s.annotations)}
+				if s.logprobs != nil {
+					block.Logprobs, _ = json.Marshal(s.logprobs) // tokens are valid JSON from decoded chunks
+				}
+				return block
+			}
 		case toolKind:
 			state := s.tools[key.call]
 			return litellm.ToolUseBlock{ID: state.id, Name: state.name}
@@ -219,6 +238,8 @@ func (s *stream) closeAll(events []litellm.Event) []litellm.Event {
 	})
 	clear(s.tools)
 	s.details = nil
+	s.logprobs = nil
+	s.annotations = nil
 	return events
 }
 

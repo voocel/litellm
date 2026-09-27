@@ -269,3 +269,86 @@ func TestResponsesChat(t *testing.T) {
 		t.Fatalf("failed response: err = %#v", err)
 	}
 }
+
+func TestResponsesBackground(t *testing.T) {
+	for _, background := range []any{true, false, nil} {
+		p, sent := testProvider(t, Config{API: APIResponses}, `{"status":"completed","output":[]}`)
+		req := &litellm.Request{Model: "m", ProviderOptions: providerOptions(t, map[string]any{ProviderOptionBackground: background})}
+		_, err := p.Chat(context.Background(), req)
+		if background == true {
+			if !litellm.IsValidationError(err) || !strings.Contains(err.Error(), "requires Stream") || sent.req != nil {
+				t.Fatalf("background Chat: err = %v, sent = %v", err, sent.req != nil)
+			}
+		} else if err != nil {
+			t.Fatalf("background=%v: %v", background, err)
+		}
+	}
+	p, sent := testProvider(t, Config{API: APIResponses}, "data: "+`{"type":"response.completed","response":{"status":"completed","output":[]}}`+"\n\n")
+	stream, err := p.Stream(context.Background(), &litellm.Request{Model: "m", ProviderOptions: providerOptions(t, map[string]any{ProviderOptionBackground: true})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if _, err := litellm.Collect(stream); err != nil {
+		t.Fatal(err)
+	}
+	assertJSON(t, sent.body, `{"model":"m","background":true,"stream":true}`)
+
+	// Even an unexpected nonterminal server reply must not become a successful Chat.
+	for _, status := range []string{"queued", "in_progress"} {
+		p, _ := testProvider(t, Config{API: APIResponses}, `{"id":"resp_1","status":"`+status+`","output":[],"error":null}`)
+		_, err := p.Chat(context.Background(), &litellm.Request{Model: "m"})
+		if !litellm.IsProviderError(err) || !strings.Contains(err.Error(), status) {
+			t.Fatalf("%s response: %v", status, err)
+		}
+	}
+}
+
+func TestResponsesToolResultCache(t *testing.T) {
+	cached := &litellm.CacheControl{}
+	tests := []struct {
+		name   string
+		result litellm.ToolResultBlock
+		output string
+	}{
+		{"result boundary", litellm.ToolResultBlock{Cache: cached, Content: []litellm.Block{litellm.Text("a"), litellm.Text("b")}},
+			`[{"type":"input_text","text":"a"},{"type":"input_text","text":"b","prompt_cache_breakpoint":{"mode":"explicit"}}]`},
+		{"content boundary", litellm.ToolResultBlock{Content: []litellm.Block{litellm.TextBlock{Text: "a", Cache: cached}, litellm.Text("b")}},
+			`[{"type":"input_text","text":"a","prompt_cache_breakpoint":{"mode":"explicit"}},{"type":"input_text","text":"b"}]`},
+		{"both boundaries", litellm.ToolResultBlock{Cache: cached, Content: []litellm.Block{litellm.TextBlock{Text: "a", Cache: cached}, litellm.Text("b")}},
+			`[{"type":"input_text","text":"a","prompt_cache_breakpoint":{"mode":"explicit"}},{"type":"input_text","text":"b","prompt_cache_breakpoint":{"mode":"explicit"}}]`},
+		{"empty result", litellm.ToolResultBlock{Cache: cached},
+			`[{"type":"input_text","text":"","prompt_cache_breakpoint":{"mode":"explicit"}}]`},
+		{"uncached result", litellm.ToolResultBlock{Content: []litellm.Block{litellm.Text("a"), litellm.Text("b")}}, `"a\nb"`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.result.ToolUseID = "call_1"
+			req := &litellm.Request{Model: "m", Messages: []litellm.Message{{Role: litellm.RoleTool, Blocks: []litellm.Block{test.result}}}}
+			for _, stream := range []bool{false, true} {
+				body, err := buildResponsesRequest(req, stream)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var parsed struct {
+					Input []struct {
+						Output json.RawMessage `json:"output"`
+					} `json:"input"`
+				}
+				if err := json.Unmarshal(body, &parsed); err != nil {
+					t.Fatal(err)
+				}
+				assertJSON(t, parsed.Input[0].Output, test.output)
+			}
+		})
+	}
+	for _, result := range []litellm.ToolResultBlock{
+		{ToolUseID: "c", Cache: &litellm.CacheControl{TTL: litellm.CacheTTL5m}},
+		{ToolUseID: "c", Content: []litellm.Block{litellm.TextBlock{Text: "x", Cache: &litellm.CacheControl{TTL: litellm.CacheTTL5m}}}},
+	} {
+		_, err := appendToolResults(nil, []litellm.Block{result})
+		if err == nil || !strings.Contains(err.Error(), "prompt_cache_options") {
+			t.Fatalf("tool result TTL: %v", err)
+		}
+	}
+}

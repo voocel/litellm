@@ -40,6 +40,18 @@ func (p *Provider) convertResponse(resp *chatResponse, req *litellm.Request) (*l
 	if refused {
 		out.FinishReason = litellm.FinishReasonSafety
 	}
+	// Chat Completions attaches metadata to the message and choice, not to
+	// content parts. Keep part-level metadata for compatible vendors too.
+	for i, block := range out.Blocks {
+		if text, ok := block.(litellm.TextBlock); ok {
+			text.Annotations = append(text.Annotations, Annotations(choice.Message.Annotations)...)
+			if len(choice.Logprobs) > 0 && string(choice.Logprobs) != "null" {
+				text.Logprobs = choice.Logprobs
+			}
+			out.Blocks[i] = text
+			break
+		}
+	}
 	for _, call := range choice.Message.ToolCalls {
 		out.Blocks = append(out.Blocks, litellm.ToolUseBlock{
 			ID:        call.ID,
@@ -164,11 +176,18 @@ func Annotations(raw []json.RawMessage) []litellm.Annotation {
 	out := make([]litellm.Annotation, 0, len(raw))
 	for _, entry := range raw {
 		var fields struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-			URL  string `json:"url"`
+			Type        string `json:"type"`
+			Text        string `json:"text"`
+			URL         string `json:"url"`
+			URLCitation *struct {
+				URL   string `json:"url"`
+				Title string `json:"title"`
+			} `json:"url_citation"`
 		}
 		_ = json.Unmarshal(entry, &fields)
+		if fields.URLCitation != nil {
+			fields.URL, fields.Text = fields.URLCitation.URL, fields.URLCitation.Title
+		}
 		out = append(out, litellm.Annotation{Type: fields.Type, Text: fields.Text, URL: fields.URL, Extra: entry})
 	}
 	return out

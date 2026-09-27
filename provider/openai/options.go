@@ -38,9 +38,11 @@ const (
 	ProviderOptionInclude            = "include"
 	ProviderOptionTruncation         = "truncation"
 	ProviderOptionMaxToolCalls       = "max_tool_calls"
-	ProviderOptionBackground         = "background"
-	ProviderOptionContextManagement  = "context_management"
-	ProviderOptionPrompt             = "prompt"
+	// ProviderOptionBackground is supported by Stream only; Chat has no job
+	// polling interface and rejects background=true.
+	ProviderOptionBackground        = "background"
+	ProviderOptionContextManagement = "context_management"
+	ProviderOptionPrompt            = "prompt"
 	// ProviderOptionText is merged into the generated text object, e.g.
 	// {"verbosity": "low"}.
 	ProviderOptionText = "text"

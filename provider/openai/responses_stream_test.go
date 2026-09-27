@@ -136,3 +136,72 @@ func TestResponsesStreamTermination(t *testing.T) {
 		})
 	}
 }
+
+func TestResponsesStreamFinalMessageState(t *testing.T) {
+	const citation = `{"type":"url_citation","url":"https://example.com"}`
+	for _, phases := range []struct{ initial, final, want string }{
+		{"", "final_answer", "final_answer"},
+		{"commentary", "final_answer", "final_answer"},
+		{"commentary", "", "commentary"},
+	} {
+		t.Run(phases.initial+" to "+phases.final, func(t *testing.T) {
+			finalMessage := `{"id":"msg_1","type":"message","role":"assistant","phase":"` + phases.final + `","content":[{"type":"output_text","text":"a","annotations":[],"logprobs":[]},{"type":"output_text","text":"b","annotations":[` + citation + `],"logprobs":[]}]}`
+			response := `{"status":"completed","model":"m","output":[` + strings.Replace(finalMessage, `"phase":"`+phases.final+`"`, `"phase":"`+phases.want+`"`, 1) + `]}`
+			stream := newResponsesStream(sseBody(
+				`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","phase":"`+phases.initial+`"}}`,
+				`{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"a"}`,
+				`{"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":"a","annotations":[],"logprobs":[]}}`,
+				`{"type":"response.output_text.delta","output_index":0,"content_index":1,"delta":"b"}`,
+				`{"type":"response.content_part.done","output_index":0,"content_index":1,"part":{"type":"output_text","text":"b","annotations":[`+citation+`],"logprobs":[]}}`,
+				`{"type":"response.output_item.done","output_index":0,"item":`+finalMessage+`}`,
+				`{"type":"response.completed","response":`+response+`}`,
+			), "m")
+			defer stream.Close()
+			var ends []litellm.Block
+			got, err := litellm.Handle(stream, func(event litellm.Event) error {
+				if end, ok := event.(litellm.BlockEnd); ok {
+					ends = append(ends, end.Block)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var parsed responsesResponse
+			if err := json.Unmarshal([]byte(response), &parsed); err != nil {
+				t.Fatal(err)
+			}
+			want := convertResponsesResponse(&parsed, "m")
+			if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(ends, want.Blocks) {
+				t.Fatalf("stream = %+v, ends = %+v, want = %+v", got, ends, want)
+			}
+			// The completed phase must survive the next request as well.
+			body, err := buildResponsesRequest(&litellm.Request{Model: "m", Messages: []litellm.Message{litellm.Assistant(got.Blocks...)}}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Count(string(body), `"phase":"`+phases.want+`"`) != 2 {
+				t.Fatalf("replay lost phase: %s", body)
+			}
+		})
+	}
+}
+
+func TestResponsesStreamContentMetadataWithoutItemDone(t *testing.T) {
+	stream := newResponsesStream(sseBody(
+		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","phase":"commentary"}}`,
+		`{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"partial"}`,
+		`{"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":"partial","annotations":[],"logprobs":[{"token":"partial"}]}}`,
+		`{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}`,
+	), "m")
+	defer stream.Close()
+	resp, err := litellm.Collect(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := resp.Blocks[0].(litellm.TextBlock)
+	if block.Text != "partial" || string(block.Logprobs) != `[{"token":"partial"}]` || resp.FinishReason != litellm.FinishReasonLength {
+		t.Fatalf("response = %+v, block = %+v", resp, block)
+	}
+	assertJSON(t, block.State.Data, `{"id":"msg_1","phase":"commentary"}`)
+}
