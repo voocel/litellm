@@ -68,7 +68,7 @@ The replay rule is the same for every adapter: portable content (text, reasoning
 | other Chat Completions | none | `Text` goes to the first reasoning field above |
 
 - **OpenAI Responses** pairs a reasoning item with the ids of the items after it, and only the model that produced the reasoning accepts it. An assistant message holding reasoning from the requested model (`State.Model == Request.Model`) is replayed whole, reasoning and ids included; any other is sent as plain content without reasoning or ids. A message's `phase` is always kept.
-- **Gemini** requires a signature on the first function call of each model turn. A turn whose first call has none, such as one from another provider, gets the documented placeholder `skip_thought_signature_validator`, sent as that literal string.
+- **Gemini** requires a signature on the first function call of each model turn. A turn whose first call has none, such as one from another provider, gets the documented placeholder `skip_thought_signature_validator`, sent as that literal string. Signed text and thought parts retain their boundaries and never merge with neighboring parts, including a stream's trailing empty signature part. See [Thought signatures](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures).
 - **DeepSeek** requires the full `reasoning_content` of all previous assistant turns whenever a request carries `tools`, including turns without tool calls. Append `litellm.Assistant(resp.Blocks...)` to history after both `Chat` and collected streams. Without tools, DeepSeek ignores replayed reasoning. See [Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode/).
 - **MiniMax, OpenRouter** stream `reasoning_details` in fragments; they are merged into the entries a non-streaming response returns.
 - Empty text is not sent, and a message left with nothing to send, such as one holding only reasoning the target cannot carry, is omitted.
@@ -87,6 +87,12 @@ Callers use `ResponseFormatJSONSchema` with the same `JSONSchema` across provide
 The fallback appends the schema name, description and full document to the last user message, or adds a user message if none exists. It preserves the caller's messages and reasoning/tool history. Both `Chat` and `Stream` use this mapping; fallback requests return `litellm.schema_prompt_fallback` in `Response.Warnings` or as a `WarningEvent` (also retained by `Collect`).
 
 Prompting is best effort, including with `StrictEnabled`: JSON mode constrains JSON syntax, not schema adherence, and prompting alone guarantees neither. The SDK does not validate or retry generated output; callers needing schema guarantees must validate it. Native adapters do not automatically retry with prompting when a particular model rejects a schema request.
+
+## Gemini Request Formats
+
+The adapter uses `generateContent` and `streamGenerateContent`. JSON output maps to `generationConfig.responseFormat.text.mimeType: "APPLICATION_JSON"`; JSON Schema also sets `responseFormat.text.schema`, preserving the schema document. The MIME value follows the enum in the [REST reference](https://ai.google.dev/api/generate-content#TextResponseFormat), rather than the string used by legacy `responseMimeType`.
+
+`generationConfig.candidateCount` in `ProviderOptions` must be 1 when supplied: `litellm.Response` represents one output. Tool results marked `IsError` always go under `functionResponse.response.error`, including JSON objects. `ListModels` follows `nextPageToken` until the full list has been retrieved.
 
 ## DeepSeek Request Formats
 

@@ -43,6 +43,15 @@ func buildRequest(req *litellm.Request) ([]byte, error) {
 	if err := wire.CheckOptions(opts, providerOptions); err != nil {
 		return nil, err
 	}
+	if config, ok := opts[ProviderOptionGenerationConfig].(map[string]any); ok {
+		if count, exists := config["candidateCount"]; exists {
+			number, ok := count.(json.Number)
+			n, err := number.Float64()
+			if !ok || err != nil || n != 1 {
+				return nil, errors.New("generationConfig.candidateCount must be 1; litellm.Response holds a single output")
+			}
+		}
+	}
 	out := &request{}
 	contents, system, err := convertMessages(req.Messages)
 	if err != nil {
@@ -174,7 +183,8 @@ func convertBlocks(blocks []litellm.Block, names map[string]string) ([]part, err
 }
 
 // toolResponse wraps the result text as the object Gemini requires: a JSON
-// object is sent as is, other text under "result", or "error" on failure.
+// object is sent as is on success, other text under "result". Failures always
+// go under "error", including JSON objects, without losing numeric precision.
 func toolResponse(result litellm.ToolResultBlock) (json.RawMessage, error) {
 	var texts []string
 	for _, block := range result.Content {
@@ -187,6 +197,9 @@ func toolResponse(result litellm.ToolResultBlock) (json.RawMessage, error) {
 	text := strings.Join(texts, "\n")
 	var object map[string]json.RawMessage
 	if json.Unmarshal([]byte(text), &object) == nil && object != nil {
+		if result.IsError {
+			return json.Marshal(map[string]json.RawMessage{"error": json.RawMessage(text)})
+		}
 		return json.RawMessage(text), nil
 	}
 	key := "result"
@@ -227,18 +240,18 @@ func convertGenerationConfig(req *litellm.Request) (*generationConfig, error) {
 		switch format.Type {
 		case "", litellm.ResponseFormatText:
 		case litellm.ResponseFormatJSONObject:
-			out.ResponseMimeType = "application/json"
+			out.ResponseFormat = &responseFormatConfig{Text: textResponseFormat{MimeType: "APPLICATION_JSON"}}
 		case litellm.ResponseFormatJSONSchema:
-			out.ResponseMimeType = "application/json"
-			if len(format.JSONSchema.Schema) > 0 {
-				out.ResponseSchema = json.RawMessage(format.JSONSchema.Schema)
-			}
+			out.ResponseFormat = &responseFormatConfig{Text: textResponseFormat{
+				MimeType: "APPLICATION_JSON",
+				Schema:   json.RawMessage(format.JSONSchema.Schema),
+			}}
 		default:
 			return nil, fmt.Errorf("unsupported response format %q", format.Type)
 		}
 	}
 	if out.Temperature == nil && out.MaxOutputTokens == nil && out.TopP == nil && len(out.StopSequences) == 0 &&
-		out.ThinkingConfig == nil && out.ResponseMimeType == "" {
+		out.ThinkingConfig == nil && out.ResponseFormat == nil {
 		return nil, nil
 	}
 	return out, nil

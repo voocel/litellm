@@ -1,7 +1,6 @@
 package gemini
 
 import (
-	"cmp"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -28,15 +27,15 @@ func convertResponse(resp *response, model string) *litellm.Response {
 	for _, p := range candidate.Content.Parts {
 		switch b := partBlock(p, model).(type) {
 		case litellm.TextBlock:
-			if last, ok := lastBlock[litellm.TextBlock](out.Blocks); ok && (last.State == nil || b.State == nil) {
-				last.Text, last.State = last.Text+b.Text, cmp.Or(last.State, b.State)
+			if last, ok := lastBlock[litellm.TextBlock](out.Blocks); ok && last.State == nil && b.State == nil {
+				last.Text += b.Text
 				out.Blocks[len(out.Blocks)-1] = last
 				continue
 			}
 			out.Blocks = append(out.Blocks, b)
 		case litellm.ReasoningBlock:
-			if last, ok := lastBlock[litellm.ReasoningBlock](out.Blocks); ok && (last.State == nil || b.State == nil) {
-				last.Text, last.State = last.Text+b.Text, cmp.Or(last.State, b.State)
+			if last, ok := lastBlock[litellm.ReasoningBlock](out.Blocks); ok && last.State == nil && b.State == nil {
+				last.Text += b.Text
 				out.Blocks[len(out.Blocks)-1] = last
 				continue
 			}
@@ -58,7 +57,8 @@ func convertResponse(resp *response, model string) *litellm.Response {
 
 // partBlock maps one part for the requested model; its thought signature
 // becomes the block's State. Callers merge adjacent text or thought parts into
-// one block unless both carry a signature, since signatures cannot be merged.
+// one block only when neither carries a signature: signed parts must retain
+// their original boundaries when replayed.
 // A function call without an id gets a generated one.
 func partBlock(p part, model string) litellm.Block {
 	var text string

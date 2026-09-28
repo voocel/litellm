@@ -50,13 +50,22 @@ type functionResponse struct {
 }
 
 type generationConfig struct {
-	Temperature      *float64        `json:"temperature,omitempty"`
-	MaxOutputTokens  *int            `json:"maxOutputTokens,omitempty"`
-	TopP             *float64        `json:"topP,omitempty"`
-	StopSequences    []string        `json:"stopSequences,omitempty"`
-	ResponseMimeType string          `json:"responseMimeType,omitempty"`
-	ResponseSchema   json.RawMessage `json:"responseJsonSchema,omitempty"`
-	ThinkingConfig   *thinkingConfig `json:"thinkingConfig,omitempty"`
+	Temperature     *float64              `json:"temperature,omitempty"`
+	MaxOutputTokens *int                  `json:"maxOutputTokens,omitempty"`
+	TopP            *float64              `json:"topP,omitempty"`
+	StopSequences   []string              `json:"stopSequences,omitempty"`
+	ResponseFormat  *responseFormatConfig `json:"responseFormat,omitempty"`
+	ThinkingConfig  *thinkingConfig       `json:"thinkingConfig,omitempty"`
+}
+
+type responseFormatConfig struct {
+	Text textResponseFormat `json:"text"`
+}
+
+type textResponseFormat struct {
+	// The REST schema defines an enum here, unlike the legacy MIME string.
+	MimeType string          `json:"mimeType"`
+	Schema   json.RawMessage `json:"schema,omitempty"`
 }
 
 type thinkingConfig struct {
@@ -112,7 +121,8 @@ type promptFeedback struct {
 }
 
 type modelList struct {
-	Models []modelInfo `json:"models"`
+	Models        []modelInfo `json:"models"`
+	NextPageToken string      `json:"nextPageToken,omitempty"`
 }
 
 type modelInfo struct {

@@ -44,7 +44,7 @@ func model() string {
 	if m := os.Getenv("GEMINI_MODEL"); m != "" {
 		return m
 	}
-	return "gemini-2.5-flash"
+	return "gemini-3.8-flash"
 }
 
 func runChat(ctx context.Context, client *litellm.Client) {
@@ -53,7 +53,7 @@ func runChat(ctx context.Context, client *litellm.Client) {
 		Messages: []litellm.Message{
 			litellm.UserText("Explain multimodal prompts in one sentence."),
 		},
-		MaxTokens: new(256),
+		MaxTokens: new(1024),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -67,7 +67,7 @@ func runStream(ctx context.Context, client *litellm.Client) {
 		Messages: []litellm.Message{
 			litellm.UserText("Explain multimodal prompts in one sentence."),
 		},
-		MaxTokens: new(256),
+		MaxTokens: new(1024),
 	})
 	if err != nil {
 		log.Fatal(err)

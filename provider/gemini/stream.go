@@ -105,11 +105,10 @@ func (s *stream) events(events []litellm.Event, chunk response) []litellm.Event 
 	return events
 }
 
-// extendRun adds a text or thought part to the open run of its kind. A new
-// run starts on a change of kind, or when both carry a signature: signatures
-// cannot be merged.
+// extendRun joins unsigned deltas, preserving every signed part's boundaries,
+// including signature-only parts with empty text.
 func (s *stream) extendRun(events []litellm.Event, kind, text, signature string) []litellm.Event {
-	if s.open != kind || (signature != "" && s.signature != "") {
+	if s.open != kind || s.signature != "" || signature != "" {
 		events = s.endRun(events)
 		s.run++
 		s.open = kind

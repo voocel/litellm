@@ -141,7 +141,7 @@ func TestBuildRequestPreservesRawJSON(t *testing.T) {
 		`"args":{"n":12345678901234567890}`,
 		`"response":{"ok":true}`,
 		`"parametersJsonSchema":` + schema,
-		`"responseMimeType":"application/json","responseJsonSchema":` + schema,
+		`"responseFormat":{"text":{"mimeType":"APPLICATION_JSON","schema":` + schema,
 	} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("body missing %s:\n%s", want, data)
@@ -267,7 +267,8 @@ func TestChatConvertsResponse(t *testing.T) {
 		t.Fatalf("last block = %#v", resp.Blocks[len(resp.Blocks)-1])
 	}
 	want := []litellm.Block{
-		litellm.ReasoningBlock{Text: "thinking", State: &litellm.ProviderState{
+		litellm.ReasoningBlock{Text: "thin"},
+		litellm.ReasoningBlock{Text: "king", State: &litellm.ProviderState{
 			Provider: "gemini", Model: "gemini-3-pro", Data: json.RawMessage(`{"thoughtSignature":"sig-think"}`),
 		}},
 		litellm.TextBlock{Text: "answer"},

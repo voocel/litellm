@@ -115,11 +115,46 @@ func (p *Provider) post(ctx context.Context, req *litellm.Request, stream bool) 
 	return wire.Do(p.cfg.HTTPClient, httpReq, p.Name(), "request")
 }
 
-// ListModels lists the models available to the API key.
+// ListModels lists all pages of models available to the API key.
 func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) {
+	models := make([]litellm.ModelInfo, 0)
+	var pageToken string
+	for {
+		payload, err := p.listModelsPage(ctx, pageToken)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range payload.Models {
+			id := strings.TrimPrefix(item.Name, "models/")
+			name := item.DisplayName
+			if name == "" {
+				name = id
+			}
+			models = append(models, litellm.ModelInfo{
+				ID:               id,
+				Name:             name,
+				Provider:         p.Name(),
+				Description:      item.Description,
+				InputTokenLimit:  item.InputTokenLimit,
+				OutputTokenLimit: item.OutputTokenLimit,
+			})
+		}
+		pageToken = payload.NextPageToken
+		if pageToken == "" {
+			return models, nil
+		}
+	}
+}
+
+func (p *Provider) listModelsPage(ctx context.Context, pageToken string) (*modelList, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(p.cfg.BaseURL, "/")+"/v1beta/models", nil)
 	if err != nil {
 		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeInternal, "create models request", err)
+	}
+	if pageToken != "" {
+		query := httpReq.URL.Query()
+		query.Set("pageToken", pageToken)
+		httpReq.URL.RawQuery = query.Encode()
 	}
 	if err := p.setHeaders(ctx, httpReq); err != nil {
 		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
@@ -133,23 +168,7 @@ func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) 
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeProvider, "decode models response", err)
 	}
-	models := make([]litellm.ModelInfo, 0, len(payload.Models))
-	for _, item := range payload.Models {
-		id := strings.TrimPrefix(item.Name, "models/")
-		name := item.DisplayName
-		if name == "" {
-			name = id
-		}
-		models = append(models, litellm.ModelInfo{
-			ID:               id,
-			Name:             name,
-			Provider:         p.Name(),
-			Description:      item.Description,
-			InputTokenLimit:  item.InputTokenLimit,
-			OutputTokenLimit: item.OutputTokenLimit,
-		})
-	}
-	return models, nil
+	return &payload, nil
 }
 
 func (p *Provider) setHeaders(ctx context.Context, req *http.Request) error {

@@ -34,8 +34,8 @@ func TestStreamCollectMatchesCompleteResponse(t *testing.T) {
 	}
 }
 
-// Signatures attach to their run, but two signed parts never merge; streams
-// may send a text run's signature in a trailing empty part.
+// Signed parts retain their boundaries, including a stream's trailing empty
+// signature part. Replay must preserve the structure the server returned.
 func TestStreamSignaturesMatchCompleteResponse(t *testing.T) {
 	for _, tc := range []struct {
 		name, complete string
@@ -43,13 +43,13 @@ func TestStreamSignaturesMatchCompleteResponse(t *testing.T) {
 		want           []litellm.Block
 	}{{
 		name:     "text signature in an empty part",
-		complete: `{"candidates":[{"content":{"parts":[{"text":"Hello","thoughtSignature":"sig"}]},"finishReason":"STOP"}]}`,
+		complete: `{"candidates":[{"content":{"parts":[{"text":"Hello"},{"text":"","thoughtSignature":"sig"}]},"finishReason":"STOP"}]}`,
 		chunks: []string{
 			`{"candidates":[{"content":{"parts":[{"text":"Hel"}]}}]}`,
 			`{"candidates":[{"content":{"parts":[{"text":"lo"}]}}]}`,
 			`{"candidates":[{"content":{"parts":[{"text":"","thoughtSignature":"sig"}]},"finishReason":"STOP"}]}`,
 		},
-		want: []litellm.Block{litellm.TextBlock{Text: "Hello", State: signed("m", "sig")}},
+		want: []litellm.Block{litellm.Text("Hello"), litellm.TextBlock{State: signed("m", "sig")}},
 	}, {
 		name:     "signed text parts stay apart",
 		complete: `{"candidates":[{"content":{"parts":[{"text":"a","thoughtSignature":"s1"},{"text":"b","thoughtSignature":"s2"}]},"finishReason":"STOP"}]}`,
@@ -71,10 +71,30 @@ func TestStreamSignaturesMatchCompleteResponse(t *testing.T) {
 			`{"candidates":[{"content":{"parts":[{"text":"answer"}]},"finishReason":"MALFORMED_FUNCTION_CALL","finishMessage":"Malformed function call: f("}]}`,
 		},
 		want: []litellm.Block{
-			litellm.ReasoningBlock{Text: "ab", State: signed("m", "s1")},
+			litellm.ReasoningBlock{Text: "a", State: signed("m", "s1")},
+			litellm.ReasoningBlock{Text: "b"},
 			litellm.ReasoningBlock{Text: "c", State: signed("m", "s2")},
 			litellm.TextBlock{Text: "answer"},
 		},
+	}, {
+		name:     "unsigned text around a signed part",
+		complete: `{"candidates":[{"content":{"parts":[{"text":"a"},{"text":"b","thoughtSignature":"sig"},{"text":"c"}]},"finishReason":"STOP"}]}`,
+		chunks: []string{
+			`{"candidates":[{"content":{"parts":[{"text":"a"}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"text":"b","thoughtSignature":"sig"}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"text":"c"}]},"finishReason":"STOP"}]}`,
+		},
+		want: []litellm.Block{litellm.Text("a"), litellm.TextBlock{Text: "b", State: signed("m", "sig")}, litellm.Text("c")},
+	}, {
+		name:     "text after a trailing signature stays separate",
+		complete: `{"candidates":[{"content":{"parts":[{"text":"ab"},{"text":"","thoughtSignature":"sig"},{"text":"c"}]},"finishReason":"STOP"}]}`,
+		chunks: []string{
+			`{"candidates":[{"content":{"parts":[{"text":"a"}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"text":"b"}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"text":"","thoughtSignature":"sig"}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"text":"c"}]},"finishReason":"STOP"}]}`,
+		},
+		want: []litellm.Block{litellm.Text("ab"), litellm.TextBlock{State: signed("m", "sig")}, litellm.Text("c")},
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			var complete response
@@ -93,6 +113,15 @@ func TestStreamSignaturesMatchCompleteResponse(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("stream=%#v\ncomplete=%#v", got, want)
+			}
+			for _, blocks := range [][]litellm.Block{want.Blocks, got.Blocks} {
+				contents, _, err := convertMessages([]litellm.Message{litellm.Assistant(blocks...)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(contents[0].Parts, complete.Candidates[0].Content.Parts) {
+					t.Fatalf("replay changed signed part boundaries: %+v", contents[0].Parts)
+				}
 			}
 		})
 	}
