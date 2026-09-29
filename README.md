@@ -223,13 +223,13 @@ bedrock.New(bedrock.Config{
 })
 ```
 
-Applications that choose a provider from configuration build it by name; `providers.Config` holds the shared settings:
+Applications that choose a provider from configuration build it by name; `provider.Config` holds the shared settings:
 
 ```go
-import "github.com/voocel/litellm/providers"
+import "github.com/voocel/litellm/provider"
 
-provider, err := providers.New("anthropic", providers.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
-names := providers.Names() // "anthropic", "bedrock", "compat", ...
+provider, err := provider.New("anthropic", provider.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
+names := provider.Names() // "anthropic", "bedrock", "compat", ...
 ```
 
 `openai` follows the official protocol only. `compat` is for any other OpenAI-compatible server and passes provider options through unchecked, since it cannot know the server's fields.
@@ -349,7 +349,7 @@ if err != nil {
 }
 ```
 
-Names are the list's keys, whose vendor prefixes follow LiteLLM's provider names, such as `xai/`, `zai/` and `dashscope/`, rather than `providers.Names()`. The catalog does not translate them, since one model may be listed under several sites at different prices; keep the catalog name of each model you price.
+Names are the list's keys, whose vendor prefixes follow LiteLLM's provider names, such as `xai/`, `zai/` and `dashscope/`, rather than `provider.Names()`. The catalog does not translate them, since one model may be listed under several sites at different prices; keep the catalog name of each model you price.
 
 `Get` matches the complete key exactly. If `vendor/model` is absent, it returns `ok == false` even when `model` exists.
 

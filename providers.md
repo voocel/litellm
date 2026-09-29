@@ -150,7 +150,7 @@ cannot price a cache count it cannot tell apart from input.
 | other Chat Completions vendors, compat | `cached_tokens` or `prompt_cache_hit_tokens` when sent | `cache_write_tokens` when sent |
 
 DeepSeek, Gemini, GLM and Qwen are checked against their recorded responses in
-`providers/testdata/live`. `LITELLM_LIVE=1 LITELLM_RECORD=1 go test ./providers
+`provider/testdata/live`. `LITELLM_LIVE=1 LITELLM_RECORD=1 go test ./provider
 -run TestLive` calls the vendors whose key is set and records them again.
 
 ## OpenAI Response Metadata

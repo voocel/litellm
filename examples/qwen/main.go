@@ -44,7 +44,7 @@ func model() string {
 	if m := os.Getenv("QWEN_MODEL"); m != "" {
 		return m
 	}
-	return "qwen3.7-plus"
+	return "qwen3.8-max-0902"
 }
 
 func runChat(ctx context.Context, client *litellm.Client) {

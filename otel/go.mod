@@ -3,7 +3,7 @@ module github.com/voocel/litellm/otel
 go 1.26.0
 
 require (
-	github.com/voocel/litellm v1.9.0
+	github.com/voocel/litellm v1.9.1
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0
 	go.opentelemetry.io/otel/trace v1.46.0

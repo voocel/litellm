@@ -1,7 +1,8 @@
-// Package providers builds the built-in providers by name, for applications
-// that choose a provider from configuration. Settings beyond Config are set
-// by building the provider from its own package.
-package providers
+// Package provider builds the built-in providers by name, for applications
+// that choose a provider from configuration. Its subpackages, such as
+// provider/openai, are the providers themselves; settings beyond Config are
+// set by building a provider from its own package.
+package provider
 
 import (
 	"context"

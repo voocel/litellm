@@ -223,13 +223,13 @@ bedrock.New(bedrock.Config{
 })
 ```
 
-从配置里选择 provider 的应用可以按名字构造，共享设置放在 `providers.Config`：
+从配置里选择 provider 的应用可以按名字构造，共享设置放在 `provider.Config`：
 
 ```go
-import "github.com/voocel/litellm/providers"
+import "github.com/voocel/litellm/provider"
 
-provider, err := providers.New("anthropic", providers.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
-names := providers.Names() // "anthropic"、"bedrock"、"compat"……
+provider, err := provider.New("anthropic", provider.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
+names := provider.Names() // "anthropic"、"bedrock"、"compat"……
 ```
 
 `openai` 只讲官方协议。`compat` 用于其他任意 OpenAI 兼容服务，provider option 不检查、原样透传，因为它无从知道服务端字段。
@@ -349,7 +349,7 @@ if err != nil {
 }
 ```
 
-名称即模型表的键，厂商前缀沿用 LiteLLM 的 provider 名，例如 `xai/`、`zai/`、`dashscope/`，而不是 `providers.Names()`。目录不做名称转换，因为同一模型可能在多个站点收录且价格不同；需要计费的模型请在应用配置里记下它的目录名。
+名称即模型表的键，厂商前缀沿用 LiteLLM 的 provider 名，例如 `xai/`、`zai/`、`dashscope/`，而不是 `provider.Names()`。目录不做名称转换，因为同一模型可能在多个站点收录且价格不同；需要计费的模型请在应用配置里记下它的目录名。
 
 `Get` 精确匹配完整键。`vendor/model` 不存在时，即使存在 `model`，也返回 `ok == false`。
 

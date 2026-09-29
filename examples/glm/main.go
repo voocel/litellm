@@ -44,7 +44,7 @@ func model() string {
 	if m := os.Getenv("GLM_MODEL"); m != "" {
 		return m
 	}
-	return "glm-5.2"
+	return "glm-5.3-flash"
 }
 
 func runChat(ctx context.Context, client *litellm.Client) {
