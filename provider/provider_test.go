@@ -91,3 +91,17 @@ func TestNewPassesConfig(t *testing.T) {
 		}
 	}
 }
+
+// Every provider but compat, which serves no known vendor, has a list name.
+func TestCatalogName(t *testing.T) {
+	for _, name := range Names() {
+		if _, ok := CatalogName(name, "m"); ok == (name == "compat") {
+			t.Errorf("CatalogName(%q) ok = %v", name, ok)
+		}
+	}
+	for name, want := range map[string]string{"anthropic": "claude-x", "grok": "xai/claude-x", "qwen": "dashscope/claude-x"} {
+		if got, _ := CatalogName(name, "claude-x"); got != want {
+			t.Errorf("CatalogName(%q) = %q, want %q", name, got, want)
+		}
+	}
+}

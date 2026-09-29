@@ -64,6 +64,23 @@ func New(name string, cfg Config) (litellm.Provider, error) {
 	return build(cfg)
 }
 
+// CatalogName returns the name LiteLLM's model list, which package catalog
+// loads, files model under when the provider called name serves it: OpenAI,
+// Anthropic and Bedrock models are unprefixed, others take the list's prefix
+// for the vendor, such as "xai/" for grok. It reports false for compat and
+// unknown names, whose vendor is not known.
+func CatalogName(name, model string) (string, bool) {
+	prefix, ok := catalogPrefixes[name]
+	return prefix + model, ok
+}
+
+var catalogPrefixes = map[string]string{
+	"anthropic": "", "bedrock": "", "openai": "",
+	"deepseek": "deepseek/", "gemini": "gemini/", "glm": "zai/", "grok": "xai/",
+	"mimo": "xiaomi_mimo/", "minimax": "minimax/", "ollama": "ollama/",
+	"openrouter": "openrouter/", "qwen": "dashscope/",
+}
+
 // Names returns the provider names New accepts, sorted.
 func Names() []string {
 	return slices.Sorted(maps.Keys(builders))

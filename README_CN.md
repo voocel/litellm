@@ -234,7 +234,7 @@ names := provider.Names() // "anthropic"、"bedrock"、"compat"……
 
 `openai` 只讲官方协议。`compat` 用于其他任意 OpenAI 兼容服务，provider option 不检查、原样透传，因为它无从知道服务端字段。
 
-`client.Capabilities()` 报告适配器能表达什么：是否发送 `Thinking`、`ThinkingDisabled`、`Effort`、`BudgetTokens`，以及可接受的选项键。它按 Provider 静态固定（自定义 Provider 未声明时 `ok` 为 false）；模型是否接受仍由厂商裁决。
+`client.Capabilities()` 报告适配器能表达什么：是否发送 `Thinking`、`ThinkingDisabled`、`Effort`、`BudgetTokens`，是否必须设置 `MaxTokens`，以及可接受的选项键。它按 Provider 静态固定（自定义 Provider 未声明时 `ok` 为 false）；模型是否接受仍由厂商裁决。
 
 ### OpenAI Responses
 
@@ -349,7 +349,7 @@ if err != nil {
 }
 ```
 
-名称即模型表的键，厂商前缀沿用 LiteLLM 的 provider 名，例如 `xai/`、`zai/`、`dashscope/`，而不是 `provider.Names()`。目录不做名称转换，因为同一模型可能在多个站点收录且价格不同；需要计费的模型请在应用配置里记下它的目录名。
+名称即模型表的键，厂商前缀沿用 LiteLLM 的 provider 名，例如 `xai/`、`zai/`、`dashscope/`，而不是 `provider.Names()`。目录不做名称转换，因为同一模型可能在多个站点收录且价格不同；需要计费的模型请在应用配置里记下它的目录名。内置 Provider 可用 `provider.CatalogName(name, model)` 得到目录名，例如 `grok` 对应 `xai/grok-4`。
 
 `Get` 精确匹配完整键。`vendor/model` 不存在时，即使存在 `model`，也返回 `ok == false`。
 

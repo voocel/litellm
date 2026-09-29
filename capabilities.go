@@ -12,6 +12,9 @@ type Capabilities struct {
 	DisableThinking bool
 	ThinkingEffort  bool
 	ThinkingBudget  bool
+	// MaxTokensRequired reports that the vendor rejects requests without
+	// Request.MaxTokens.
+	MaxTokensRequired bool
 	// ProviderOptions lists the accepted Request.ProviderOptions keys, sorted.
 	// A provider that passes every key through, such as compat, lists none.
 	ProviderOptions []string

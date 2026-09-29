@@ -234,7 +234,7 @@ names := provider.Names() // "anthropic", "bedrock", "compat", ...
 
 `openai` follows the official protocol only. `compat` is for any other OpenAI-compatible server and passes provider options through unchecked, since it cannot know the server's fields.
 
-`client.Capabilities()` reports what the adapter can express: whether `Thinking`, `ThinkingDisabled`, `Effort` and `BudgetTokens` are sent, and the accepted option keys. It is static per provider (`ok` is false for a custom provider that declares nothing); whether a model honors a request is still the vendor's call.
+`client.Capabilities()` reports what the adapter can express: whether `Thinking`, `ThinkingDisabled`, `Effort` and `BudgetTokens` are sent, whether `MaxTokens` is required, and the accepted option keys. It is static per provider (`ok` is false for a custom provider that declares nothing); whether a model honors a request is still the vendor's call.
 
 ### OpenAI Responses
 
@@ -349,7 +349,7 @@ if err != nil {
 }
 ```
 
-Names are the list's keys, whose vendor prefixes follow LiteLLM's provider names, such as `xai/`, `zai/` and `dashscope/`, rather than `provider.Names()`. The catalog does not translate them, since one model may be listed under several sites at different prices; keep the catalog name of each model you price.
+Names are the list's keys, whose vendor prefixes follow LiteLLM's provider names, such as `xai/`, `zai/` and `dashscope/`, rather than `provider.Names()`. The catalog does not translate them, since one model may be listed under several sites at different prices; keep the catalog name of each model you price. `provider.CatalogName(name, model)` gives the name for a built-in provider, such as `xai/grok-4` for `grok`.
 
 `Get` matches the complete key exactly. If `vendor/model` is absent, it returns `ok == false` even when `model` exists.
 

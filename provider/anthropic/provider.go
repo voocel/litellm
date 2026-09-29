@@ -57,7 +57,7 @@ func (p *Provider) Name() string {
 
 // Capabilities reports the static protocol facts.
 func (p *Provider) Capabilities() litellm.Capabilities {
-	return litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true, ThinkingBudget: true, ProviderOptions: sortedOptions()}
+	return litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true, ThinkingBudget: true, MaxTokensRequired: true, ProviderOptions: sortedOptions()}
 }
 
 // Chat sends a Messages request.
