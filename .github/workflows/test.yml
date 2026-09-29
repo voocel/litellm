@@ -24,6 +24,6 @@ jobs:
       - name: Test root module
         run: go test -race -v ./...
 
-      - name: Test otel module against current root (local replace)
+      - name: Test otel module
         working-directory: otel
         run: go test -race -v ./...

@@ -223,6 +223,15 @@ bedrock.New(bedrock.Config{
 })
 ```
 
+Applications that choose a provider from configuration build it by name; `providers.Config` holds the shared settings:
+
+```go
+import "github.com/voocel/litellm/providers"
+
+provider, err := providers.New("anthropic", providers.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
+names := providers.Names() // "anthropic", "bedrock", "compat", ...
+```
+
 `openai` follows the official protocol only. `compat` is for any other OpenAI-compatible server and passes provider options through unchecked, since it cannot know the server's fields.
 
 `client.Capabilities()` reports what the adapter can express: whether `Thinking`, `ThinkingDisabled`, `Effort` and `BudgetTokens` are sent, and the accepted option keys. It is static per provider (`ok` is false for a custom provider that declares nothing); whether a model honors a request is still the vendor's call.
@@ -308,19 +317,45 @@ import litellmotel "github.com/voocel/litellm/otel"
 observer := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
 ```
 
-## Usage And Pricing
+## Usage And Model Catalog
 
 Token counts are `*int`: nil is unknown, `new(0)` a known zero. `Input()`, `Output()`, `Total()`, `Reasoning()`, `CacheRead()` and `CacheWrite()` return `(count, known)`. Input includes cache reads and writes; output includes reasoning; detail counts are subsets.
 
-Pricing is explicit and never loads remote data implicitly:
+The catalog holds model facts (context window, output limit, reasoning support and prices) from LiteLLM's model list, and never loads remote data implicitly:
 
 ```go
-import "github.com/voocel/litellm/pricing"
+import (
+	"fmt"
 
-reg := pricing.NewRegistry()
-err := reg.LoadFromURL(ctx, pricing.DefaultURL)
-cost, err := reg.Cost(resp.Model, resp.Usage)
+	"github.com/voocel/litellm/catalog"
+)
+
+var models catalog.Catalog
+if err := models.LoadFromURL(ctx, catalog.DefaultURL); err != nil {
+	return err
+}
+
+model, ok := models.Get("anthropic/claude-sonnet-4-5") // exact model-list key
+if !ok {
+	return fmt.Errorf("model not found in catalog")
+}
+if model.Pricing == nil {
+	return fmt.Errorf("model pricing is unavailable")
+}
+
+cost, err := model.Pricing.Cost(resp.Usage)
+if err != nil {
+	return err
+}
 ```
+
+Names are the list's keys, whose vendor prefixes follow LiteLLM's provider names, such as `xai/`, `zai/` and `dashscope/`, rather than `providers.Names()`. The catalog does not translate them, since one model may be listed under several sites at different prices; keep the catalog name of each model you price.
+
+`Get` matches the complete key exactly. If `vendor/model` is absent, it returns `ok == false` even when `model` exists.
+
+`ok == false` means the model is absent; `Pricing == nil` means its price is unknown. A non-nil `Pricing` with zero rates means usage is free.
+
+`Model.Reasoning` is `*bool`: nil means unknown, false means unsupported, and true means supported. Token limits of zero are unknown. `Set` and model-list loading validate names, limits and rates; a failed load leaves the catalog unchanged. Providers never consult the catalog to change requests.
 
 ## Custom Providers
 

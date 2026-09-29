@@ -94,6 +94,15 @@ func TestChatResponse(t *testing.T) {
 			},
 		},
 		{
+			name:  "prompt cache hits and misses",
+			newFn: plain,
+			body:  `{"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":5},"prompt_cache_hit_tokens":5,"prompt_cache_miss_tokens":4}}`,
+			want: &litellm.Response{
+				Usage: litellm.Usage{InputTokens: new(9), OutputTokens: new(1), CacheReadTokens: new(5), CacheWriteTokens: new(0)},
+				Model: "m", Provider: "test",
+			},
+		},
+		{
 			name:  "prompt cache hit tokens fallback",
 			newFn: plain,
 			body:  `{"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":1,"prompt_cache_hit_tokens":5}}`,

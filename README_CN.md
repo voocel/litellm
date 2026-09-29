@@ -223,6 +223,15 @@ bedrock.New(bedrock.Config{
 })
 ```
 
+从配置里选择 provider 的应用可以按名字构造，共享设置放在 `providers.Config`：
+
+```go
+import "github.com/voocel/litellm/providers"
+
+provider, err := providers.New("anthropic", providers.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
+names := providers.Names() // "anthropic"、"bedrock"、"compat"……
+```
+
 `openai` 只讲官方协议。`compat` 用于其他任意 OpenAI 兼容服务，provider option 不检查、原样透传，因为它无从知道服务端字段。
 
 `client.Capabilities()` 报告适配器能表达什么：是否发送 `Thinking`、`ThinkingDisabled`、`Effort`、`BudgetTokens`，以及可接受的选项键。它按 Provider 静态固定（自定义 Provider 未声明时 `ok` 为 false）；模型是否接受仍由厂商裁决。
@@ -308,19 +317,45 @@ import litellmotel "github.com/voocel/litellm/otel"
 observer := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
 ```
 
-## 用量与计费
+## 用量与模型目录
 
 Token 计数为 `*int`：nil 表示未知，`new(0)` 表示已知为零。`Input()`、`Output()`、`Total()`、`Reasoning()`、`CacheRead()`、`CacheWrite()` 返回 `(count, known)`。输入含缓存读写，输出含推理，明细计数是子集。
 
-计费是显式的，从不隐式加载远程数据：
+模型目录来自 LiteLLM 的模型表，包含上下文窗口、输出上限、是否支持推理和价格，从不隐式加载远程数据：
 
 ```go
-import "github.com/voocel/litellm/pricing"
+import (
+	"fmt"
 
-reg := pricing.NewRegistry()
-err := reg.LoadFromURL(ctx, pricing.DefaultURL)
-cost, err := reg.Cost(resp.Model, resp.Usage)
+	"github.com/voocel/litellm/catalog"
+)
+
+var models catalog.Catalog
+if err := models.LoadFromURL(ctx, catalog.DefaultURL); err != nil {
+	return err
+}
+
+model, ok := models.Get("anthropic/claude-sonnet-4-5") // 精确匹配模型表的键
+if !ok {
+	return fmt.Errorf("模型未收录")
+}
+if model.Pricing == nil {
+	return fmt.Errorf("模型未提供价格")
+}
+
+cost, err := model.Pricing.Cost(resp.Usage)
+if err != nil {
+	return err
+}
 ```
+
+名称即模型表的键，厂商前缀沿用 LiteLLM 的 provider 名，例如 `xai/`、`zai/`、`dashscope/`，而不是 `providers.Names()`。目录不做名称转换，因为同一模型可能在多个站点收录且价格不同；需要计费的模型请在应用配置里记下它的目录名。
+
+`Get` 精确匹配完整键。`vendor/model` 不存在时，即使存在 `model`，也返回 `ok == false`。
+
+`ok == false` 表示模型未收录；`Pricing == nil` 表示价格未知；非 nil 的 `Pricing` 中费率为零表示对应用量免费。
+
+`Model.Reasoning` 为 `*bool`：nil 表示未知，false 表示不支持，true 表示支持。Token 上限为零表示未知。`Set` 和模型表加载都会校验名称、上限和费率；加载失败保留原目录。Provider 不会依据目录改写请求。
 
 ## 自定义 Provider
 

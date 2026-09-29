@@ -124,6 +124,11 @@ func convertUsage(u usage) litellm.Usage {
 	if out.CacheReadTokens == nil {
 		out.CacheReadTokens = u.PromptCacheHitTokens
 	}
+	// DeepSeek splits the prompt into cache hits and misses, billing misses as
+	// input: nothing is written to a separately priced cache.
+	if out.CacheWriteTokens == nil && u.PromptCacheMissTokens != nil {
+		out.CacheWriteTokens = new(0)
+	}
 	if u.CompletionTokensDetails != nil {
 		out.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
 	}
