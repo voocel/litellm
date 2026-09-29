@@ -1,0 +1,32 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "Yangtze",
+            "thoughtSignature": "EpEECo4EAWkUfRNd6+C3sECwIvz01AtojbVTGMIKA6vFQf9KhHaPaCT+K65EDQt/7YSQgmrDETJ4FQ5Lpm6vSfc9OM3oabESWbwjZpAMGX1LSAgYTPhSSISpoWYSw9mvhxZtZRQtJCsNh0T/byVFqsU+YIKEicOo86TJ/61tBuEeaidShauY4g5q8HDvGruMZKGUAT/rOi3HbODRVq5TkcjHuRPCnIDv0aT5vYLM4zpWYD6wRrBZrFlXMnmRptGocOBRuPTQgh1ikJiXTl4ziddEDdVwL0p7JNfa9Vtp174fdHAXQgXNK5bNDmkAycHnHfaB16bMdwT5+L98AAGBMrVgU8xkIdCivGsVjcu7EZzEJwj2Zeif5vNqBMfUhhUaTWuho1l35/tFTBAGfkcqgszcZ8xzZZLittaCMvU/8TUvy04hkv7tNnsMs2a/FmgNqj/kjpK2XGYuQDdYPSAcHNH9kO89CGDGfRQcovN5LmsQ4FasuTsUKj5bsO06mZNkxLGbsKVEG3rQTwEHreJ6H1Z89FhLROgbys4w+HDfsn4cjcZfWO0N+rJ3yEBf4lQugcP+oKIKbxKTBwDmBQGXs6J0Z29UrwaulhXJYOq+JCauYiJc1/yYSXalGVbPIeLLshsMclBslj4J4eufERJpngxsp+55zMoly5xyJoi9wqMUJbBHEcdLbaaqc4nhavR2sxwQ6w=="
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 6705,
+    "candidatesTokenCount": 2,
+    "totalTokenCount": 6823,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 6705
+      }
+    ],
+    "thoughtsTokenCount": 116,
+    "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.7-flash",
+  "responseId": "8KO7asWBGMn4-8YP7Y2_6Q4"
+}

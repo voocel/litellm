@@ -14,7 +14,7 @@ func (p *Provider) convertResponse(resp *chatResponse, req *litellm.Request) (*l
 	out := &litellm.Response{
 		Provider: p.Name(),
 		Model:    req.Model,
-		Usage:    convertUsage(resp.Usage),
+		Usage:    p.spec.usage(resp.Usage),
 	}
 	if resp.Model != "" {
 		out.Model = resp.Model
@@ -111,7 +111,7 @@ func reasoningText(raw json.RawMessage) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func convertUsage(u usage) litellm.Usage {
+func (s Spec) usage(u usage) litellm.Usage {
 	out := litellm.Usage{
 		InputTokens:  u.PromptTokens,
 		OutputTokens: u.CompletionTokens,
@@ -124,9 +124,7 @@ func convertUsage(u usage) litellm.Usage {
 	if out.CacheReadTokens == nil {
 		out.CacheReadTokens = u.PromptCacheHitTokens
 	}
-	// DeepSeek splits the prompt into cache hits and misses, billing misses as
-	// input: nothing is written to a separately priced cache.
-	if out.CacheWriteTokens == nil && u.PromptCacheMissTokens != nil {
+	if s.CacheWritesUnbilled && out.InputTokens != nil && out.CacheWriteTokens == nil {
 		out.CacheWriteTokens = new(0)
 	}
 	if u.CompletionTokensDetails != nil {

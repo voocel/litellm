@@ -56,6 +56,9 @@ func New(cfg Config) (*Provider, error) {
 			ProviderOptionSearchOptions, ProviderOptionSkill,
 		},
 		ReasoningFields: []string{"reasoning_content"},
+		// Breakpoints are dropped, so only implicit caching applies: hits bill
+		// at a discount and caching itself is free.
+		CacheWritesUnbilled: true,
 	})
 }
 

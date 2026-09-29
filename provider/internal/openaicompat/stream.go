@@ -121,7 +121,7 @@ func (s *stream) events(events []litellm.Event, chunk streamChunk) []litellm.Eve
 		s.model = chunk.Model
 	}
 	if chunk.Usage != nil {
-		events = append(events, litellm.UsageEvent{Usage: convertUsage(*chunk.Usage)})
+		events = append(events, litellm.UsageEvent{Usage: s.spec.usage(*chunk.Usage)})
 	}
 	for _, choice := range chunk.Choices {
 		events = s.reasoning(events, choice.Delta.Fields)

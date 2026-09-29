@@ -135,6 +135,24 @@ OpenAI Responses sends cached tool results as `input_text` content parts. A
 breakpoint on `ToolResultBlock` marks the last part; breakpoints on individual
 text blocks mark those parts. Unmarked results remain strings.
 
+## Usage
+
+`Usage.InputTokens` counts every prompt token, cache reads and writes
+included. A nil count is one the vendor did not report; `catalog.Pricing.Cost`
+cannot price a cache count it cannot tell apart from input.
+
+| Provider | Cache reads | Cache writes |
+| --- | --- | --- |
+| Anthropic, Bedrock | reported | reported |
+| OpenAI Chat and Responses | `cached_tokens` | `cache_write_tokens` when sent |
+| Gemini | `cachedContentTokenCount` | not reported |
+| DeepSeek, GLM, Qwen | reported | 0: caching carries no write charge; Qwen breakpoints are dropped, leaving implicit caching |
+| other Chat Completions vendors, compat | `cached_tokens` or `prompt_cache_hit_tokens` when sent | `cache_write_tokens` when sent |
+
+DeepSeek, Gemini, GLM and Qwen are checked against their recorded responses in
+`providers/testdata/live`. `LITELLM_LIVE=1 LITELLM_RECORD=1 go test ./providers
+-run TestLive` calls the vendors whose key is set and records them again.
+
 ## OpenAI Response Metadata
 
 Chat Completions preserves message annotations and choice logprobs on the first

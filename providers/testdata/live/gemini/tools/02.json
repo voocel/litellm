@@ -1,0 +1,35 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "The weather in Paris right"
+          },
+          {
+            "text": " now is sunny with a temperature of 22°C.",
+            "thoughtSignature": "EsMBCsABAWkUfRNwgHP5jzxK41jkJ09AEXFD3NsNqhtwuLQuvK35/RimEfJl2Cs3DENnnzcMxy0wA8M9fHjLmPZz7HKRGdYOzbIYuq77ZD1wC6UjKcU9Az+ggkyny/8zMoc7TD4Of6Yp3zs7869wqWzAT0ATB3iNE3h3tZKTIaTj4glwBLkIuRczyZdrDEDgiwAgsZrvCdGtkXltk7OBgLypa+SxDgXFqc6Y6UOkRLCsp/KNqGBlhip56vNZ7SeMUi3FGqv1"
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 128,
+    "candidatesTokenCount": 18,
+    "totalTokenCount": 168,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 128
+      }
+    ],
+    "thoughtsTokenCount": 22,
+    "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.7-flash",
+  "responseId": "daO7asmCKMHTjMcP0o6ImAk"
+}

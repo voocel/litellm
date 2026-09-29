@@ -39,5 +39,7 @@ func New(cfg Config) (*Provider, error) {
 		},
 		ReasoningFields: []string{"reasoning_content"},
 		SchemaFallback:  litellm.ResponseFormatJSONObject,
+		// Cached prompt tokens bill at a discount; caching itself is free.
+		CacheWritesUnbilled: true,
 	})
 }

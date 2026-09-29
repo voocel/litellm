@@ -69,6 +69,10 @@ type Spec struct {
 	SchemaFallback litellm.ResponseFormatType
 	// OmitStreamOptions leaves stream_options out of stream requests.
 	OmitStreamOptions bool
+	// CacheWritesUnbilled reports that the vendor caches prompts without a
+	// cache write charge: uncached prompt tokens bill as input, so reported
+	// usage has no cache writes.
+	CacheWritesUnbilled bool
 }
 
 func (s Spec) maxTokensField() string {
