@@ -3,13 +3,14 @@ package openai
 import "slices"
 
 // ProviderOptions are native request fields of the selected API, copied into
-// the body as is. An option naming a generated object or array (such as
-// Responses "text", "reasoning" or "tools") is merged into or appended to it.
+// the body as is. An option naming a generated object (such as Responses
+// "text" or "reasoning") is merged into it. Responses options whose results
+// litellm does not model, hosted tools and server-side compaction, are not
+// offered; nor is previous_response_id, as a Response carries no id.
 const (
 	ProviderOptionFrequencyPenalty     = "frequency_penalty"
 	ProviderOptionPresencePenalty      = "presence_penalty"
 	ProviderOptionLogitBias            = "logit_bias"
-	ProviderOptionN                    = "n"
 	ProviderOptionLogprobs             = "logprobs"
 	ProviderOptionTopLogprobs          = "top_logprobs"
 	ProviderOptionStore                = "store"
@@ -20,8 +21,6 @@ const (
 	ProviderOptionPromptCacheRetention = "prompt_cache_retention"
 	ProviderOptionPrediction           = "prediction"
 	ProviderOptionMetadata             = "metadata"
-	ProviderOptionModalities           = "modalities"
-	ProviderOptionAudio                = "audio"
 	ProviderOptionServiceTier          = "service_tier"
 	ProviderOptionSafetyIdentifier     = "safety_identifier"
 	ProviderOptionUser                 = "user"
@@ -33,33 +32,27 @@ const (
 
 // Responses API options (Config.API = APIResponses) not listed above.
 const (
-	ProviderOptionPreviousResponseID = "previous_response_id"
-	ProviderOptionConversation       = "conversation"
-	ProviderOptionInclude            = "include"
-	ProviderOptionTruncation         = "truncation"
-	ProviderOptionMaxToolCalls       = "max_tool_calls"
+	ProviderOptionConversation = "conversation"
+	ProviderOptionInclude      = "include"
+	ProviderOptionTruncation   = "truncation"
 	// ProviderOptionBackground is supported by Stream only; Chat has no job
 	// polling interface and rejects background=true.
-	ProviderOptionBackground        = "background"
-	ProviderOptionContextManagement = "context_management"
-	ProviderOptionPrompt            = "prompt"
+	ProviderOptionBackground = "background"
+	ProviderOptionPrompt     = "prompt"
 	// ProviderOptionText is merged into the generated text object, e.g.
 	// {"verbosity": "low"}.
 	ProviderOptionText = "text"
 	// ProviderOptionReasoning is merged into the generated reasoning object,
 	// e.g. {"summary": "auto"}.
 	ProviderOptionReasoning = "reasoning"
-	// ProviderOptionTools is appended to the generated tools, e.g. hosted
-	// tools such as [{"type": "web_search"}].
-	ProviderOptionTools = "tools"
 )
 
 var chatOptions = []string{
 	ProviderOptionFrequencyPenalty, ProviderOptionPresencePenalty, ProviderOptionLogitBias,
-	ProviderOptionN, ProviderOptionLogprobs, ProviderOptionTopLogprobs, ProviderOptionStore,
+	ProviderOptionLogprobs, ProviderOptionTopLogprobs, ProviderOptionStore,
 	ProviderOptionModeration, ProviderOptionStreamOptions, ProviderOptionPromptCacheKey,
 	ProviderOptionPromptCacheOptions, ProviderOptionPromptCacheRetention, ProviderOptionPrediction,
-	ProviderOptionMetadata, ProviderOptionModalities, ProviderOptionAudio, ProviderOptionServiceTier,
+	ProviderOptionMetadata, ProviderOptionServiceTier,
 	ProviderOptionSafetyIdentifier, ProviderOptionUser, ProviderOptionVerbosity,
 	ProviderOptionWebSearchOptions, ProviderOptionParallelToolCalls, ProviderOptionSeed,
 }
@@ -68,10 +61,9 @@ var responsesOptions = []string{
 	ProviderOptionStore, ProviderOptionStreamOptions, ProviderOptionPromptCacheKey,
 	ProviderOptionPromptCacheOptions, ProviderOptionPromptCacheRetention, ProviderOptionMetadata,
 	ProviderOptionServiceTier, ProviderOptionSafetyIdentifier, ProviderOptionParallelToolCalls,
-	ProviderOptionTopLogprobs, ProviderOptionPreviousResponseID, ProviderOptionConversation,
-	ProviderOptionInclude, ProviderOptionTruncation, ProviderOptionMaxToolCalls,
-	ProviderOptionBackground, ProviderOptionContextManagement, ProviderOptionPrompt,
-	ProviderOptionText, ProviderOptionReasoning, ProviderOptionTools,
+	ProviderOptionTopLogprobs, ProviderOptionConversation, ProviderOptionInclude,
+	ProviderOptionTruncation, ProviderOptionBackground, ProviderOptionPrompt,
+	ProviderOptionText, ProviderOptionReasoning,
 }
 
 func sortedCopy(keys []string) []string {

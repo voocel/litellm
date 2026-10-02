@@ -22,10 +22,10 @@ func TestPricingCost(t *testing.T) {
 		CacheWriteCostPerToken: new(0.0015),
 	}
 	cost, err := price.Cost(litellm.Usage{
-		InputTokens:      new(100),
-		OutputTokens:     new(20),
-		CacheReadTokens:  new(40),
-		CacheWriteTokens: new(10),
+		InputTokens:      100,
+		OutputTokens:     20,
+		CacheReadTokens:  40,
+		CacheWriteTokens: 10,
 	})
 	if err != nil {
 		t.Fatalf("Cost: %v", err)
@@ -247,24 +247,26 @@ func TestReasoningOwnership(t *testing.T) {
 	}
 }
 
-func TestCostUnknownAndInvalidUsage(t *testing.T) {
+func TestCostUnreportedCacheAndInvalidUsage(t *testing.T) {
 	price := Pricing{InputCostPerToken: 1, OutputCostPerToken: 2, CacheReadCostPerToken: new(0.5)}
 	for _, usage := range []litellm.Usage{
-		{},
-		{InputTokens: new(10), OutputTokens: new(1)},
-		{InputTokens: new(10), OutputTokens: new(1), CacheReadTokens: new(8), CacheWriteTokens: new(3)},
-		{InputTokens: new(-1), OutputTokens: new(1), CacheReadTokens: new(0)},
+		{InputTokens: 10, OutputTokens: 1, CacheReadTokens: 8, CacheWriteTokens: 3},
+		{InputTokens: -1, OutputTokens: 1},
 	} {
 		if _, err := price.Cost(usage); err == nil {
 			t.Fatalf("expected error for %+v", usage)
 		}
 	}
-	zero := litellm.Usage{InputTokens: new(0), OutputTokens: new(0), CacheReadTokens: new(0)}
-	if cost, err := price.Cost(zero); err != nil || cost.Total != 0 {
-		t.Fatalf("known zero: %+v %v", cost, err)
+	if cost, err := price.Cost(litellm.Usage{}); err != nil || cost.Total != 0 {
+		t.Fatalf("zero usage: %+v %v", cost, err)
+	}
+	// A vendor that reports no cache counts, such as MiniMax, is priced as
+	// uncached input.
+	if cost, err := price.Cost(litellm.Usage{InputTokens: 10, OutputTokens: 1}); err != nil || cost.Total != 12 {
+		t.Fatalf("unreported cache: %+v %v", cost, err)
 	}
 	price = Pricing{InputCostPerToken: 1, OutputCostPerToken: 2}
-	if cost, err := price.Cost(litellm.Usage{InputTokens: new(10), OutputTokens: new(2)}); err != nil || cost.Total != 14 {
+	if cost, err := price.Cost(litellm.Usage{InputTokens: 10, OutputTokens: 2}); err != nil || cost.Total != 14 {
 		t.Fatalf("equal cache rates: %+v %v", cost, err)
 	}
 }
@@ -282,7 +284,7 @@ func TestFreeCacheRatesAndOwnership(t *testing.T) {
 		t.Fatalf("model = %+v", got)
 	}
 	*got.Pricing.CacheReadCostPerToken = 100
-	usage := litellm.Usage{InputTokens: new(10), OutputTokens: new(2), CacheReadTokens: new(6), CacheWriteTokens: new(4)}
+	usage := litellm.Usage{InputTokens: 10, OutputTokens: 2, CacheReadTokens: 6, CacheWriteTokens: 4}
 	stored, _ := c.Get("free-cache")
 	if cost, err := stored.Pricing.Cost(usage); err != nil || cost.Total != 4 || cost.CacheRead != 0 || cost.CacheWrite != 0 {
 		t.Fatalf("free cache cost = %+v, %v", cost, err)

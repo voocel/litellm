@@ -1,7 +1,9 @@
 package openaicompat_test
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -33,7 +35,7 @@ func TestStreamFixtureEvents(t *testing.T) {
 		litellm.BlockEnd{Index: 0},
 		litellm.BlockEnd{Index: 1},
 		litellm.BlockEnd{Index: 2, Block: litellm.ToolUseBlock{ID: "call_1", Name: "lookup"}},
-		litellm.UsageEvent{Usage: litellm.Usage{InputTokens: new(1), OutputTokens: new(2), TotalTokens: new(3)}},
+		litellm.UsageEvent{Usage: litellm.Usage{InputTokens: 1, OutputTokens: 2}},
 		litellm.DoneEvent{FinishReason: litellm.FinishReasonToolCall, FinishReasonRaw: "tool_calls", Provider: "test", Model: "m"},
 	}
 	if !reflect.DeepEqual(events, want) {
@@ -126,24 +128,48 @@ func TestStreamEvents(t *testing.T) {
 
 func TestStreamErrors(t *testing.T) {
 	tests := []struct {
-		name  string
-		newFn compattest.NewFunc
-		sse   string
-		is    func(error) bool
-		want  string
+		name      string
+		newFn     compattest.NewFunc
+		sse       string
+		errorType litellm.ErrorType
+		temporary bool
+		want      string
 	}{
-		{name: "EOF before a finish reason", newFn: plain, sse: "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n", is: litellm.IsProviderError, want: "test: stream ended before a finish reason"},
-		{name: "error chunk", newFn: plain, sse: compattest.SSE(`{"error":{"code":"server_error","message":"boom"}}`), is: litellm.IsProviderError, want: "test: server_error: boom"},
-		{name: "error chunk with HTTP status", newFn: plain, sse: compattest.SSE(`{"error":{"code":429,"message":"slow down"}}`), is: litellm.IsRateLimitError},
-		{name: "malformed chunk", newFn: plain, sse: compattest.SSE(`{`), is: litellm.IsProviderError},
+		{name: "error chunk", newFn: plain, sse: compattest.SSE(`{"error":{"code":"server_error","message":"boom"}}`), errorType: litellm.ErrorTypeProvider, temporary: true, want: "test: server_error: boom"},
+		{name: "error chunk with HTTP status", newFn: plain, sse: compattest.SSE(`{"error":{"code":429,"message":"slow down"}}`), errorType: litellm.ErrorTypeRateLimit, temporary: true},
+		{name: "malformed chunk", newFn: plain, sse: compattest.SSE(`{`), errorType: litellm.ErrorTypeProvider},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := compattest.Events(t, tt.newFn, tt.sse)
-			if err == nil || !tt.is(err) || (tt.want != "" && err.Error() != tt.want) {
+			if litellm.ErrorTypeOf(err) != tt.errorType || litellm.IsTemporaryError(err) != tt.temporary || (tt.want != "" && err.Error() != tt.want) {
 				t.Fatalf("err = %v", err)
 			}
 		})
+	}
+}
+
+// TestStreamTruncationIsRetryable checks that a stream cut off before a
+// finish reason ends in io.EOF, which the Client reports as a temporary
+// network error.
+func TestStreamTruncationIsRetryable(t *testing.T) {
+	sse := "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n"
+	if _, err := compattest.Stream(t, plain, sse).Next(); err != nil {
+		t.Fatal(err)
+	}
+	p := compattest.Provider(t, plain, compattest.Doer(func(*http.Request) (*http.Response, error) { return compattest.Response(sse), nil }))
+	client, err := litellm.New(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := client.Stream(context.Background(), *compattest.Request())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	resp, err := litellm.Collect(stream)
+	if litellm.ErrorTypeOf(err) != litellm.ErrorTypeNetwork || !litellm.IsTemporaryError(err) || resp.Text() != "a" {
+		t.Fatalf("resp = %#v, err = %v", resp, err)
 	}
 }
 

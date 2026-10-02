@@ -56,7 +56,7 @@ func TestSemanticConventionMessageEncoding(t *testing.T) {
 		),
 		litellm.Assistant(
 			litellm.ReasoningBlock{Text: "check weather"},
-			litellm.ToolUseBlock{ID: "call_1", Name: "weather", Arguments: json.RawMessage(`{"city":"Paris"}`)},
+			litellm.ToolUseBlock{ID: "call_1", Name: "weather", Arguments: `{"city":"Paris"}`},
 		),
 		litellm.ToolResultText("call_1", "sunny"),
 	}
@@ -73,7 +73,7 @@ func TestSemanticConventionMessageEncoding(t *testing.T) {
 	]`)
 
 	got, err = marshalOutputMessages([]litellm.Block{
-		litellm.ToolUseBlock{ID: "call_2", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
+		litellm.ToolUseBlock{ID: "call_2", Name: "lookup", Arguments: `{"q":"x"}`},
 	}, litellm.FinishReasonToolCall)
 	if err != nil {
 		t.Fatalf("marshalOutputMessages returned error: %v", err)
@@ -149,7 +149,7 @@ func TestObserverContextPropagationAndContent(t *testing.T) {
 				_, child := observer.tracer.Start(ctx, "http")
 				child.End()
 			}
-			usage := litellm.Usage{InputTokens: new(10), OutputTokens: new(5), ReasoningTokens: new(2), CacheReadTokens: new(3), CacheWriteTokens: new(4)}
+			usage := litellm.Usage{InputTokens: 10, OutputTokens: 5, ReasoningTokens: 2, CacheReadTokens: 3, CacheWriteTokens: 4}
 			provider := testProvider{
 				chat: func(ctx context.Context, _ *litellm.Request) (*litellm.Response, error) {
 					checkContext(ctx)
@@ -307,22 +307,22 @@ func TestObserverPanicIsolation(t *testing.T) {
 	}
 }
 
-func TestUsageUnknownIsOmittedAndZeroIsRecorded(t *testing.T) {
+// Unreported counts are zero, so zero counts are omitted.
+func TestZeroUsageIsOmitted(t *testing.T) {
 	observer, rec := newTestObserver(t)
 	_, call := observer.Start(context.Background(), litellm.CallInfo{Provider: "test", Request: &litellm.Request{Model: "m"}})
-	call.End(litellm.CallResult{Status: litellm.CallCompleted, Response: &litellm.Response{Model: "m", Usage: litellm.Usage{InputTokens: new(0)}}})
+	call.End(litellm.CallResult{Status: litellm.CallCompleted, Response: &litellm.Response{Model: "m", Usage: litellm.Usage{InputTokens: 7}}})
 	spans := rec.Ended()
 	if len(spans) != 1 {
 		t.Fatalf("spans = %d", len(spans))
 	}
 	attrs := attrMap(spans[0].Attributes())
-	if value, ok := attrs[attrInputTokens]; !ok || value.AsInt64() != 0 {
-		t.Fatal("known zero was omitted")
+	if value, ok := attrs[attrInputTokens]; !ok || value.AsInt64() != 7 {
+		t.Fatal("input tokens were not recorded")
 	}
-	if _, ok := attrs[attrOutputTokens]; ok {
-		t.Fatal("unknown output recorded as zero")
-	}
-	if _, ok := attrs[attrCacheReadTokens]; ok {
-		t.Fatal("unknown cache recorded as zero")
+	for _, key := range []string{attrOutputTokens, attrCacheReadTokens} {
+		if _, ok := attrs[key]; ok {
+			t.Fatalf("zero %s recorded", key)
+		}
 	}
 }

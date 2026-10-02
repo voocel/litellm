@@ -18,12 +18,11 @@ const (
 	ProviderOptionPresencePenalty  = "presence_penalty"
 	ProviderOptionLogprobs         = "logprobs"
 	ProviderOptionTopLogprobs      = "top_logprobs"
-	ProviderOptionN                = "n"
 	ProviderOptionUser             = "user"
 )
 
 // New sends Thinking.Effort as reasoning_effort. xAI reasoning models cannot
-// disable thinking, so ThinkingDisabled is rejected.
+// disable thinking, so Thinking.Disabled is rejected.
 func New(cfg Config) (*Provider, error) {
 	return openaicompat.New(cfg, openaicompat.Spec{
 		Name:             "grok",
@@ -32,7 +31,7 @@ func New(cfg Config) (*Provider, error) {
 		ThinkingAlwaysOn: true,
 		Options: []string{
 			ProviderOptionFrequencyPenalty, ProviderOptionPresencePenalty, ProviderOptionLogprobs,
-			ProviderOptionTopLogprobs, ProviderOptionN, ProviderOptionUser,
+			ProviderOptionTopLogprobs, ProviderOptionUser,
 		},
 		ReasoningFields: []string{"reasoning_content"},
 	})

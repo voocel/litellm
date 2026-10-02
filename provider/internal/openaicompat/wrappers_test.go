@@ -28,58 +28,57 @@ var wrappers = []struct {
 	caps    litellm.Capabilities
 	request func(*litellm.Request)
 }{
-	{name: "compat", newFn: compat.New, caps: litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true}},
+	{name: "compat", newFn: compat.New, caps: litellm.Capabilities{ThinkingEffort: true, DisableThinking: true}},
 	{
 		name: "deepseek", newFn: deepseek.New,
-		caps: litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true, ProviderOptions: []string{"frequency_penalty", "logprobs", "presence_penalty", "top_logprobs", "user_id"}},
+		caps: litellm.Capabilities{ThinkingEffort: true, DisableThinking: true, ProviderOptions: []string{"frequency_penalty", "logprobs", "presence_penalty", "top_logprobs", "user_id"}},
 		request: func(r *litellm.Request) {
 			r.Model, r.Thinking = "deepseek-flash", &litellm.Thinking{Effort: "max"}
-			r.Tools = []litellm.Tool{{Name: "lookup", Description: "Lookup.", Strict: litellm.StrictEnabled}}
+			r.Tools = []litellm.Tool{{Name: "lookup", Description: "Lookup.", Strict: new(true)}}
 		},
 	},
 	{
 		name: "glm", newFn: glm.New,
-		caps:    litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true, ProviderOptions: []string{"do_sample", "request_id", "thinking", "tool_stream", "user_id"}},
+		caps:    litellm.Capabilities{ThinkingEffort: true, DisableThinking: true, ProviderOptions: []string{"do_sample", "request_id", "thinking", "tool_stream", "user_id"}},
 		request: func(r *litellm.Request) { r.Model, r.Thinking = "glm-5.2", &litellm.Thinking{Effort: "max"} },
 	},
 	{
 		name: "grok", newFn: grok.New,
-		caps:    litellm.Capabilities{Thinking: true, ThinkingEffort: true, ProviderOptions: []string{"frequency_penalty", "logprobs", "n", "presence_penalty", "top_logprobs", "user"}},
+		caps:    litellm.Capabilities{ThinkingEffort: true, ProviderOptions: []string{"frequency_penalty", "logprobs", "presence_penalty", "top_logprobs", "user"}},
 		request: func(r *litellm.Request) { r.Model, r.Thinking = "grok-4.3", &litellm.Thinking{Effort: "high"} },
 	},
 	{
 		name: "mimo", newFn: mimo.New,
-		caps: litellm.Capabilities{Thinking: true, DisableThinking: true, ProviderOptions: []string{"audio", "frequency_penalty", "presence_penalty"}},
+		caps: litellm.Capabilities{DisableThinking: true, ProviderOptions: []string{"frequency_penalty", "presence_penalty"}},
 		request: func(r *litellm.Request) {
-			r.Model, r.MaxTokens, r.Thinking = "mimo-v2.5-pro", new(2048), &litellm.Thinking{Mode: litellm.ThinkingDisabled}
+			r.Model, r.MaxTokens, r.Thinking = "mimo-v2.5-pro", new(2048), &litellm.Thinking{Disabled: true}
 		},
 	},
 	{
 		name: "minimax", newFn: minimax.New,
-		caps: litellm.Capabilities{Thinking: true, DisableThinking: true, ProviderOptions: []string{"service_tier"}},
+		caps: litellm.Capabilities{DisableThinking: true, ProviderOptions: []string{"service_tier"}},
 		request: func(r *litellm.Request) {
 			r.Model, r.MaxTokens, r.Thinking = "MiniMax-M3", new(128), &litellm.Thinking{}
 		},
 	},
 	{
 		name: "ollama", newFn: ollama.New,
-		caps:    litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true, ProviderOptions: []string{"frequency_penalty", "logit_bias", "n", "presence_penalty", "seed", "user"}},
+		caps:    litellm.Capabilities{ThinkingEffort: true, DisableThinking: true, ProviderOptions: []string{"frequency_penalty", "logit_bias", "presence_penalty", "seed", "user"}},
 		request: func(r *litellm.Request) { r.Model, r.Thinking = "qwen3", &litellm.Thinking{Effort: "high"} },
 	},
 	{
 		name: "openrouter", newFn: openrouter.New,
-		caps: litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true, ThinkingBudget: true, ProviderOptions: []string{"cache_control", "provider", "session_id"}},
+		caps: litellm.Capabilities{ThinkingEffort: true, DisableThinking: true, ProviderOptions: []string{"cache_control", "provider", "session_id"}},
 		request: func(r *litellm.Request) {
-			hour := &litellm.CacheControl{TTL: litellm.CacheTTL1h}
 			r.Model, r.Thinking = "anthropic/claude-sonnet-4", &litellm.Thinking{Effort: "high"}
-			r.Messages = []litellm.Message{litellm.User(litellm.TextBlock{Text: "hi", Cache: hour})}
-			r.ProviderOptions = map[string]json.RawMessage{"cache_control": json.RawMessage(`{"type":"ephemeral","ttl":"1h"}`)}
+			r.Messages = []litellm.Message{litellm.User(litellm.TextBlock{Text: "hi", Cache: &litellm.CacheControl{}})}
+			r.ProviderOptions = map[string]json.RawMessage{"cache_control": json.RawMessage(`{"type":"ephemeral"}`)}
 		},
 	},
 	{
 		name: "qwen", newFn: qwen.New,
-		caps: litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingBudget: true, ProviderOptions: []string{
-			"audio", "enable_code_interpreter", "enable_search", "logprobs", "modalities", "n", "parallel_tool_calls", "presence_penalty",
+		caps: litellm.Capabilities{DisableThinking: true, ProviderOptions: []string{
+			"enable_search", "logprobs", "parallel_tool_calls", "presence_penalty",
 			"preserve_thinking", "repetition_penalty", "search_options", "seed", "skill", "tool_stream", "top_k", "top_logprobs", "vl_high_resolution_images",
 		}},
 		request: func(r *litellm.Request) {
@@ -123,7 +122,7 @@ func TestWrapperThinking(t *testing.T) {
 	enabled := &litellm.Thinking{}
 	high := &litellm.Thinking{Effort: "high"}
 	budget := &litellm.Thinking{BudgetTokens: new(1024)}
-	disabled := &litellm.Thinking{Mode: litellm.ThinkingDisabled}
+	disabled := &litellm.Thinking{Disabled: true}
 	tests := []struct {
 		name     string
 		newFn    compattest.NewFunc
@@ -151,7 +150,7 @@ func TestWrapperThinking(t *testing.T) {
 			req := compattest.Request()
 			req.Thinking = tt.thinking
 			if !strings.HasPrefix(tt.want, "{") {
-				if err := compattest.Err(t, tt.newFn, req); !litellm.IsValidationError(err) || !strings.Contains(err.Error(), tt.want) {
+				if err := compattest.Err(t, tt.newFn, req); litellm.ErrorTypeOf(err) != litellm.ErrorTypeValidation || !strings.Contains(err.Error(), tt.want) {
 					t.Fatalf("err = %v, want %q", err, tt.want)
 				}
 				return
@@ -162,7 +161,7 @@ func TestWrapperThinking(t *testing.T) {
 }
 
 func TestWrapperDialects(t *testing.T) {
-	call := litellm.Assistant(litellm.ToolUseBlock{ID: "call_1", Name: "f", Arguments: json.RawMessage(`{}`)})
+	call := litellm.Assistant(litellm.ToolUseBlock{ID: "call_1", Name: "f", Arguments: `{}`})
 	t.Run("compat passes unknown options and needs no key", func(t *testing.T) {
 		req := compattest.Request()
 		req.ProviderOptions = compattest.Options(t, map[string]any{"min_p": 0.05})

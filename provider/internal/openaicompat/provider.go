@@ -40,27 +40,30 @@ func New(cfg Config, spec Spec) (*Provider, error) {
 	return &Provider{cfg: cfg, spec: spec}, nil
 }
 
-// Name returns the spec name.
+// Name returns Config.Name, or else the spec name.
 func (p *Provider) Name() string {
+	if p.cfg.Name != "" {
+		return p.cfg.Name
+	}
 	return p.spec.Name
 }
 
-// Capabilities probes the thinking mapping, which is the single source of
-// truth for what the dialect can express.
+// Capabilities lists the accepted provider options and the thinking settings
+// the dialect's mapping takes.
 func (p *Provider) Capabilities() litellm.Capabilities {
-	accepts := func(t litellm.Thinking) bool {
-		_, err := p.convertThinking(&t)
-		return err == nil
-	}
 	options := slices.Clone(p.spec.Options)
 	slices.Sort(options)
 	return litellm.Capabilities{
-		Thinking:        true,
-		DisableThinking: accepts(litellm.Thinking{Mode: litellm.ThinkingDisabled}),
-		ThinkingEffort:  accepts(litellm.Thinking{Effort: "high"}),
-		ThinkingBudget:  accepts(litellm.Thinking{BudgetTokens: new(1024)}),
+		ThinkingEffort:  p.takes(litellm.Thinking{Effort: "high"}),
+		DisableThinking: p.takes(litellm.Thinking{Disabled: true}),
 		ProviderOptions: options,
 	}
+}
+
+// takes reports whether the thinking mapping accepts thinking.
+func (p *Provider) takes(thinking litellm.Thinking) bool {
+	_, err := p.convertThinking(&thinking)
+	return err == nil
 }
 
 // Chat sends a non-streaming Chat Completions request.
@@ -106,47 +109,11 @@ func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.St
 	if err != nil {
 		return nil, err
 	}
-	s := newStream(resp, req, p.spec)
+	s := newStream(resp, req, p.Name(), p.spec)
 	if p.spec.usesSchemaPrompt(req.ResponseFormat) {
 		s.pending = append(s.pending, litellm.WarningEvent{Warning: p.spec.schemaWarning()})
 	}
 	return s, nil
-}
-
-// ListModels calls GET /models.
-func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.url("/models"), nil)
-	if err != nil {
-		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeInternal, "create models request", err)
-	}
-	if err := p.setHeaders(ctx, httpReq, false); err != nil {
-		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
-	}
-	resp, err := wire.Do(p.cfg.HTTPClient, httpReq, p.Name(), "models request")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	var payload modelList
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeProvider, "decode models response", err)
-	}
-	models := make([]litellm.ModelInfo, 0, len(payload.Data))
-	for _, item := range payload.Data {
-		name := item.Name
-		if name == "" {
-			name = item.ID
-		}
-		models = append(models, litellm.ModelInfo{
-			ID:            item.ID,
-			Name:          name,
-			Provider:      p.Name(),
-			Description:   item.Description,
-			Created:       item.Created,
-			ContextLength: item.ContextLength,
-		})
-	}
-	return models, nil
 }
 
 func (p *Provider) post(ctx context.Context, body []byte, stream bool) (*http.Response, error) {

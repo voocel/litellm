@@ -25,6 +25,8 @@ const (
 	ErrorTypeContextOverflow ErrorType = "context_overflow"
 	ErrorTypeOverloaded      ErrorType = "overloaded"
 	ErrorTypeContentFilter   ErrorType = "content_filter"
+	// ErrorTypeCanceled is a call the caller's context cancelled.
+	ErrorTypeCanceled ErrorType = "canceled"
 )
 
 // Error is the error type returned by the client and all providers.
@@ -42,21 +44,30 @@ type Error struct {
 	Cause      error
 }
 
-// Error renders "provider: code: message". Messages carry no provider prefix.
+// Error renders "provider: code: message (HTTP status)". Messages carry no
+// provider prefix. The status tells a caller what a vague vendor message,
+// such as "Provider returned error", does not.
 func (e *Error) Error() string {
 	msg := strings.TrimSpace(e.Message)
+	status := ""
+	if e.StatusCode != 0 {
+		status = fmt.Sprintf("HTTP %d", e.StatusCode)
+	}
 	switch {
 	case e.Code != "" && msg != "":
 		msg = e.Code + ": " + msg
 	case msg == "" && e.Code != "":
 		msg = e.Code
-	case msg == "" && e.StatusCode != 0:
-		msg = fmt.Sprintf("HTTP %d", e.StatusCode)
+	case msg == "" && status != "":
+		msg = status
 		if e.Type != "" {
 			msg += " (" + string(e.Type) + ")"
 		}
 	case msg == "":
 		msg = cmp.Or(string(e.Type), "litellm error")
+	}
+	if status != "" && !strings.Contains(msg, status) {
+		msg += " (" + status + ")"
 	}
 	if shouldShowCause(e) {
 		if cause := strings.TrimSpace(e.Cause.Error()); cause != "" && !strings.Contains(msg, cause) {
@@ -87,12 +98,12 @@ func NewError(provider string, errorType ErrorType, message string, cause error)
 	return &Error{Type: errorType, Provider: provider, Message: message, Cause: cause, Temporary: isTemporaryByType(errorType)}
 }
 
-// NewNetworkError builds a transport error. Context cancellation is a
-// non-temporary network error and a deadline a timeout; other causes are
-// temporary.
+// NewNetworkError builds a transport error. Context cancellation is
+// ErrorTypeCanceled and a deadline a timeout, neither temporary; other causes
+// are temporary.
 func NewNetworkError(provider, message string, cause error) *Error {
 	if errors.Is(cause, context.Canceled) {
-		return &Error{Type: ErrorTypeNetwork, Provider: provider, Message: message, Cause: cause, Temporary: false}
+		return &Error{Type: ErrorTypeCanceled, Provider: provider, Message: message, Cause: cause, Temporary: false}
 	}
 	if errors.Is(cause, context.DeadlineExceeded) {
 		return &Error{Type: ErrorTypeTimeout, Provider: provider, Message: message, Cause: cause, Temporary: false}
@@ -100,41 +111,15 @@ func NewNetworkError(provider, message string, cause error) *Error {
 	return &Error{Type: ErrorTypeNetwork, Provider: provider, Message: message, Cause: cause, Temporary: true}
 }
 
-// IsAuthError reports whether err wraps an *Error of type ErrorTypeAuth.
-func IsAuthError(err error) bool { return isErrorType(err, ErrorTypeAuth) }
-
-// IsRateLimitError reports whether err wraps an *Error of type ErrorTypeRateLimit.
-func IsRateLimitError(err error) bool { return isErrorType(err, ErrorTypeRateLimit) }
-
-// IsNetworkError reports whether err wraps an *Error of type ErrorTypeNetwork.
-func IsNetworkError(err error) bool { return isErrorType(err, ErrorTypeNetwork) }
-
-// IsValidationError reports whether err wraps an *Error of type ErrorTypeValidation.
-func IsValidationError(err error) bool { return isErrorType(err, ErrorTypeValidation) }
-
-// IsProviderError reports whether err wraps an *Error of type ErrorTypeProvider.
-func IsProviderError(err error) bool { return isErrorType(err, ErrorTypeProvider) }
-
-// IsTimeoutError reports whether err wraps an *Error of type ErrorTypeTimeout.
-func IsTimeoutError(err error) bool { return isErrorType(err, ErrorTypeTimeout) }
-
-// IsModelError reports whether err wraps an *Error of type ErrorTypeModel.
-func IsModelError(err error) bool { return isErrorType(err, ErrorTypeModel) }
-
-// IsContextOverflowError reports whether err wraps an *Error of type ErrorTypeContextOverflow.
-func IsContextOverflowError(err error) bool { return isErrorType(err, ErrorTypeContextOverflow) }
-
-// IsOverloadedError reports whether err wraps an *Error of type ErrorTypeOverloaded.
-func IsOverloadedError(err error) bool { return isErrorType(err, ErrorTypeOverloaded) }
-
-// IsContentFilterError reports whether err wraps an *Error of type ErrorTypeContentFilter.
-func IsContentFilterError(err error) bool { return isErrorType(err, ErrorTypeContentFilter) }
-
-// IsQuotaError reports whether err wraps an *Error of type ErrorTypeQuota.
-func IsQuotaError(err error) bool { return isErrorType(err, ErrorTypeQuota) }
-
-// IsInternalError reports whether err wraps an *Error of type ErrorTypeInternal.
-func IsInternalError(err error) bool { return isErrorType(err, ErrorTypeInternal) }
+// ErrorTypeOf returns the type of the *Error err wraps, or "" when it wraps
+// none.
+func ErrorTypeOf(err error) ErrorType {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Type
+	}
+	return ""
+}
 
 // IsTemporaryError reports whether the failure may resolve over time. It does
 // not establish that repeating the operation is safe, even before any output.
@@ -154,7 +139,7 @@ func RetryAfter(err error) time.Duration {
 
 // WrapError attributes err to provider. Existing *Error values keep their type
 // and gain the provider when unset; context cancellation and deadlines become
-// network and timeout errors; anything else becomes a fallback-typed error.
+// canceled and timeout errors; anything else becomes a fallback-typed error.
 func WrapError(provider string, fallback ErrorType, err error) error {
 	if err == nil {
 		return nil
@@ -182,11 +167,6 @@ func WrapError(provider string, fallback ErrorType, err error) error {
 
 func isContextError(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
-}
-
-func isErrorType(err error, errorType ErrorType) bool {
-	var e *Error
-	return errors.As(err, &e) && e.Type == errorType
 }
 
 func isTemporaryByType(errorType ErrorType) bool {

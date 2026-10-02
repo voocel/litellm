@@ -40,7 +40,7 @@ func sortedOptions() []string {
 // buildRequest maps Thinking in Anthropic's format through
 // additionalModelRequestFields; other model families set their own fields
 // with that option.
-func buildRequest(req *litellm.Request) ([]byte, error) {
+func buildRequest(req *litellm.Request, provider string) ([]byte, error) {
 	opts, err := req.ProviderOptions.Decode()
 	if err != nil {
 		return nil, err
@@ -49,7 +49,7 @@ func buildRequest(req *litellm.Request) ([]byte, error) {
 		return nil, err
 	}
 	out := &request{InferenceConfig: convertInference(req)}
-	if err := convertMessages(out, req.Messages); err != nil {
+	if err := convertMessages(out, req.Messages, provider); err != nil {
 		return nil, err
 	}
 	if thinking := claude.Thinking(req.Thinking); thinking != nil {
@@ -85,9 +85,7 @@ func convertToolConfig(req *litellm.Request) (*toolConfig, error) {
 		if len(t.Parameters) > 0 {
 			spec.InputSchema.JSON = json.RawMessage(t.Parameters)
 		}
-		if strict, ok := t.Strict.Value(); ok {
-			spec.Strict = &strict
-		}
+		spec.Strict = t.Strict
 		out.Tools = append(out.Tools, tool{ToolSpec: spec})
 	}
 	switch {
@@ -114,7 +112,7 @@ func hasToolBlocks(messages []litellm.Message) bool {
 	return false
 }
 
-func convertMessages(out *request, messages []litellm.Message) error {
+func convertMessages(out *request, messages []litellm.Message, provider string) error {
 	for i, msg := range messages {
 		if msg.Role == litellm.RoleSystem {
 			for _, block := range msg.Blocks {
@@ -124,12 +122,12 @@ func convertMessages(out *request, messages []litellm.Message) error {
 				}
 				out.System = append(out.System, content{Text: text.Text})
 				if text.Cache != nil {
-					out.System = append(out.System, content{CachePoint: convertCache(text.Cache)})
+					out.System = append(out.System, content{CachePoint: defaultCachePoint})
 				}
 			}
 			continue
 		}
-		blocks, err := convertBlocks(msg.Blocks)
+		blocks, err := convertBlocks(msg.Blocks, provider)
 		if err != nil {
 			return fmt.Errorf("messages[%d]: %w", i, err)
 		}
@@ -152,7 +150,7 @@ func convertMessages(out *request, messages []litellm.Message) error {
 
 // convertBlocks maps blocks; a cache breakpoint becomes a cachePoint after
 // its block.
-func convertBlocks(blocks []litellm.Block) ([]content, error) {
+func convertBlocks(blocks []litellm.Block, provider string) ([]content, error) {
 	out := make([]content, 0, len(blocks))
 	for _, block := range blocks {
 		var c content
@@ -171,20 +169,20 @@ func convertBlocks(blocks []litellm.Block) ([]content, error) {
 			c, cache = content{Image: img}, b.Cache
 		case litellm.ReasoningBlock:
 			// Reasoning from elsewhere lacks the signature models require.
-			state, ok := wire.ReadState[reasoningState](b.State, "bedrock")
+			state, ok := wire.ReadState[reasoningState](b.State, provider)
 			if !ok {
 				continue
 			}
-			c, cache = content{ReasoningContent: &reasoningContent{ReasoningText: &reasoningText{Text: b.Text, Signature: state.Signature}}}, b.Cache
+			c = content{ReasoningContent: &reasoningContent{ReasoningText: &reasoningText{Text: b.Text, Signature: state.Signature}}}
 			if len(state.RedactedContent) > 0 {
 				c.ReasoningContent = &reasoningContent{RedactedContent: state.RedactedContent}
 			}
 		case litellm.ToolUseBlock:
 			input := json.RawMessage("{}")
-			if len(b.Arguments) > 0 {
+			if b.Arguments != "" {
 				var object map[string]json.RawMessage
-				if json.Unmarshal(b.Arguments, &object) != nil || object == nil {
-					return nil, fmt.Errorf("tool use %q arguments must be a JSON object", b.ID)
+				if json.Unmarshal([]byte(b.Arguments), &object) != nil || object == nil {
+					return nil, fmt.Errorf("tool use %q (%s) arguments are not a JSON object", b.ID, b.Name)
 				}
 				input = json.RawMessage(b.Arguments)
 			}
@@ -195,11 +193,20 @@ func convertBlocks(blocks []litellm.Block) ([]content, error) {
 				result.Status = "error"
 			}
 			for _, child := range b.Content {
-				text, ok := child.(litellm.TextBlock)
-				if !ok {
-					return nil, fmt.Errorf("tool results only support text content, got %T", child)
+				switch child := child.(type) {
+				case litellm.TextBlock:
+					result.Content = append(result.Content, content{Text: child.Text})
+				case litellm.ImageBlock:
+					img, err := convertImage(child)
+					if err != nil {
+						return nil, err
+					}
+					result.Content = append(result.Content, content{Image: img})
+				case litellm.ToolReferenceBlock:
+					result.Content = append(result.Content, content{Text: wire.ToolReferenceText(child)})
+				default:
+					return nil, fmt.Errorf("unsupported tool result content %T", child)
 				}
-				result.Content = append(result.Content, content{Text: text.Text})
 			}
 			c, cache = content{ToolResult: result}, b.Cache
 		default:
@@ -207,15 +214,13 @@ func convertBlocks(blocks []litellm.Block) ([]content, error) {
 		}
 		out = append(out, c)
 		if cache != nil {
-			out = append(out, content{CachePoint: convertCache(cache)})
+			out = append(out, content{CachePoint: defaultCachePoint})
 		}
 	}
 	return out, nil
 }
 
-func convertCache(cache *litellm.CacheControl) *cachePoint {
-	return &cachePoint{Type: "default", TTL: cache.TTL}
-}
+var defaultCachePoint = &cachePoint{Type: "default"}
 
 // convertImage sends bytes; Converse takes a data URL's payload but not
 // remote URLs.

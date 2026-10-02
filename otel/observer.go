@@ -101,7 +101,7 @@ func stampResponse(span trace.Span, model, finishReason string, usage *litellm.U
 	if usage != nil {
 		for _, count := range []struct {
 			key   string
-			value *int
+			value int
 		}{
 			{attrInputTokens, usage.InputTokens},
 			{attrOutputTokens, usage.OutputTokens},
@@ -109,8 +109,8 @@ func stampResponse(span trace.Span, model, finishReason string, usage *litellm.U
 			{attrCacheWriteTokens, usage.CacheWriteTokens},
 			{attrReasoningTokens, usage.ReasoningTokens},
 		} {
-			if count.value != nil {
-				span.SetAttributes(attribute.Int(count.key, *count.value))
+			if count.value != 0 { // unreported
+				span.SetAttributes(attribute.Int(count.key, count.value))
 			}
 		}
 	}

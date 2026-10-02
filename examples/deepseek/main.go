@@ -67,7 +67,7 @@ func runChat(ctx context.Context, client *litellm.Client) {
 			litellm.UserText("Explain reasoning models in one sentence."),
 		},
 		MaxTokens: new(1024),
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
+		Thinking:  &litellm.Thinking{Effort: "high"},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -86,7 +86,7 @@ func runStream(ctx context.Context, client *litellm.Client) {
 			litellm.UserText("Who are you?"),
 		},
 		MaxTokens: new(1024),
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "high"},
+		Thinking:  &litellm.Thinking{Effort: "high"},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -136,7 +136,7 @@ func runTool(ctx context.Context, client *litellm.Client) {
 	// DeepSeek requires all prior reasoning whenever the request carries tools.
 	messages = append(messages, litellm.Assistant(resp.Blocks...))
 	for _, call := range calls {
-		fmt.Printf("tool call: %s(%s)\n", call.Name, string(call.Arguments))
+		fmt.Printf("tool call: %s(%s)\n", call.Name, call.Arguments)
 		messages = append(messages, litellm.ToolResultText(call.ID, executeTool(call)))
 	}
 
@@ -157,7 +157,7 @@ func executeTool(call litellm.ToolUseBlock) string {
 	var args struct {
 		City string `json:"city"`
 	}
-	_ = json.Unmarshal(call.Arguments, &args)
+	_ = json.Unmarshal([]byte(call.Arguments), &args)
 	city := args.City
 	if city == "" {
 		city = "unknown"

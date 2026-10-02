@@ -15,6 +15,8 @@ type response struct {
 	StopReason string    `json:"stop_reason"`
 }
 
+// usage keeps omitted counts distinct from zero: a stream's message_delta
+// updates only the counts it carries.
 type usage struct {
 	InputTokens              *int `json:"input_tokens"`
 	OutputTokens             *int `json:"output_tokens"`
@@ -22,10 +24,10 @@ type usage struct {
 	CacheReadInputTokens     *int `json:"cache_read_input_tokens"`
 }
 
-func convertResponse(resp *response, model string) *litellm.Response {
+func convertResponse(resp *response, provider, model string) *litellm.Response {
 	out := &litellm.Response{
 		Model:           model,
-		Provider:        "anthropic",
+		Provider:        provider,
 		FinishReason:    wire.FinishReason(resp.StopReason),
 		FinishReasonRaw: resp.StopReason,
 		Usage:           convertUsage(resp.Usage),
@@ -34,10 +36,10 @@ func convertResponse(resp *response, model string) *litellm.Response {
 		out.Model = resp.Model
 	}
 	for _, c := range resp.Content {
-		if block, ok := convertContent(c, model); ok {
+		if block, ok := convertContent(c, provider, model); ok {
 			out.Blocks = append(out.Blocks, block)
 		} else {
-			out.Warnings = append(out.Warnings, unsupportedBlock(c.Type))
+			out.Warnings = append(out.Warnings, unsupportedBlock(provider, c.Type))
 		}
 	}
 	return out
@@ -46,7 +48,7 @@ func convertResponse(resp *response, model string) *litellm.Response {
 // convertContent maps a response content block for the requested model.
 // Blocks litellm does not model, such as server tool calls, are reported by
 // unsupportedBlock.
-func convertContent(c content, model string) (litellm.Block, bool) {
+func convertContent(c content, provider, model string) (litellm.Block, bool) {
 	switch c.Type {
 	case "text":
 		return litellm.TextBlock{Text: c.Text, Annotations: annotations(c.Citations)}, true
@@ -55,9 +57,9 @@ func convertContent(c content, model string) (litellm.Block, bool) {
 		if c.Thinking != nil {
 			text = *c.Thinking
 		}
-		return litellm.ReasoningBlock{Text: text, State: reasoningState(model, c.Type, c.Signature, c.Data)}, true
+		return litellm.ReasoningBlock{Text: text, State: reasoningState(provider, model, c.Type, c.Signature, c.Data)}, true
 	case "tool_use":
-		return litellm.ToolUseBlock{ID: c.ID, Name: c.Name, Arguments: c.Input}, true
+		return litellm.ToolUseBlock{ID: c.ID, Name: c.Name, Arguments: string(c.Input)}, true
 	}
 	return nil, false
 }
@@ -65,11 +67,11 @@ func convertContent(c content, model string) (litellm.Block, bool) {
 // reasoningState returns the State of a thinking block, nil until it has the
 // signature or redacted data that makes it replayable: a stream cut short
 // before the signature leaves thinking that cannot be sent back.
-func reasoningState(model, blockType, signature, data string) *litellm.ProviderState {
+func reasoningState(provider, model, blockType, signature, data string) *litellm.ProviderState {
 	if signature == "" && data == "" {
 		return nil
 	}
-	return wire.NewState("anthropic", model, thinkingState{Type: blockType, Signature: signature, Data: data})
+	return wire.NewState(provider, model, thinkingState{Type: blockType, Signature: signature, Data: data})
 }
 
 // annotations maps citations, keeping each verbatim in Extra.
@@ -90,19 +92,26 @@ func annotations(citations []json.RawMessage) []litellm.Annotation {
 	return out
 }
 
-func unsupportedBlock(blockType string) litellm.Warning {
-	return litellm.Warning{Code: "anthropic.unsupported_block", Provider: "anthropic", Message: fmt.Sprintf("dropped content block %q, which litellm does not model", blockType)}
+func unsupportedBlock(provider, blockType string) litellm.Warning {
+	return litellm.Warning{Code: "anthropic.unsupported_block", Provider: provider, Message: fmt.Sprintf("dropped content block %q, which litellm does not model", blockType)}
 }
 
 // convertUsage reports input as the total: Anthropic counts cache reads and
 // writes separately from uncached input.
 func convertUsage(u usage) litellm.Usage {
-	input := wire.AddTokenDetails(u.InputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens)
+	read, write := count(u.CacheReadInputTokens), count(u.CacheCreationInputTokens)
 	return litellm.Usage{
-		InputTokens:      input,
-		OutputTokens:     u.OutputTokens,
-		TotalTokens:      wire.SumTokens(input, u.OutputTokens),
-		CacheReadTokens:  u.CacheReadInputTokens,
-		CacheWriteTokens: u.CacheCreationInputTokens,
+		InputTokens:      count(u.InputTokens) + read + write,
+		OutputTokens:     count(u.OutputTokens),
+		CacheReadTokens:  read,
+		CacheWriteTokens: write,
 	}
+}
+
+// count reads an omitted count as zero.
+func count(n *int) int {
+	if n == nil {
+		return 0
+	}
+	return *n
 }

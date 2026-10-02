@@ -21,12 +21,8 @@ const (
 	ProviderOptionRepetitionPenalty      = "repetition_penalty"
 	ProviderOptionPresencePenalty        = "presence_penalty"
 	ProviderOptionVLHighResolutionImages = "vl_high_resolution_images"
-	ProviderOptionN                      = "n"
-	ProviderOptionModalities             = "modalities"
-	ProviderOptionAudio                  = "audio"
 	ProviderOptionPreserveThinking       = "preserve_thinking"
 	ProviderOptionToolStream             = "tool_stream"
-	ProviderOptionEnableCodeInterpreter  = "enable_code_interpreter"
 	ProviderOptionSeed                   = "seed"
 	ProviderOptionLogprobs               = "logprobs"
 	ProviderOptionTopLogprobs            = "top_logprobs"
@@ -49,22 +45,18 @@ func New(cfg Config) (*Provider, error) {
 		Thinking:       mapThinking,
 		Options: []string{
 			ProviderOptionTopK, ProviderOptionRepetitionPenalty, ProviderOptionPresencePenalty,
-			ProviderOptionVLHighResolutionImages, ProviderOptionN, ProviderOptionModalities,
-			ProviderOptionAudio, ProviderOptionPreserveThinking, ProviderOptionToolStream,
-			ProviderOptionEnableCodeInterpreter, ProviderOptionSeed, ProviderOptionLogprobs,
+			ProviderOptionVLHighResolutionImages, ProviderOptionPreserveThinking, ProviderOptionToolStream,
+			ProviderOptionSeed, ProviderOptionLogprobs,
 			ProviderOptionTopLogprobs, ProviderOptionParallelToolCalls, ProviderOptionEnableSearch,
 			ProviderOptionSearchOptions, ProviderOptionSkill,
 		},
 		ReasoningFields: []string{"reasoning_content"},
-		// Breakpoints are dropped, so only implicit caching applies: hits bill
-		// at a discount and caching itself is free.
-		CacheWritesUnbilled: true,
 	})
 }
 
 // mapThinking uses DashScope's enable_thinking switch and thinking_budget.
 func mapThinking(thinking *litellm.Thinking) (map[string]any, error) {
-	if thinking.Mode == litellm.ThinkingDisabled {
+	if thinking.Disabled {
 		return map[string]any{"enable_thinking": false}, nil
 	}
 	if thinking.Effort != "" {

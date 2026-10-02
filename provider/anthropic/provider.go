@@ -15,6 +15,10 @@ import (
 
 // Config configures the Messages API client. An API key is required.
 type Config struct {
+	// Name identifies the provider in responses, errors and ProviderState,
+	// "anthropic" by default. Give each Messages-compatible endpoint its own
+	// name, so thinking signatures are replayed only where they were issued.
+	Name string
 	// APIKey authenticates requests; APIKeyFunc, when set, resolves it per
 	// request instead.
 	APIKey     string
@@ -37,8 +41,11 @@ type Provider struct {
 
 // New returns a Provider for cfg.
 func New(cfg Config) (*Provider, error) {
+	if cfg.Name == "" {
+		cfg.Name = "anthropic"
+	}
 	if cfg.APIKey == "" && cfg.APIKeyFunc == nil {
-		return nil, litellm.NewError("anthropic", litellm.ErrorTypeValidation, "api key is required", nil)
+		return nil, litellm.NewError(cfg.Name, litellm.ErrorTypeValidation, "api key is required", nil)
 	}
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "https://api.anthropic.com"
@@ -50,14 +57,14 @@ func New(cfg Config) (*Provider, error) {
 	return &Provider{cfg: cfg}, nil
 }
 
-// Name returns "anthropic".
+// Name returns the configured name.
 func (p *Provider) Name() string {
-	return "anthropic"
+	return p.cfg.Name
 }
 
 // Capabilities reports the static protocol facts.
 func (p *Provider) Capabilities() litellm.Capabilities {
-	return litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true, ThinkingBudget: true, MaxTokensRequired: true, ProviderOptions: sortedOptions()}
+	return litellm.Capabilities{MaxTokensRequired: true, ThinkingEffort: true, DisableThinking: true, ProviderOptions: sortedOptions()}
 }
 
 // Chat sends a Messages request.
@@ -75,7 +82,7 @@ func (p *Provider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Res
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeProvider, "decode response", err)
 	}
-	out := convertResponse(&parsed, req.Model)
+	out := convertResponse(&parsed, p.Name(), req.Model)
 	out.Raw = data
 	return out, nil
 }
@@ -86,11 +93,11 @@ func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.St
 	if err != nil {
 		return nil, err
 	}
-	return newStream(resp, req.Model), nil
+	return newStream(resp, p.Name(), req.Model), nil
 }
 
 func (p *Provider) post(ctx context.Context, req *litellm.Request, stream bool) (*http.Response, error) {
-	body, err := buildRequest(req, stream)
+	body, err := buildRequest(req, p.Name(), stream)
 	if err != nil {
 		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
 	}

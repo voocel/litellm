@@ -104,6 +104,35 @@ func TestTransportDoesNotRetryNetworkErrors(t *testing.T) {
 	}
 }
 
+// The wait a Google API error body suggests is honored like Retry-After.
+func TestTransportWaitsAsGoogleBodySuggests(t *testing.T) {
+	google := func(delay string) *http.Response {
+		return response(http.StatusTooManyRequests,
+			`{"error":{"code":429,"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"`+delay+`"}]}}`)
+	}
+	for _, tc := range []struct {
+		delay    string
+		attempts int
+	}{{"0.001s", 2}, {"61s", 1}} {
+		var attempts int
+		transport := newTransport(roundTripFunc(func(*http.Request) (*http.Response, error) {
+			attempts++
+			if attempts == 2 {
+				return response(http.StatusOK, "ok"), nil
+			}
+			return google(tc.delay), nil
+		}), &Policy{MaxAttempts: 2, InitialDelay: time.Hour, MaxDelay: time.Hour, RespectRetryAfter: true})
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://example.test", nil)
+		resp, err := transport.RoundTrip(req)
+		cancel()
+		if err != nil || attempts != tc.attempts {
+			t.Fatalf("retryDelay %s: attempts=%d err=%v, want %d attempts", tc.delay, attempts, err, tc.attempts)
+		}
+		resp.Body.Close()
+	}
+}
+
 func TestTransportRetryAfterRespectsContext(t *testing.T) {
 	var attempts int
 	transport := newTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {

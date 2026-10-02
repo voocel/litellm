@@ -49,16 +49,15 @@ type toolCall struct {
 }
 
 type usage struct {
-	PromptTokens         *int `json:"prompt_tokens"`
-	CompletionTokens     *int `json:"completion_tokens"`
-	TotalTokens          *int `json:"total_tokens"`
-	PromptCacheHitTokens *int `json:"prompt_cache_hit_tokens"`
-	PromptTokensDetails  *struct {
-		CachedTokens     *int `json:"cached_tokens"`
-		CacheWriteTokens *int `json:"cache_write_tokens"`
+	PromptTokens         int `json:"prompt_tokens"`
+	CompletionTokens     int `json:"completion_tokens"`
+	PromptCacheHitTokens int `json:"prompt_cache_hit_tokens"`
+	PromptTokensDetails  struct {
+		CachedTokens     int `json:"cached_tokens"`
+		CacheWriteTokens int `json:"cache_write_tokens"`
 	} `json:"prompt_tokens_details"`
-	CompletionTokensDetails *struct {
-		ReasoningTokens *int `json:"reasoning_tokens"`
+	CompletionTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
 	} `json:"completion_tokens_details"`
 }
 
@@ -106,14 +105,4 @@ type toolCallDelta struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
 	} `json:"function"`
-}
-
-type modelList struct {
-	Data []struct {
-		ID            string `json:"id"`
-		Name          string `json:"name"`
-		Description   string `json:"description"`
-		Created       int64  `json:"created"`
-		ContextLength int    `json:"context_length"`
-	} `json:"data"`
 }

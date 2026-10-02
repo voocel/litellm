@@ -1,0 +1,118 @@
+[
+  {
+    "role": "system",
+    "blocks": [
+      {
+        "type": "text",
+        "text": "be brief"
+      }
+    ]
+  },
+  {
+    "role": "user",
+    "blocks": [
+      {
+        "type": "text",
+        "text": "look",
+        "cache": {}
+      },
+      {
+        "type": "image",
+        "data": "iVBORw==",
+        "mime": "image/png",
+        "detail": "high"
+      },
+      {
+        "type": "image",
+        "url": "https://example.com/a.png"
+      },
+      {
+        "type": "image",
+        "mime": "image/png",
+        "file_uri": "gs://bucket/a.png"
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "blocks": [
+      {
+        "type": "reasoning",
+        "text": "thinking",
+        "summary": true,
+        "state": {
+          "provider": "anthropic",
+          "model": "claude",
+          "data": {
+            "signature": "sig"
+          }
+        }
+      },
+      {
+        "type": "text",
+        "text": "see",
+        "annotations": [
+          {
+            "type": "url_citation",
+            "text": "src",
+            "url": "https://example.com",
+            "extra": {
+              "start": 1
+            }
+          }
+        ],
+        "logprobs": [
+          {
+            "token": "see"
+          }
+        ],
+        "state": {
+          "provider": "anthropic",
+          "model": "claude",
+          "data": {
+            "signature": "sig"
+          }
+        }
+      },
+      {
+        "type": "tool_use",
+        "id": "call_1",
+        "name": "read",
+        "arguments": "{\"path\":\"a.go\"}",
+        "state": {
+          "provider": "anthropic",
+          "model": "claude",
+          "data": {
+            "signature": "sig"
+          }
+        },
+        "cache": {}
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "blocks": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "call_1",
+        "content": [
+          {
+            "type": "text",
+            "text": "package a"
+          },
+          {
+            "type": "image",
+            "url": "https://example.com/b.png"
+          },
+          {
+            "type": "tool_reference",
+            "tool_name": "grep"
+          }
+        ],
+        "is_error": true,
+        "cache": {}
+      }
+    ]
+  }
+]

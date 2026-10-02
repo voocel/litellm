@@ -30,7 +30,7 @@ func TestDoMapsHTTPErrorWithRetryAfter(t *testing.T) {
 	})
 	req, _ := http.NewRequest(http.MethodPost, "https://example.test", nil)
 	_, err := Do(client, req, "test", "request")
-	if !litellm.IsRateLimitError(err) || litellm.RetryAfter(err) != 7*time.Second {
+	if litellm.ErrorTypeOf(err) != litellm.ErrorTypeRateLimit || litellm.RetryAfter(err) != 7*time.Second {
 		t.Fatalf("err = %v, retry after = %v", err, litellm.RetryAfter(err))
 	}
 	if !body.closed {
@@ -38,11 +38,24 @@ func TestDoMapsHTTPErrorWithRetryAfter(t *testing.T) {
 	}
 }
 
+// Google APIs suggest the wait in the error body; a Retry-After header wins.
+func TestHTTPErrorReadsGoogleRetryDelay(t *testing.T) {
+	body := `{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"quota","details":[` +
+		`{"@type":"type.googleapis.com/google.rpc.QuotaFailure"},` +
+		`{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"18.5s"}]}}`
+	if got := HTTPError("gemini", http.StatusTooManyRequests, nil, body).RetryAfter; got != 18500*time.Millisecond {
+		t.Fatalf("retry after = %v, want 18.5s", got)
+	}
+	if got := HTTPError("gemini", http.StatusTooManyRequests, http.Header{"Retry-After": {"7"}}, body).RetryAfter; got != 7*time.Second {
+		t.Fatalf("retry after = %v, want the header's 7s", got)
+	}
+}
+
 func TestDoMapsTransportFailure(t *testing.T) {
 	client := doerFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("reset") })
 	req, _ := http.NewRequest(http.MethodPost, "https://example.test", nil)
 	_, err := Do(client, req, "test", "stream request")
-	if !litellm.IsNetworkError(err) || !strings.Contains(err.Error(), "stream request failed") {
+	if litellm.ErrorTypeOf(err) != litellm.ErrorTypeNetwork || !strings.Contains(err.Error(), "stream request failed") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -67,7 +80,7 @@ func TestDoRejectsHTMLPage(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, "https://example.test/chat/completions?key=secret", nil)
 	_, err := Do(client, req, "test", "request")
 	want := "test: https://example.test/chat/completions returned an HTML page instead of an API response; check BaseURL"
-	if !litellm.IsProviderError(err) || err.Error() != want {
+	if litellm.ErrorTypeOf(err) != litellm.ErrorTypeProvider || err.Error() != want {
 		t.Fatalf("err = %v", err)
 	}
 	if !body.closed {
@@ -97,19 +110,19 @@ func TestDoKeepsJSONLabeledAsHTML(t *testing.T) {
 
 func TestStreamErrorClassifiesErrorFields(t *testing.T) {
 	tests := map[string]struct {
-		raw string
-		is  func(error) bool
+		raw  string
+		want litellm.ErrorType
 	}{
-		"openrouter status":   {`{"code":429,"message":"Rate limited","metadata":{"error_type":"rate_limit_exceeded"}}`, litellm.IsRateLimitError},
-		"openrouter overflow": {`{"code":400,"message":"This endpoint's maximum context length is 8192 tokens"}`, litellm.IsContextOverflowError},
-		"openai type":         {`{"message":"The server had an error","type":"server_error","param":null,"code":null}`, litellm.IsProviderError},
-		"string code":         {`{"message":"slow down","code":"rate_limit_exceeded"}`, litellm.IsRateLimitError},
-		"string error":        {`"upstream failed"`, litellm.IsProviderError},
+		"openrouter status":   {`{"code":429,"message":"Rate limited","metadata":{"error_type":"rate_limit_exceeded"}}`, litellm.ErrorTypeRateLimit},
+		"openrouter overflow": {`{"code":400,"message":"This endpoint's maximum context length is 8192 tokens"}`, litellm.ErrorTypeContextOverflow},
+		"openai type":         {`{"message":"The server had an error","type":"server_error","param":null,"code":null}`, litellm.ErrorTypeProvider},
+		"string code":         {`{"message":"slow down","code":"rate_limit_exceeded"}`, litellm.ErrorTypeRateLimit},
+		"string error":        {`"upstream failed"`, litellm.ErrorTypeProvider},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			err := ErrorField("p", json.RawMessage(tt.raw))
-			if !tt.is(err) {
+			if litellm.ErrorTypeOf(err) != tt.want {
 				t.Fatalf("err = %v", err)
 			}
 		})

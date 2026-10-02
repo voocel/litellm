@@ -37,6 +37,7 @@ type streamEvent struct {
 type stream struct {
 	resp       *http.Response
 	sse        *wire.SSEReader
+	name       string // the provider's
 	pending    []litellm.Event
 	done       bool
 	requested  string // the requested model, for ProviderState
@@ -49,8 +50,8 @@ type stream struct {
 	citations  map[int][]json.RawMessage
 }
 
-func newStream(resp *http.Response, model string) *stream {
-	return &stream{resp: resp, sse: wire.NewSSEReader(resp.Body, "anthropic"), requested: model, model: model, signatures: make(map[int]string), citations: make(map[int][]json.RawMessage)}
+func newStream(resp *http.Response, name, model string) *stream {
+	return &stream{resp: resp, sse: wire.NewSSEReader(resp.Body, name), name: name, requested: model, model: model, signatures: make(map[int]string), citations: make(map[int][]json.RawMessage)}
 }
 
 func (s *stream) Next() (event litellm.Event, err error) {
@@ -65,14 +66,16 @@ func (s *stream) Next() (event litellm.Event, err error) {
 		}
 		frame, err := s.sse.Next()
 		if errors.Is(err, io.EOF) {
-			return nil, litellm.NewError("anthropic", litellm.ErrorTypeProvider, "stream ended before message_stop", nil)
+			// Before message_stop: the Client reports the truncation as a
+			// retryable network error.
+			return nil, io.EOF
 		}
 		if err != nil {
 			return nil, err
 		}
 		var e streamEvent
 		if err := json.Unmarshal([]byte(frame.Data), &e); err != nil {
-			return nil, litellm.NewError("anthropic", litellm.ErrorTypeProvider, "parse stream event", err)
+			return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "parse stream event", err)
 		}
 		if s.pending, err = s.events(s.pending, e, json.RawMessage(frame.Data)); err != nil {
 			return nil, err
@@ -110,14 +113,14 @@ func (s *stream) events(events []litellm.Event, e streamEvent, raw json.RawMessa
 	case "message_stop":
 		s.done = true
 		events = s.blocks.CloseAll(events, s.final)
-		return append(events, litellm.DoneEvent{FinishReason: s.finish, FinishReasonRaw: s.finishRaw, Provider: "anthropic", Model: s.model}), nil
+		return append(events, litellm.DoneEvent{FinishReason: s.finish, FinishReasonRaw: s.finishRaw, Provider: s.name, Model: s.model}), nil
 	case "content_block_start":
 		if e.ContentBlock == nil {
 			return events, nil
 		}
-		block, ok := convertContent(*e.ContentBlock, s.requested)
+		block, ok := convertContent(*e.ContentBlock, s.name, s.requested)
 		if !ok {
-			events = append(events, litellm.WarningEvent{Warning: unsupportedBlock(e.ContentBlock.Type)})
+			events = append(events, litellm.WarningEvent{Warning: unsupportedBlock(s.name, e.ContentBlock.Type)})
 			break
 		}
 		// Tool input normally arrives through input_json_delta after an empty
@@ -127,8 +130,8 @@ func (s *stream) events(events []litellm.Event, e streamEvent, raw json.RawMessa
 			block = litellm.ToolUseBlock{ID: tool.ID, Name: tool.Name}
 		}
 		events, index := s.blocks.Open(events, e.Index, block)
-		if isTool && len(tool.Arguments) > 0 && string(tool.Arguments) != "{}" {
-			events = append(events, litellm.ToolUseDelta{Index: index, Arguments: string(tool.Arguments)})
+		if isTool && tool.Arguments != "" && tool.Arguments != "{}" {
+			events = append(events, litellm.ToolUseDelta{Index: index, Arguments: tool.Arguments})
 		}
 		return events, nil
 	case "content_block_delta":
@@ -158,9 +161,9 @@ func (s *stream) events(events []litellm.Event, e streamEvent, raw json.RawMessa
 		return events, nil
 	case "error":
 		if e.Error == nil {
-			return nil, litellm.NewError("anthropic", litellm.ErrorTypeProvider, "unknown stream error", nil)
+			return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "unknown stream error", nil)
 		}
-		return nil, wire.StreamError("anthropic", e.Error.Type, "stream error: "+e.Error.Message)
+		return nil, wire.StreamError(s.name, e.Error.Type, "stream error: "+e.Error.Message)
 	}
 	return append(events, litellm.ProviderEvent{Name: e.Type, Raw: raw}), nil
 }
@@ -169,7 +172,7 @@ func (s *stream) events(events []litellm.Event, e streamEvent, raw json.RawMessa
 // and citations arrive as deltas.
 func (s *stream) final(index int) litellm.Block {
 	if signature := s.signatures[index]; signature != "" {
-		return litellm.ReasoningBlock{State: reasoningState(s.requested, "thinking", signature, "")}
+		return litellm.ReasoningBlock{State: reasoningState(s.name, s.requested, "thinking", signature, "")}
 	}
 	if citations := s.citations[index]; len(citations) > 0 {
 		return litellm.TextBlock{Annotations: annotations(citations)}

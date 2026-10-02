@@ -32,8 +32,8 @@ func TestBuildRequestGolden(t *testing.T) {
 				litellm.ImageBlock{FileURI: "gs://bucket/image.png", MIME: "image/png"},
 			),
 			litellm.Assistant(
-				litellm.ReasoningBlock{Text: "Need weather.", State: signed("gemini-3-pro", "sig-think")},
-				litellm.ToolUseBlock{ID: "call_weather", Name: "get_weather", Arguments: json.RawMessage(`{"city":"Paris"}`), State: signed("gemini-3-pro", "sig-call")},
+				litellm.ReasoningBlock{Text: "Need weather.", State: signed("gemini", "gemini-3-pro", "sig-think")},
+				litellm.ToolUseBlock{ID: "call_weather", Name: "get_weather", Arguments: `{"city":"Paris"}`, State: signed("gemini", "gemini-3-pro", "sig-call")},
 			),
 			litellm.ToolResultText("call_weather", `{"temp":"15C"}`),
 		},
@@ -43,7 +43,7 @@ func TestBuildRequestGolden(t *testing.T) {
 			"required":   []string{"city"},
 		})},
 		Thinking: &litellm.Thinking{Effort: "low", IncludeOutput: true},
-	})
+	}, "gemini")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestBuildRequestThinking(t *testing.T) {
 	}{
 		{"vendor default", nil, ``},
 		{"enabled", &litellm.Thinking{}, `{"thinkingConfig":{}}`},
-		{"disabled", &litellm.Thinking{Mode: litellm.ThinkingDisabled}, `{"thinkingConfig":{"thinkingBudget":0}}`},
+		{"disabled", &litellm.Thinking{Disabled: true}, `{"thinkingConfig":{"thinkingBudget":0}}`},
 		{"effort", &litellm.Thinking{Effort: "high"}, `{"thinkingConfig":{"thinkingLevel":"high"}}`},
 		{"budget", &litellm.Thinking{BudgetTokens: new(1024)}, `{"thinkingConfig":{"thinkingBudget":1024}}`},
 		{"include output", &litellm.Thinking{Effort: "low", IncludeOutput: true}, `{"thinkingConfig":{"thinkingLevel":"low","includeThoughts":true}}`},
@@ -78,14 +78,13 @@ func TestBuildRequestMergesProviderOptions(t *testing.T) {
 		ToolChoice:  &litellm.ToolChoice{Mode: litellm.ToolChoiceAuto},
 		ProviderOptions: mustOptions(t, map[string]any{
 			ProviderOptionGenerationConfig: map[string]any{"topK": 40},
-			ProviderOptionTools:            []any{map[string]any{"googleSearch": map[string]any{}}},
 			ProviderOptionToolConfig:       map[string]any{"retrievalConfig": map[string]any{"languageCode": "en"}},
 			ProviderOptionSafetySettings:   []any{map[string]any{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}},
 			ProviderOptionCachedContent:    "cachedContents/abc",
 		}),
 	})
 	assertField(t, body, "generationConfig", `{"temperature":0.5,"topK":40}`)
-	assertField(t, body, "tools", `[{"functionDeclarations":[{"name":"lookup"}]},{"googleSearch":{}}]`)
+	assertField(t, body, "tools", `[{"functionDeclarations":[{"name":"lookup"}]}]`)
 	assertField(t, body, "toolConfig", `{"functionCallingConfig":{"mode":"AUTO"},"retrievalConfig":{"languageCode":"en"}}`)
 	assertField(t, body, "safetySettings", `[{"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"BLOCK_NONE"}]`)
 	assertField(t, body, "cachedContent", `"cachedContents/abc"`)
@@ -93,7 +92,7 @@ func TestBuildRequestMergesProviderOptions(t *testing.T) {
 
 func TestBuildRequestToolChoice(t *testing.T) {
 	strict := mustTool(t, "lookup", "", nil)
-	strict.Strict = litellm.StrictEnabled
+	strict.Strict = new(true)
 	for _, test := range []struct {
 		name   string
 		strict bool
@@ -122,18 +121,18 @@ func TestBuildRequestToolChoice(t *testing.T) {
 
 func TestBuildRequestPreservesRawJSON(t *testing.T) {
 	schema := `{"type":"object","properties":{"note":{"type":["string","null"]}},"additionalProperties":false}`
-	format, err := litellm.NewResponseFormatJSONSchema("out", "", json.RawMessage(schema), litellm.StrictDefault)
+	format, err := litellm.NewResponseFormatJSONSchema("out", "", json.RawMessage(schema))
 	if err != nil {
 		t.Fatal(err)
 	}
 	data, err := buildRequest(&litellm.Request{
 		Messages: []litellm.Message{
-			litellm.Assistant(litellm.ToolUseBlock{ID: "c1", Name: "lookup", Arguments: json.RawMessage(`{"n":12345678901234567890}`)}),
+			litellm.Assistant(litellm.ToolUseBlock{ID: "c1", Name: "lookup", Arguments: `{"n":12345678901234567890}`}),
 			litellm.ToolResultText("c1", `{"ok":true}`),
 		},
 		Tools:          []litellm.Tool{mustTool(t, "lookup", "", json.RawMessage(schema))},
 		ResponseFormat: format,
-	})
+	}, "gemini")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,15 +175,30 @@ func TestBuildRequestToolResultsAndTurns(t *testing.T) {
 	]`)
 }
 
+// TestBuildRequestToolResultImages checks that images in a tool result go in
+// the parts of its functionResponse, and tool references are sent as text.
+func TestBuildRequestToolResultImages(t *testing.T) {
+	body := build(t, litellm.Request{Messages: []litellm.Message{
+		litellm.Assistant(litellm.ToolUseBlock{ID: "a", Name: "read"}),
+		litellm.ToolResult("a", litellm.Text("a.png"), litellm.ImageBlock{Data: []byte("png"), MIME: "image/png"}, litellm.ToolReferenceBlock{ToolName: "grep"}),
+	}})
+	assertField(t, body, "contents", `[
+		{"role":"model","parts":[{"functionCall":{"id":"a","name":"read","args":{}},"thoughtSignature":"skip_thought_signature_validator"}]},
+		{"role":"user","parts":[{"functionResponse":{"id":"a","name":"read",
+			"response":{"result":"a.png\nTool grep is now available."},
+			"parts":[{"inlineData":{"mimeType":"image/png","data":"cG5n"}}]}}]}
+	]`)
+}
+
 func TestBuildRequestReplaysSignatures(t *testing.T) {
 	foreign := &litellm.ProviderState{Provider: "anthropic", Data: json.RawMessage(`{"type":"thinking","signature":"a"}`)}
 	body := build(t, litellm.Request{Messages: []litellm.Message{
 		litellm.UserText("go"),
 		litellm.Assistant(
-			litellm.ReasoningBlock{State: signed("m", "r")},
-			litellm.TextBlock{Text: "answer", State: signed("m", "t")},
-			litellm.TextBlock{State: signed("m", "e")},
-			litellm.ToolUseBlock{ID: "a", Name: "f", State: signed("m", "c")},
+			litellm.ReasoningBlock{State: signed("gemini", "m", "r")},
+			litellm.TextBlock{Text: "answer", State: signed("gemini", "m", "t")},
+			litellm.TextBlock{State: signed("gemini", "m", "e")},
+			litellm.ToolUseBlock{ID: "a", Name: "f", State: signed("gemini", "m", "c")},
 		),
 		litellm.ToolResultText("a", "ok"),
 		litellm.Assistant(
@@ -216,9 +230,9 @@ func TestBuildRequestReplaysSignatures(t *testing.T) {
 
 func TestBuildRequestErrors(t *testing.T) {
 	strict := mustTool(t, "a", "", nil)
-	strict.Strict = litellm.StrictEnabled
+	strict.Strict = new(true)
 	loose := mustTool(t, "b", "", nil)
-	loose.Strict = litellm.StrictDisabled
+	loose.Strict = new(false)
 	for _, test := range []struct {
 		name string
 		req  litellm.Request
@@ -226,12 +240,16 @@ func TestBuildRequestErrors(t *testing.T) {
 	}{
 		{"unknown option", litellm.Request{ProviderOptions: mustOptions(t, map[string]any{"topK": 1})}, `unsupported provider option "topK"`},
 		{"orphan tool result", litellm.Request{Messages: []litellm.Message{litellm.ToolResultText("missing", "x")}}, "no preceding tool use"},
-		{"non-object args", litellm.Request{Messages: []litellm.Message{litellm.Assistant(litellm.ToolUseBlock{ID: "c", Name: "n", Arguments: json.RawMessage(`[1]`)})}}, "must be a JSON object"},
+		{"non-object args", litellm.Request{Messages: []litellm.Message{litellm.Assistant(litellm.ToolUseBlock{ID: "c", Name: "n", Arguments: `[1]`})}}, `tool use "c" (n) arguments are not a JSON object`},
+		{"tool result image by URL", litellm.Request{Messages: []litellm.Message{
+			litellm.Assistant(litellm.ToolUseBlock{ID: "c", Name: "n"}),
+			litellm.ToolResult("c", litellm.ImageURL("https://x.test/a.png")),
+		}}, "tool result images must be inline data"},
 		{"inline image without MIME", litellm.Request{Messages: []litellm.Message{litellm.User(litellm.ImageBlock{Data: []byte{1}})}}, "requires MIME"},
 		{"mixed strict tools", litellm.Request{Tools: []litellm.Tool{strict, loose}}, "cannot mix strict"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := buildRequest(&test.req); err == nil || !strings.Contains(err.Error(), test.want) {
+			if _, err := buildRequest(&test.req, "gemini"); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("err = %v, want %q", err, test.want)
 			}
 		})
@@ -272,8 +290,8 @@ func TestChatConvertsResponse(t *testing.T) {
 			Provider: "gemini", Model: "gemini-3-pro", Data: json.RawMessage(`{"thoughtSignature":"sig-think"}`),
 		}},
 		litellm.TextBlock{Text: "answer"},
-		litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`), State: signed("gemini-3-pro", "sig-call")},
-		litellm.ToolUseBlock{ID: generated.ID, Name: "noop", Arguments: json.RawMessage(`{}`)},
+		litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: `{"q":"x"}`, State: signed("gemini", "gemini-3-pro", "sig-call")},
+		litellm.ToolUseBlock{ID: generated.ID, Name: "noop", Arguments: `{}`},
 	}
 	if !reflect.DeepEqual(resp.Blocks, want) {
 		t.Fatalf("blocks = %#v", resp.Blocks)
@@ -284,7 +302,7 @@ func TestChatConvertsResponse(t *testing.T) {
 	if len(resp.Warnings) != 1 || resp.Warnings[0].Code != "gemini.tool_call_id_generated" {
 		t.Fatalf("warnings = %+v", resp.Warnings)
 	}
-	if *resp.Usage.InputTokens != 3 || *resp.Usage.OutputTokens != 6 || *resp.Usage.ReasoningTokens != 2 || *resp.Usage.CacheReadTokens != 1 {
+	if resp.Usage != (litellm.Usage{InputTokens: 3, OutputTokens: 6, ReasoningTokens: 2, CacheReadTokens: 1}) {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
 }
@@ -326,16 +344,16 @@ func TestStreamEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stream.Close()
-	usage := litellm.Usage{InputTokens: new(3), OutputTokens: new(6), ReasoningTokens: new(2), TotalTokens: new(9), CacheReadTokens: new(1)}
+	usage := litellm.Usage{InputTokens: 3, OutputTokens: 6, ReasoningTokens: 2, CacheReadTokens: 1}
 	assertEvents(t, stream, []litellm.Event{
 		litellm.BlockStart{Index: 0, Block: litellm.ReasoningBlock{}},
 		litellm.ReasoningDelta{Index: 0, Text: "think"},
-		litellm.BlockEnd{Index: 0, Block: litellm.ReasoningBlock{State: signed("gemini-3-pro", "sig-think")}},
+		litellm.BlockEnd{Index: 0, Block: litellm.ReasoningBlock{State: signed("gemini", "gemini-3-pro", "sig-think")}},
 		litellm.BlockStart{Index: 1, Block: litellm.TextBlock{}},
 		litellm.TextDelta{Index: 1, Text: "ans"},
 		litellm.TextDelta{Index: 1, Text: "wer"},
 		litellm.BlockEnd{Index: 1},
-		litellm.BlockStart{Index: 2, Block: litellm.ToolUseBlock{ID: "call_1", Name: "lookup", State: signed("gemini-3-pro", "sig-call")}},
+		litellm.BlockStart{Index: 2, Block: litellm.ToolUseBlock{ID: "call_1", Name: "lookup", State: signed("gemini", "gemini-3-pro", "sig-call")}},
 		litellm.ToolUseDelta{Index: 2, Arguments: `{"q":"x"}`},
 		litellm.BlockEnd{Index: 2},
 		litellm.UsageEvent{Usage: usage},
@@ -351,7 +369,8 @@ func TestStreamEndings(t *testing.T) {
 		wantErr func(error) bool
 	}{
 		{"prompt blocked", `data: {"promptFeedback":{"blockReason":"SAFETY"}}`, litellm.FinishReasonSafety, nil},
-		{"eof before finish", `data: {"candidates":[{"content":{"parts":[{"text":"partial"}]}}]}`, "", litellm.IsProviderError},
+		// The Client reports the truncation as a temporary network error.
+		{"eof before finish", `data: {"candidates":[{"content":{"parts":[{"text":"partial"}]}}]}`, "", func(err error) bool { return errors.Is(err, io.ErrUnexpectedEOF) }},
 		{"mid-stream error", `data: {"candidates":[{"content":{"parts":[{"text":"partial"}]}}]}` + "\n" +
 			`data: {"error":{"code":503,"message":"The model is overloaded.","status":"UNAVAILABLE"}}`, "", func(err error) bool {
 			var e *litellm.Error
@@ -359,7 +378,7 @@ func TestStreamEndings(t *testing.T) {
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			resp, err := litellm.Collect(newStream(streamResponse(test.body), "m"))
+			resp, err := litellm.Collect(newStream(streamResponse(test.body), "gemini", "m"))
 			if test.wantErr != nil {
 				if !test.wantErr(err) {
 					t.Fatalf("err = %v", err)
@@ -374,12 +393,12 @@ func TestStreamEndings(t *testing.T) {
 }
 
 func TestStreamWarnsForGeneratedToolCallID(t *testing.T) {
-	resp, err := litellm.Collect(newStream(streamResponse(`data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"noop"}}]},"finishReason":"STOP"}]}`), "m"))
+	resp, err := litellm.Collect(newStream(streamResponse(`data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"noop"}}]},"finishReason":"STOP"}]}`), "gemini", "m"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	calls := resp.ToolCalls()
-	if len(calls) != 1 || !strings.HasPrefix(calls[0].ID, "call_") || string(calls[0].Arguments) != `{}` {
+	if len(calls) != 1 || !strings.HasPrefix(calls[0].ID, "call_") || calls[0].Arguments != `{}` {
 		t.Fatalf("calls = %+v", calls)
 	}
 	if len(resp.Warnings) != 1 || resp.Warnings[0].Code != "gemini.tool_call_id_generated" {
@@ -393,7 +412,7 @@ func TestUsageIncludesReasoningAndReadsOmittedCountsAsZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	usage := convertUsage(&meta)
-	if *usage.InputTokens != 10 || *usage.OutputTokens != 5 || *usage.ReasoningTokens != 3 || *usage.TotalTokens != 15 || *usage.CacheReadTokens != 4 || usage.CacheWriteTokens != nil {
+	if usage != (litellm.Usage{InputTokens: 10, OutputTokens: 5, ReasoningTokens: 3, CacheReadTokens: 4}) {
 		t.Fatalf("usage = %+v", usage)
 	}
 	// The API omits zero counts, e.g. no output after thinking hit MAX_TOKENS.
@@ -402,17 +421,14 @@ func TestUsageIncludesReasoningAndReadsOmittedCountsAsZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	usage = convertUsage(&meta)
-	if *usage.OutputTokens != 3 || *usage.ReasoningTokens != 3 || *usage.CacheReadTokens != 0 {
+	if usage != (litellm.Usage{InputTokens: 10, OutputTokens: 3, ReasoningTokens: 3}) {
 		t.Fatalf("usage with omitted counts = %+v", usage)
-	}
-	if convertUsage(&usageMetadata{}).HasTokens() {
-		t.Fatal("empty metadata became known")
 	}
 }
 
 func TestCapabilities(t *testing.T) {
 	caps := testProvider(t, nil).Capabilities()
-	if !caps.Thinking || !caps.DisableThinking || !caps.ThinkingEffort || !caps.ThinkingBudget || !slices.IsSorted(caps.ProviderOptions) || !slices.Equal(caps.ProviderOptions, sortedOptions()) || len(caps.ProviderOptions) != len(providerOptions) {
+	if caps.MaxTokensRequired || !caps.ThinkingEffort || !caps.DisableThinking || !slices.IsSorted(caps.ProviderOptions) || !slices.Equal(caps.ProviderOptions, sortedOptions()) || len(caps.ProviderOptions) != len(providerOptions) {
 		t.Fatalf("capabilities = %+v", caps)
 	}
 }
@@ -440,23 +456,6 @@ func TestRequestHeadersAndSecrets(t *testing.T) {
 	}
 }
 
-func TestListModels(t *testing.T) {
-	provider := testProvider(t, func(req *http.Request) (*http.Response, error) {
-		if req.URL.Path != "/v1beta/models" || req.URL.RawQuery != "" || req.Header.Get("x-goog-api-key") != "test-key" {
-			t.Errorf("request = %s %v", req.URL, req.Header)
-		}
-		return jsonResponse(http.StatusOK, `{"models":[{"name":"models/gemini-3-pro","inputTokenLimit":10}]}`), nil
-	})
-	models, err := provider.ListModels(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []litellm.ModelInfo{{ID: "gemini-3-pro", Name: "gemini-3-pro", Provider: "gemini", InputTokenLimit: 10}}
-	if !reflect.DeepEqual(models, want) {
-		t.Fatalf("models = %+v", models)
-	}
-}
-
 // assertEvents reads stream to its end and compares the events.
 func assertEvents(t *testing.T, stream litellm.Stream, want []litellm.Event) {
 	t.Helper()
@@ -478,7 +477,7 @@ func assertEvents(t *testing.T, stream litellm.Stream, want []litellm.Event) {
 
 func build(t *testing.T, req litellm.Request) map[string]any {
 	t.Helper()
-	data, err := buildRequest(&req)
+	data, err := buildRequest(&req, "gemini")
 	if err != nil {
 		t.Fatalf("buildRequest: %v", err)
 	}

@@ -54,7 +54,7 @@ func main() {
 }
 ```
 
-A provider is safe to share across clients. `litellm.New` accepts `ClientOption`s such as `WithObservers`, `WithStreamIdleTimeout` and `WithCaptureRawResponse`.
+A provider is safe to share across clients. `litellm.New` accepts `ClientOption`s such as `WithObservers` and `WithCaptureRawResponse`.
 
 ## Core Model
 
@@ -76,6 +76,8 @@ msgs = append(msgs,
 ```
 
 Data a vendor needs back, such as a reasoning signature or an item id, travels in a block's `State` and is sent only to the provider that produced it, so history can move between providers ([details](providers.md#replay-state)). The Client checks the structure of messages and never rewrites history. Tool-call pairing and repair are conversation policy, owned by the layer that manages the session.
+
+Messages encode as JSON with each block tagged by its `type`, state included, so `json.Marshal` stores history and `json.Unmarshal` reads it back as it was.
 
 Raw provider response bodies are kept only with `litellm.WithCaptureRawResponse(true)`.
 
@@ -106,7 +108,7 @@ resp, err := litellm.Handle(stream, func(event litellm.Event) error {
 })
 ```
 
-`Client.Stream` aggregates as events are read, so `Handle` and `Collect` return the complete response even after some events were read with `Next`. A stream is consumed by one goroutine. `WithStreamIdleTimeout` sets an optional per-event idle timeout.
+`Client.Stream` aggregates as events are read, so `Handle` and `Collect` return the complete response even after some events were read with `Next`. A stream is consumed by one goroutine.
 
 ## Tools
 
@@ -121,7 +123,7 @@ tool, err := litellm.NewTool("get_weather", "Get weather for a city.", map[strin
 if err != nil {
 	log.Fatal(err)
 }
-tool.Strict = litellm.StrictEnabled
+tool.Strict = new(true)
 
 resp, err := client.Chat(ctx, litellm.Request{
 	Model:      "gpt-5.6",
@@ -133,6 +135,10 @@ resp, err := client.Chat(ctx, litellm.Request{
 
 `ToolChoice` takes a `Mode` (`Auto`, `None`, `Required`) or a tool `Name`; nil leaves the vendor default.
 
+`ToolUseBlock.Arguments` is the text the model wrote. It is meant to be a JSON object but may not be one, as when the reply was cut off at the output limit; the Client then adds a `litellm.tool_arguments_invalid` warning, and providers whose wire format needs an object reject the call in history with a validation error naming it.
+
+A tool result holds text, images and tool references on every provider. Where a tool result carries text only, as in Chat Completions, the images follow the turn's tool messages in a user message.
+
 ## Structured Output
 
 ```go
@@ -142,10 +148,11 @@ format, err := litellm.NewResponseFormatJSONSchema("person", "", map[string]any{
 		"name": map[string]any{"type": "string"},
 	},
 	"required": []string{"name"},
-}, litellm.StrictEnabled)
+})
 if err != nil {
 	log.Fatal(err)
 }
+format.JSONSchema.Strict = new(true)
 
 resp, err := client.Chat(ctx, litellm.Request{
 	Model:          "gpt-5.6",
@@ -156,7 +163,7 @@ resp, err := client.Chat(ctx, litellm.Request{
 
 ## Thinking
 
-`Thinking == nil` sends no thinking fields and keeps the vendor default. Otherwise the zero `Mode` enables thinking and `ThinkingDisabled` turns it off; `Effort` and `BudgetTokens` are sent as given, and `IncludeOutput` asks for reasoning text where the vendor makes it optional.
+`Thinking == nil` sends no thinking fields and keeps the vendor default. Otherwise thinking is on, and `Disabled` turns it off; `Effort` and `BudgetTokens` are sent as given, and `IncludeOutput` asks for reasoning text where the vendor makes it optional.
 
 ```go
 resp, err := client.Chat(ctx, litellm.Request{
@@ -171,10 +178,10 @@ Which values a model accepts is the vendor's decision. [providers.md](providers.
 
 ## Prompt Caching
 
-Mark a cache breakpoint on a block; the prompt prefix up to and including it may be cached. `TTL` is passed as is (`litellm.CacheTTL5m`, `litellm.CacheTTL1h`, or empty for the vendor default). Breakpoints are hints: providers without a slot drop them.
+Mark a cache breakpoint on a block; the prompt prefix up to and including it may be cached for the vendor's default time, five minutes on Anthropic and Bedrock. Breakpoints are hints: providers without a slot drop them.
 
 ```go
-litellm.User(litellm.TextBlock{Text: longDocument, Cache: &litellm.CacheControl{TTL: litellm.CacheTTL1h}})
+litellm.User(litellm.TextBlock{Text: longDocument, Cache: &litellm.CacheControl{}})
 ```
 
 ## Provider Options
@@ -206,6 +213,7 @@ resp, err := client.Chat(ctx, litellm.Request{
 | `provider/bedrock` | Amazon Bedrock Converse (SigV4) |
 | `provider/deepseek`, `glm`, `grok`, `mimo`, `minimax`, `ollama`, `openrouter`, `qwen` | each vendor's Chat Completions dialect |
 | `provider/compat` | any other OpenAI-compatible endpoint (vLLM, LM Studio, gateways) |
+| `provider/gateway` | a litellm [gateway](#gateway) |
 
 ```go
 anthropic.New(anthropic.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
@@ -234,45 +242,64 @@ names := provider.Names() // "anthropic", "bedrock", "compat", ...
 
 `openai` follows the official protocol only. `compat` is for any other OpenAI-compatible server and passes provider options through unchecked, since it cannot know the server's fields.
 
-`client.Capabilities()` reports what the adapter can express: whether `Thinking`, `ThinkingDisabled`, `Effort` and `BudgetTokens` are sent, whether `MaxTokens` is required, and the accepted option keys. It is static per provider (`ok` is false for a custom provider that declares nothing); whether a model honors a request is still the vendor's call.
+Each provider's `Config.Name`, or `provider.Config.Name`, renames it: responses, errors and replay state carry the name. Give each endpoint of one protocol its own, such as an Anthropic-compatible proxy, so a reasoning signature is replayed only where it was issued.
+
+`client.Capabilities()` reports the protocol facts of the adapter: whether `MaxTokens` is required, whether it sends `Thinking.Effort` and `Thinking.Disabled`, and the accepted option keys. It is static per provider, and `ok` is false for a provider that declares nothing, such as a gateway. Which models think is model data, in the [catalog](#usage-and-model-catalog); whether a model honors a request is the vendor's call.
 
 ### OpenAI Responses
 
-Set `openai.Config.API = openai.APIResponses` to route `Chat` and `Stream` through the Responses API with the same request and response types. Native Responses fields are provider options; using an option of the other API is an error.
+Set `openai.Config.API = openai.APIResponses` to route `Chat` and `Stream` through the Responses API with the same request and response types. Native Responses fields are provider options; using an option of the other API is an error. Hosted tools and server-side compaction are not offered, since litellm does not model their output, nor is `previous_response_id`: history is sent whole.
 
 ```go
 provider, err := openai.New(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY"), API: openai.APIResponses})
 
 options, err := litellm.NewProviderOptions(map[string]any{
-	openai.ProviderOptionPreviousResponseID: "resp_123",
-	openai.ProviderOptionTools:              []any{map[string]any{"type": "web_search"}},
+	openai.ProviderOptionStore:   false,
+	openai.ProviderOptionInclude: []any{"reasoning.encrypted_content"},
 })
 ```
 
-## Model Listing
+## Gateway
+
+`provider/gateway` runs calls on a gateway that holds the vendor keys, such as for an agent in a sandbox that must never see one. The client is an ordinary provider; the gateway serves `gateway.Server`, whose `Route` picks the Client for each call and may rewrite the request:
 
 ```go
-models, err := client.ListModels(ctx)
+// gateway
+srv := &gateway.Server{Route: func(r *http.Request, req *litellm.Request) (*litellm.Client, error) {
+	if req.Model != "smart" {
+		return nil, errors.New("unknown model")
+	}
+	req.Model = "claude-sonnet-4-5"
+	return anthropicClient, nil
+}}
+http.Handle("/v1/llm", auth(srv))
+
+// sandbox
+p, _ := gateway.New(gateway.Config{BaseURL: "https://gw.example.com/v1/llm", APIKey: teamToken})
 ```
 
-Available when the provider implements `ModelLister`. Returned fields are best-effort.
+Calls keep everything on the way: the request whole but for the key, blocks with their state, and errors with their type, retry facts and upstream provider. The upstream rejecting the gateway's own vendor key is the exception: it reaches the caller as a provider error, "upstream key rejected", rather than an auth error, which would blame the caller's key. The Server neither authenticates nor meters: put the caller on the request context in your authentication, and meter with an Observer on the routed Clients, which see that context.
+
+While the upstream is silent, the Server writes a heartbeat line every 15 seconds, which keeps proxies from cutting the connection and which the client skips. It refuses request bodies over `gateway.MaxRequestBytes` (64 MiB). The caller cannot see the vendor's capabilities, so `Route` sets `MaxTokens` where the vendor requires it.
 
 ## Errors
 
-HTTP failures and errors inside a stream are classified the same way; check with the `Is*` helpers instead of matching messages:
+HTTP failures and errors inside a stream are classified the same way; switch on `ErrorTypeOf` instead of matching messages:
 
 ```go
-switch {
-case litellm.IsContextOverflowError(err):
+switch litellm.ErrorTypeOf(err) {
+case litellm.ErrorTypeContextOverflow:
 	// compact history and resend
-case litellm.IsRateLimitError(err), litellm.IsOverloadedError(err):
+case litellm.ErrorTypeRateLimit, litellm.ErrorTypeOverloaded:
 	time.Sleep(litellm.RetryAfter(err)) // 0 when the provider sent no Retry-After
-case litellm.IsContentFilterError(err):
+case litellm.ErrorTypeContentFilter:
 	// do not retry
+case litellm.ErrorTypeCanceled:
+	// the caller cancelled; errors.Is(err, context.Canceled) holds as well
 }
 ```
 
-Messages render as `provider: code: message`. Context overflow and content filtering are detected from vendor codes and messages even when a proxy rewrites the status; they are never marked temporary.
+`IsTemporaryError` reports a failure that a fresh request may avoid: rate limits, overload, network failures, a stream cut off before its end, and server faults, whether an HTTP 5xx or reported inside a stream. Messages render as `provider: code: message`. Context overflow and content filtering are detected from vendor codes and messages even when a proxy rewrites the status; they are never marked temporary.
 
 ## Retry
 
@@ -319,7 +346,7 @@ observer := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
 
 ## Usage And Model Catalog
 
-Token counts are `*int`: nil is unknown, `new(0)` a known zero. `Input()`, `Output()`, `Total()`, `Reasoning()`, `CacheRead()` and `CacheWrite()` return `(count, known)`. Input includes cache reads and writes; output includes reasoning; detail counts are subsets.
+Token counts are plain ints; a count the vendor does not report is zero. Input includes cache reads and writes; output includes reasoning; detail counts are subsets. `Pricing.Cost` prices the input not read from or written to the cache at the input rate, so a vendor that reports no cache counts is priced as uncached input.
 
 The catalog holds model facts (context window, output limit, reasoning support and prices) from LiteLLM's model list, and never loads remote data implicitly:
 
@@ -359,7 +386,7 @@ Names are the list's keys, whose vendor prefixes follow LiteLLM's provider names
 
 ## Custom Providers
 
-Implement the provider interface; `CapabilityProvider` and `ModelLister` are optional:
+Implement the provider interface; `CapabilityProvider` is optional:
 
 ```go
 type Provider interface {
@@ -368,6 +395,8 @@ type Provider interface {
 	Stream(context.Context, *litellm.Request) (litellm.Stream, error)
 }
 ```
+
+To test code that calls models, `litellmtest.New` returns a provider that streams scripted replies and records the requests it got.
 
 ## License
 

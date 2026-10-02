@@ -19,7 +19,7 @@ func Thinking(t *litellm.Thinking) *ThinkingConfig {
 	if t == nil {
 		return nil
 	}
-	if t.Mode == litellm.ThinkingDisabled {
+	if t.Disabled {
 		return &ThinkingConfig{Type: "disabled"}
 	}
 	out := &ThinkingConfig{Type: "adaptive", Effort: t.Effort}

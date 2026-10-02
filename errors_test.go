@@ -18,6 +18,8 @@ func TestErrorRendering(t *testing.T) {
 		{&Error{Provider: "p", Code: "c"}, "p: c"},
 		{&Error{Provider: "p", StatusCode: 503, Type: ErrorTypeProvider}, "p: HTTP 503 (provider)"},
 		{&Error{StatusCode: 503}, "HTTP 503"},
+		{&Error{Provider: "openrouter", Message: "Provider returned error", StatusCode: 502}, "openrouter: Provider returned error (HTTP 502)"},
+		{&Error{Code: "c", Message: "upstream said HTTP 429", StatusCode: 429}, "c: upstream said HTTP 429"},
 		{&Error{Type: ErrorTypeValidation}, "validation"},
 		{&Error{}, "litellm error"},
 		{NewNetworkError("p", "read failed", io.EOF), "p: read failed: EOF"},
@@ -63,17 +65,17 @@ func TestWrapErrorPreservesCauseAndClassification(t *testing.T) {
 		t.Fatal("WrapError mutated original")
 	}
 	canceled := WrapError("test", ErrorTypeProvider, fmt.Errorf("transport: %w", context.Canceled))
-	if !IsNetworkError(canceled) || IsTemporaryError(canceled) || !errors.Is(canceled, context.Canceled) {
+	if ErrorTypeOf(canceled) != ErrorTypeCanceled || IsTemporaryError(canceled) || !errors.Is(canceled, context.Canceled) {
 		t.Fatalf("canceled error = %v", canceled)
 	}
 	deadline := WrapError("test", ErrorTypeProvider, fmt.Errorf("transport: %w", context.DeadlineExceeded))
-	if !IsTimeoutError(deadline) || IsTemporaryError(deadline) || !errors.Is(deadline, context.DeadlineExceeded) {
+	if ErrorTypeOf(deadline) != ErrorTypeTimeout || IsTemporaryError(deadline) || !errors.Is(deadline, context.DeadlineExceeded) {
 		t.Fatalf("deadline error = %v", deadline)
 	}
 	// A provider error caused by cancellation is reclassified without
 	// repeating its provider prefix.
 	read := WrapError("test", ErrorTypeProvider, NewError("test", ErrorTypeProvider, "read stream", context.DeadlineExceeded))
-	if !IsTimeoutError(read) || read.Error() != "test: read stream: context deadline exceeded" {
+	if ErrorTypeOf(read) != ErrorTypeTimeout || read.Error() != "test: read stream: context deadline exceeded" {
 		t.Fatalf("read error = %v", read)
 	}
 }

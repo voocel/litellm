@@ -41,9 +41,9 @@ func TestConvertResponse(t *testing.T) {
 						Provider: "anthropic", Model: "requested", Data: json.RawMessage(`{"type":"redacted_thinking","data":"opaque"}`),
 					}},
 					litellm.TextBlock{Text: "calling"},
-					litellm.ToolUseBlock{ID: "toolu_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
+					litellm.ToolUseBlock{ID: "toolu_1", Name: "lookup", Arguments: `{"q":"x"}`},
 				},
-				Usage:           litellm.Usage{InputTokens: new(10), OutputTokens: new(9), TotalTokens: new(19), CacheReadTokens: new(2), CacheWriteTokens: new(3)},
+				Usage:           litellm.Usage{InputTokens: 10, OutputTokens: 9, CacheReadTokens: 2, CacheWriteTokens: 3},
 				Model:           "claude-x",
 				Provider:        "anthropic",
 				FinishReason:    litellm.FinishReasonToolCall,
@@ -75,7 +75,7 @@ func TestConvertResponse(t *testing.T) {
 			if err := json.Unmarshal([]byte(test.raw), &resp); err != nil {
 				t.Fatal(err)
 			}
-			if got := convertResponse(&resp, "requested"); !reflect.DeepEqual(got, test.want) {
+			if got := convertResponse(&resp, "anthropic", "requested"); !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("got  %#v\nwant %#v", got, test.want)
 			}
 		})
@@ -91,8 +91,8 @@ func TestResponseBlocksReplayAsHistory(t *testing.T) {
 	data, err := buildRequest(&litellm.Request{
 		Model:     "claude",
 		MaxTokens: new(1024),
-		Messages:  []litellm.Message{litellm.UserText("hi"), litellm.Assistant(convertResponse(&resp, "claude").Blocks...)},
-	}, false)
+		Messages:  []litellm.Message{litellm.UserText("hi"), litellm.Assistant(convertResponse(&resp, "anthropic", "claude").Blocks...)},
+	}, "anthropic", false)
 	if err != nil {
 		t.Fatalf("buildRequest: %v", err)
 	}

@@ -14,7 +14,7 @@ func (p *Provider) convertResponse(resp *chatResponse, req *litellm.Request) (*l
 	out := &litellm.Response{
 		Provider: p.Name(),
 		Model:    req.Model,
-		Usage:    p.spec.usage(resp.Usage),
+		Usage:    resp.Usage.convert(),
 	}
 	if resp.Model != "" {
 		out.Model = resp.Model
@@ -56,7 +56,7 @@ func (p *Provider) convertResponse(resp *chatResponse, req *litellm.Request) (*l
 		out.Blocks = append(out.Blocks, litellm.ToolUseBlock{
 			ID:        call.ID,
 			Name:      call.Function.Name,
-			Arguments: json.RawMessage(cmp.Or(call.Function.Arguments, "{}")), // as streams deliver an argument-less call
+			Arguments: cmp.Or(call.Function.Arguments, "{}"), // as streams deliver an argument-less call
 		})
 	}
 	return out, nil
@@ -69,7 +69,7 @@ func (p *Provider) reasoningBlock(message map[string]json.RawMessage, model stri
 	for _, field := range p.spec.ReasoningFields {
 		raw := message[field]
 		if field == "reasoning_details" && len(raw) > 0 && string(raw) != "null" {
-			block.State = wire.NewState(p.spec.Name, model, append(json.RawMessage(nil), raw...))
+			block.State = wire.NewState(p.Name(), model, append(json.RawMessage(nil), raw...))
 		}
 		if block.Text == "" {
 			block.Text = reasoningText(raw)
@@ -111,26 +111,14 @@ func reasoningText(raw json.RawMessage) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func (s Spec) usage(u usage) litellm.Usage {
-	out := litellm.Usage{
-		InputTokens:  u.PromptTokens,
-		OutputTokens: u.CompletionTokens,
-		TotalTokens:  u.TotalTokens,
+func (u usage) convert() litellm.Usage {
+	return litellm.Usage{
+		InputTokens:      u.PromptTokens,
+		OutputTokens:     u.CompletionTokens,
+		ReasoningTokens:  u.CompletionTokensDetails.ReasoningTokens,
+		CacheReadTokens:  cmp.Or(u.PromptTokensDetails.CachedTokens, u.PromptCacheHitTokens),
+		CacheWriteTokens: u.PromptTokensDetails.CacheWriteTokens,
 	}
-	if u.PromptTokensDetails != nil {
-		out.CacheReadTokens = u.PromptTokensDetails.CachedTokens
-		out.CacheWriteTokens = u.PromptTokensDetails.CacheWriteTokens
-	}
-	if out.CacheReadTokens == nil {
-		out.CacheReadTokens = u.PromptCacheHitTokens
-	}
-	if s.CacheWritesUnbilled && out.InputTokens != nil && out.CacheWriteTokens == nil {
-		out.CacheWriteTokens = new(0)
-	}
-	if u.CompletionTokensDetails != nil {
-		out.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
-	}
-	return out
 }
 
 // contentBlocks converts message content, a string or an array of parts. It

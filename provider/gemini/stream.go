@@ -13,6 +13,7 @@ import (
 type stream struct {
 	resp      *http.Response
 	sse       *wire.SSEReader
+	name      string // the provider's
 	pending   []litellm.Event
 	done      bool
 	model     string
@@ -23,10 +24,10 @@ type stream struct {
 	toolCalls bool
 }
 
-func newStream(resp *http.Response, model string) *stream {
-	reader := wire.NewSSEReader(resp.Body, "gemini")
+func newStream(resp *http.Response, name, model string) *stream {
+	reader := wire.NewSSEReader(resp.Body, name)
 	reader.AcceptBare = true
-	return &stream{resp: resp, sse: reader, model: model}
+	return &stream{resp: resp, sse: reader, name: name, model: model}
 }
 
 func (s *stream) Next() (event litellm.Event, err error) {
@@ -41,16 +42,18 @@ func (s *stream) Next() (event litellm.Event, err error) {
 		}
 		frame, err := s.sse.Next()
 		if errors.Is(err, io.EOF) {
-			return nil, litellm.NewError("gemini", litellm.ErrorTypeProvider, "stream ended before finishReason", nil)
+			// Before a finishReason: the Client reports the truncation as a
+			// retryable network error.
+			return nil, io.EOF
 		}
 		if err != nil {
 			return nil, err
 		}
 		var chunk response
 		if err := json.Unmarshal([]byte(frame.Data), &chunk); err != nil {
-			return nil, litellm.NewError("gemini", litellm.ErrorTypeProvider, "parse stream chunk", err)
+			return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "parse stream chunk", err)
 		}
-		if err := wire.ErrorField("gemini", chunk.Error); err != nil {
+		if err := wire.ErrorField(s.name, chunk.Error); err != nil {
 			return nil, err
 		}
 		s.pending = s.events(s.pending, chunk)
@@ -78,7 +81,7 @@ func (s *stream) events(events []litellm.Event, chunk response) []litellm.Event 
 	}
 	candidate := chunk.Candidates[0]
 	for _, p := range candidate.Content.Parts {
-		switch b := partBlock(p, s.model).(type) {
+		switch b := partBlock(p, s.name, s.model).(type) {
 		case litellm.TextBlock:
 			events = s.extendRun(events, "text", b.Text, p.ThoughtSignature)
 		case litellm.ReasoningBlock:
@@ -86,18 +89,18 @@ func (s *stream) events(events []litellm.Event, chunk response) []litellm.Event 
 		case litellm.ToolUseBlock:
 			events = s.endRun(events)
 			if p.FunctionCall.ID == "" {
-				events = append(events, litellm.WarningEvent{Warning: generatedIDWarning(b)})
+				events = append(events, litellm.WarningEvent{Warning: generatedIDWarning(s.name, b)})
 			}
 			s.run++
 			var index int
 			events, index = s.blocks.Open(events, s.run, litellm.ToolUseBlock{ID: b.ID, Name: b.Name, State: b.State})
-			events = append(events, litellm.ToolUseDelta{Index: index, Arguments: string(b.Arguments)})
+			events = append(events, litellm.ToolUseDelta{Index: index, Arguments: b.Arguments})
 			events = s.blocks.Close(events, s.run, nil)
 			s.toolCalls = true
 		}
 	}
 	if candidate.FinishMessage != "" {
-		events = append(events, litellm.WarningEvent{Warning: finishMessageWarning(candidate.FinishMessage)})
+		events = append(events, litellm.WarningEvent{Warning: finishMessageWarning(s.name, candidate.FinishMessage)})
 	}
 	if candidate.FinishReason != "" {
 		return s.finish(events, candidate.FinishReason, finishReason(candidate.FinishReason, s.toolCalls))
@@ -138,7 +141,7 @@ func (s *stream) endRun(events []litellm.Event) []litellm.Event {
 		return events
 	}
 	var final litellm.Block
-	if state := signed(s.model, s.signature); state != nil {
+	if state := signed(s.name, s.model, s.signature); state != nil {
 		final = litellm.TextBlock{State: state}
 		if s.open == "reasoning" {
 			final = litellm.ReasoningBlock{State: state}
@@ -152,5 +155,5 @@ func (s *stream) finish(events []litellm.Event, raw string, reason litellm.Finis
 	events = s.endRun(events)
 	events = s.blocks.CloseAll(events, nil)
 	s.done = true
-	return append(events, litellm.DoneEvent{FinishReason: reason, FinishReasonRaw: raw, Provider: "gemini", Model: s.model})
+	return append(events, litellm.DoneEvent{FinishReason: reason, FinishReasonRaw: raw, Provider: s.name, Model: s.model})
 }

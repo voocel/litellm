@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"time"
 )
 
 // Client runs requests through a Provider. It copies and validates each
@@ -14,7 +13,6 @@ type Client struct {
 	provider           Provider
 	observers          []Observer
 	captureRawResponse bool
-	streamIdleTimeout  time.Duration
 }
 
 // ClientOption configures a Client.
@@ -38,18 +36,6 @@ func New(provider Provider, opts ...ClientOption) (*Client, error) {
 func WithCaptureRawResponse(enabled bool) ClientOption {
 	return func(c *Client) error {
 		c.captureRawResponse = enabled
-		return nil
-	}
-}
-
-// WithStreamIdleTimeout fails a stream, with an error IsStreamIdleError
-// reports, when no event arrives for timeout. Zero disables the check.
-func WithStreamIdleTimeout(timeout time.Duration) ClientOption {
-	return func(c *Client) error {
-		if timeout < 0 {
-			return fmt.Errorf("stream idle timeout cannot be negative")
-		}
-		c.streamIdleTimeout = timeout
 		return nil
 	}
 }
@@ -130,25 +116,7 @@ func (c *Client) Stream(ctx context.Context, req Request) (Stream, error) {
 		return nil, err
 	}
 	stream = newValidatedStream(c.provider.Name(), prepared.Model, stream)
-	stream = newStreamIdleWatchdog(stream, cancel, c.streamIdleTimeout, c.provider.Name())
 	return &observedStream{ctx: streamCtx, cancel: cancel, call: call, inner: stream}, nil
-}
-
-// ListModels lists the provider's models; it fails with a validation error
-// when the provider is not a ModelLister.
-func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
-	if c == nil || c.provider == nil {
-		return nil, NewError("", ErrorTypeValidation, "client has no provider", nil)
-	}
-	lister, ok := c.provider.(ModelLister)
-	if !ok {
-		return nil, NewError(c.provider.Name(), ErrorTypeValidation, fmt.Sprintf("%s provider does not support model listing", c.provider.Name()), nil)
-	}
-	models, err := lister.ListModels(ctx)
-	if err != nil {
-		return nil, WrapError(c.provider.Name(), ErrorTypeProvider, err)
-	}
-	return models, nil
 }
 
 func prepareRequest(req Request) (*Request, error) {

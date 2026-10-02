@@ -76,7 +76,7 @@ func TestNew(t *testing.T) {
 	if _, err := New(Config{APIKey: "key", API: "legacy"}); err == nil || !strings.Contains(err.Error(), `api must be "chat" or "responses"`) {
 		t.Fatalf("unknown API: err = %v", err)
 	}
-	if _, err := New(Config{}); !litellm.IsValidationError(err) {
+	if _, err := New(Config{}); litellm.ErrorTypeOf(err) != litellm.ErrorTypeValidation {
 		t.Fatalf("missing key: err = %v", err)
 	}
 }
@@ -106,7 +106,7 @@ func TestCapabilities(t *testing.T) {
 	for api, want := range map[string][]string{APIChat: chatOptions, APIResponses: responsesOptions} {
 		p, _ := testProvider(t, Config{API: api}, "")
 		caps := p.Capabilities()
-		if !caps.Thinking || !caps.DisableThinking || !caps.ThinkingEffort || caps.ThinkingBudget || !slices.IsSorted(caps.ProviderOptions) || !reflect.DeepEqual(caps.ProviderOptions, sortedCopy(want)) {
+		if caps.MaxTokensRequired || !caps.ThinkingEffort || !caps.DisableThinking || !slices.IsSorted(caps.ProviderOptions) || !reflect.DeepEqual(caps.ProviderOptions, sortedCopy(want)) {
 			t.Fatalf("%s: capabilities = %+v", api, caps)
 		}
 		caps.ProviderOptions[0] = "mutated"
@@ -122,7 +122,7 @@ func TestProviderOptionsFollowAPI(t *testing.T) {
 	tests := []struct {
 		api, option, wantErr string
 	}{
-		{APIChat, ProviderOptionPreviousResponseID, `provider option "previous_response_id" requires Config.API "responses"`},
+		{APIChat, ProviderOptionTruncation, `provider option "truncation" requires Config.API "responses"`},
 		{APIResponses, ProviderOptionLogitBias, `provider option "logit_bias" requires Config.API "chat"`},
 		{APIChat, "unknown", `unsupported provider option "unknown"`},
 		{APIResponses, "unknown", `unsupported provider option "unknown"`},
@@ -140,7 +140,7 @@ func TestProviderOptionsFollowAPI(t *testing.T) {
 			Messages:        []litellm.Message{litellm.UserText("hi")},
 			ProviderOptions: providerOptions(t, map[string]any{test.option: true}),
 		})
-		if test.wantErr == "" && err != nil || test.wantErr != "" && (!litellm.IsValidationError(err) || !strings.Contains(err.Error(), test.wantErr)) {
+		if test.wantErr == "" && err != nil || test.wantErr != "" && (litellm.ErrorTypeOf(err) != litellm.ErrorTypeValidation || !strings.Contains(err.Error(), test.wantErr)) {
 			t.Errorf("%s %s: err = %v, want %q", test.api, test.option, err, test.wantErr)
 		}
 	}
@@ -156,7 +156,7 @@ func TestChatRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tool.Strict = litellm.StrictEnabled
+	tool.Strict = new(true)
 	_, err = p.Chat(context.Background(), &litellm.Request{
 		Model:       "gpt-4.1",
 		MaxTokens:   new(256),
@@ -164,14 +164,13 @@ func TestChatRequest(t *testing.T) {
 		Messages: []litellm.Message{
 			litellm.System("You are helpful."),
 			litellm.User(litellm.Text("describe"), litellm.ImageURL("https://example.test/image.png")),
-			litellm.Assistant(litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)}),
+			litellm.Assistant(litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: `{"q":"x"}`}),
 			litellm.ToolResultText("call_1", "result"),
 		},
 		Tools: []litellm.Tool{tool},
 		ProviderOptions: providerOptions(t, map[string]any{
 			ProviderOptionFrequencyPenalty: 0.4,
 			ProviderOptionMetadata:         map[string]any{"tenant": "acme"},
-			ProviderOptionModalities:       []any{"text"},
 		}),
 	})
 	if err != nil {
@@ -181,7 +180,7 @@ func TestChatRequest(t *testing.T) {
 }
 
 // Chat marks cache breakpoints on content parts; OpenAI sets the TTL for the
-// whole request, so a block TTL is an error.
+// whole request, through prompt_cache_options.
 func TestChatPromptCacheBreakpoint(t *testing.T) {
 	p, got := testProvider(t, Config{}, chatReply)
 	cached := &litellm.CacheControl{}
@@ -189,7 +188,7 @@ func TestChatPromptCacheBreakpoint(t *testing.T) {
 		Model: "m",
 		Messages: []litellm.Message{
 			litellm.User(litellm.TextBlock{Text: "context", Cache: cached}),
-			litellm.Assistant(litellm.ToolUseBlock{ID: "call_1", Name: "f", Arguments: json.RawMessage(`{}`)}),
+			litellm.Assistant(litellm.ToolUseBlock{ID: "call_1", Name: "f", Arguments: `{}`}),
 			{Role: litellm.RoleTool, Blocks: []litellm.Block{litellm.ToolResultBlock{ToolUseID: "call_1", Content: []litellm.Block{litellm.Text("r")}, Cache: cached}}},
 		},
 	})
@@ -201,14 +200,6 @@ func TestChatPromptCacheBreakpoint(t *testing.T) {
 		{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},
 		{"role":"tool","tool_call_id":"call_1","content":[{"type":"text","text":"r","prompt_cache_breakpoint":{"mode":"explicit"}}]}
 	]}`)
-
-	_, err = p.Chat(context.Background(), &litellm.Request{
-		Model:    "m",
-		Messages: []litellm.Message{litellm.User(litellm.TextBlock{Text: "context", Cache: &litellm.CacheControl{TTL: litellm.CacheTTL1h}})},
-	})
-	if !litellm.IsValidationError(err) || !strings.Contains(err.Error(), "prompt_cache_options") {
-		t.Fatalf("TTL: err = %v", err)
-	}
 }
 
 func TestChatStream(t *testing.T) {
@@ -229,9 +220,9 @@ func TestChatStream(t *testing.T) {
 	want := &litellm.Response{
 		Blocks: []litellm.Block{
 			litellm.TextBlock{Text: "hello"},
-			litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
+			litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: `{"q":"x"}`},
 		},
-		Usage:           litellm.Usage{InputTokens: new(4), OutputTokens: new(3), TotalTokens: new(7)},
+		Usage:           litellm.Usage{InputTokens: 4, OutputTokens: 3},
 		Model:           "gpt-4.1",
 		Provider:        "openai",
 		FinishReason:    litellm.FinishReasonToolCall,

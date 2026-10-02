@@ -7,7 +7,6 @@ import (
 	"io"
 	"reflect"
 	"testing"
-	"time"
 )
 
 // callObserver adapts functions to CallObserver; nil functions are skipped.
@@ -130,7 +129,7 @@ func TestObserverSnapshotsAreSharedAndIsolated(t *testing.T) {
 				BlockStart{Index: 1, Block: TextBlock{}},
 				TextDelta{Index: 1, Text: "hi"},
 				BlockEnd{Index: 1, Block: TextBlock{Annotations: []Annotation{{Extra: json.RawMessage(`{}`)}}}},
-				UsageEvent{Usage: Usage{InputTokens: new(1)}},
+				UsageEvent{Usage: Usage{InputTokens: 1}},
 				ProviderEvent{Name: "vendor.event", Raw: json.RawMessage(`{"ok":true}`)},
 				DoneEvent{FinishReason: FinishReasonStop, Provider: "test", Model: "m"},
 			}
@@ -153,8 +152,6 @@ func TestObserverSnapshotsAreSharedAndIsolated(t *testing.T) {
 					if b, ok := e.Block.(TextBlock); ok {
 						b.Annotations[0].Extra[0] = '['
 					}
-				case UsageEvent:
-					*e.Usage.InputTokens = 9
 				case ProviderEvent:
 					e.Raw[0] = '['
 				}
@@ -186,12 +183,12 @@ func TestObserverSnapshotsAreSharedAndIsolated(t *testing.T) {
 		if raw(seen[0][7]) != raw(seen[1][7]) || raw(seen[0][7]) == raw(delivered[7]) {
 			t.Error("observers must share one event snapshot, separate from the caller's")
 		}
-		if string(delivered[7].(ProviderEvent).Raw) != `{"ok":true}` || *delivered[6].(UsageEvent).Usage.InputTokens != 1 {
+		if string(delivered[7].(ProviderEvent).Raw) != `{"ok":true}` {
 			t.Errorf("caller saw observer mutation: %#v", delivered)
 		}
 		reasoning := resp.Blocks[0].(ReasoningBlock)
 		text := resp.Blocks[1].(TextBlock)
-		if string(reasoning.State.Data) != `{}` || string(text.Annotations[0].Extra) != `{}` || *resp.Usage.InputTokens != 1 {
+		if string(reasoning.State.Data) != `{}` || string(text.Annotations[0].Extra) != `{}` {
 			t.Errorf("response saw observer mutation: %#v", resp)
 		}
 	})
@@ -203,10 +200,10 @@ func TestObserverSeesLocalValidationFailure(t *testing.T) {
 		t.Fatal("invalid request reached provider")
 		return nil, nil
 	}}, WithObservers(endObserver(func(r CallResult) { results = append(results, r) })))
-	if _, err := c.Chat(context.Background(), Request{}); !IsValidationError(err) {
+	if _, err := c.Chat(context.Background(), Request{}); ErrorTypeOf(err) != ErrorTypeValidation {
 		t.Fatalf("error=%v", err)
 	}
-	if _, err := c.Stream(context.Background(), Request{}); !IsValidationError(err) {
+	if _, err := c.Stream(context.Background(), Request{}); ErrorTypeOf(err) != ErrorTypeValidation {
 		t.Fatalf("error=%v", err)
 	}
 	if len(results) != 2 {
@@ -321,21 +318,5 @@ func TestObserverProtocolFailureDoesNotPublishDone(t *testing.T) {
 	_, err = Collect(s)
 	if err == nil || done || result.Status != CallFailed || result.Response.Text() != "partial" {
 		t.Fatalf("error=%v done=%v result=%+v", err, done, result)
-	}
-}
-
-func TestObserverIdleTimeoutOnClose(t *testing.T) {
-	for _, closeErr := range []error{nil, context.Canceled} {
-		var result CallResult
-		p := &testProvider{name: "test", streamFunc: func(context.Context, *Request) (Stream, error) { return &testStream{closeErr: closeErr}, nil }}
-		c, _ := New(p, WithStreamIdleTimeout(time.Hour), WithObservers(endObserver(func(r CallResult) { result = r })))
-		s, err := c.Stream(context.Background(), Request{Model: "m", Messages: hi})
-		if err != nil {
-			t.Fatal(err)
-		}
-		s.(*observedStream).inner.(*streamIdleWatchdog).fire()
-		if err = s.Close(); !IsStreamIdleError(err) || result.Status != CallFailed || !IsStreamIdleError(result.Err) {
-			t.Fatalf("close=%v result=%+v", err, result)
-		}
 	}
 }

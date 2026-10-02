@@ -13,7 +13,7 @@ import (
 )
 
 func TestNewRequiresAPIKey(t *testing.T) {
-	if _, err := New(Config{}); !litellm.IsValidationError(err) || err.Error() != "anthropic: api key is required" {
+	if _, err := New(Config{}); litellm.ErrorTypeOf(err) != litellm.ErrorTypeValidation || err.Error() != "anthropic: api key is required" {
 		t.Fatalf("err = %v", err)
 	}
 	if _, err := New(Config{APIKeyFunc: func(context.Context) (string, error) { return "k", nil }}); err != nil {
@@ -26,8 +26,8 @@ func TestCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true, ThinkingBudget: true, MaxTokensRequired: true, ProviderOptions: []string{
-		"container", "context_management", "mcp_servers", "metadata", "output_config", "service_tier", "tool_choice", "tools", "top_k",
+	want := litellm.Capabilities{MaxTokensRequired: true, ThinkingEffort: true, DisableThinking: true, ProviderOptions: []string{
+		"metadata", "output_config", "service_tier", "thinking", "tool_choice", "top_k",
 	}}
 	if got := p.Capabilities(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Capabilities = %+v", got)
@@ -66,13 +66,32 @@ func TestChatSendsHeaders(t *testing.T) {
 	}
 }
 
+// A named endpoint tags its replies and replay state with its name.
+func TestConfigName(t *testing.T) {
+	p, err := New(Config{Name: "proxy", APIKey: "k", HTTPClient: doFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(
+			`{"content":[{"type":"thinking","thinking":"t","signature":"sig"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`,
+		))}, nil
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := p.Chat(t.Context(), &litellm.Request{Model: "claude", MaxTokens: new(64), Messages: []litellm.Message{litellm.UserText("hi")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Provider != "proxy" || resp.Blocks[0].(litellm.ReasoningBlock).State.Provider != "proxy" {
+		t.Fatalf("response = %#v", resp)
+	}
+}
+
 func TestChatRejectsInvalidRequestBeforeSending(t *testing.T) {
 	p := newTestProvider(t, func(*http.Request) (*http.Response, error) {
 		t.Fatal("request sent")
 		return nil, nil
 	})
 	_, err := p.Chat(t.Context(), &litellm.Request{Model: "claude", Messages: []litellm.Message{litellm.UserText("hi")}})
-	if !litellm.IsValidationError(err) || err.Error() != "anthropic: max_tokens is required by the Messages API" {
+	if litellm.ErrorTypeOf(err) != litellm.ErrorTypeValidation || err.Error() != "anthropic: max_tokens is required by the Messages API" {
 		t.Fatalf("err = %v", err)
 	}
 }

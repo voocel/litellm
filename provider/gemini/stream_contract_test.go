@@ -22,8 +22,8 @@ func TestStreamCollectMatchesCompleteResponse(t *testing.T) {
 	}`), &complete); err != nil {
 		t.Fatal(err)
 	}
-	want := convertResponse(&complete, "m")
-	stream := newStream(streamResponse(testgolden.ReadFixtureString(t, "../../testdata/gemini/stream.jsonl")), "m")
+	want := convertResponse(&complete, "gemini", "m")
+	stream := newStream(streamResponse(testgolden.ReadFixtureString(t, "../../testdata/gemini/stream.jsonl")), "gemini", "m")
 	defer stream.Close()
 	got, err := litellm.Collect(stream)
 	if err != nil {
@@ -49,7 +49,7 @@ func TestStreamSignaturesMatchCompleteResponse(t *testing.T) {
 			`{"candidates":[{"content":{"parts":[{"text":"lo"}]}}]}`,
 			`{"candidates":[{"content":{"parts":[{"text":"","thoughtSignature":"sig"}]},"finishReason":"STOP"}]}`,
 		},
-		want: []litellm.Block{litellm.Text("Hello"), litellm.TextBlock{State: signed("m", "sig")}},
+		want: []litellm.Block{litellm.Text("Hello"), litellm.TextBlock{State: signed("gemini", "m", "sig")}},
 	}, {
 		name:     "signed text parts stay apart",
 		complete: `{"candidates":[{"content":{"parts":[{"text":"a","thoughtSignature":"s1"},{"text":"b","thoughtSignature":"s2"}]},"finishReason":"STOP"}]}`,
@@ -57,7 +57,7 @@ func TestStreamSignaturesMatchCompleteResponse(t *testing.T) {
 			`{"candidates":[{"content":{"parts":[{"text":"a","thoughtSignature":"s1"}]}}]}`,
 			`{"candidates":[{"content":{"parts":[{"text":"b","thoughtSignature":"s2"}]},"finishReason":"STOP"}]}`,
 		},
-		want: []litellm.Block{litellm.TextBlock{Text: "a", State: signed("m", "s1")}, litellm.TextBlock{Text: "b", State: signed("m", "s2")}},
+		want: []litellm.Block{litellm.TextBlock{Text: "a", State: signed("gemini", "m", "s1")}, litellm.TextBlock{Text: "b", State: signed("gemini", "m", "s2")}},
 	}, {
 		name: "signed thought parts stay apart",
 		complete: `{"candidates":[{"content":{"parts":[
@@ -71,9 +71,9 @@ func TestStreamSignaturesMatchCompleteResponse(t *testing.T) {
 			`{"candidates":[{"content":{"parts":[{"text":"answer"}]},"finishReason":"MALFORMED_FUNCTION_CALL","finishMessage":"Malformed function call: f("}]}`,
 		},
 		want: []litellm.Block{
-			litellm.ReasoningBlock{Text: "a", State: signed("m", "s1")},
+			litellm.ReasoningBlock{Text: "a", State: signed("gemini", "m", "s1")},
 			litellm.ReasoningBlock{Text: "b"},
-			litellm.ReasoningBlock{Text: "c", State: signed("m", "s2")},
+			litellm.ReasoningBlock{Text: "c", State: signed("gemini", "m", "s2")},
 			litellm.TextBlock{Text: "answer"},
 		},
 	}, {
@@ -84,7 +84,7 @@ func TestStreamSignaturesMatchCompleteResponse(t *testing.T) {
 			`{"candidates":[{"content":{"parts":[{"text":"b","thoughtSignature":"sig"}]}}]}`,
 			`{"candidates":[{"content":{"parts":[{"text":"c"}]},"finishReason":"STOP"}]}`,
 		},
-		want: []litellm.Block{litellm.Text("a"), litellm.TextBlock{Text: "b", State: signed("m", "sig")}, litellm.Text("c")},
+		want: []litellm.Block{litellm.Text("a"), litellm.TextBlock{Text: "b", State: signed("gemini", "m", "sig")}, litellm.Text("c")},
 	}, {
 		name:     "text after a trailing signature stays separate",
 		complete: `{"candidates":[{"content":{"parts":[{"text":"ab"},{"text":"","thoughtSignature":"sig"},{"text":"c"}]},"finishReason":"STOP"}]}`,
@@ -94,18 +94,18 @@ func TestStreamSignaturesMatchCompleteResponse(t *testing.T) {
 			`{"candidates":[{"content":{"parts":[{"text":"","thoughtSignature":"sig"}]}}]}`,
 			`{"candidates":[{"content":{"parts":[{"text":"c"}]},"finishReason":"STOP"}]}`,
 		},
-		want: []litellm.Block{litellm.Text("ab"), litellm.TextBlock{State: signed("m", "sig")}, litellm.Text("c")},
+		want: []litellm.Block{litellm.Text("ab"), litellm.TextBlock{State: signed("gemini", "m", "sig")}, litellm.Text("c")},
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			var complete response
 			if err := json.Unmarshal([]byte(tc.complete), &complete); err != nil {
 				t.Fatal(err)
 			}
-			want := convertResponse(&complete, "m")
+			want := convertResponse(&complete, "gemini", "m")
 			if !reflect.DeepEqual(want.Blocks, tc.want) {
 				t.Fatalf("complete blocks = %#v", want.Blocks)
 			}
-			stream := newStream(streamResponse("data: "+strings.Join(tc.chunks, "\ndata: ")+"\n"), "m")
+			stream := newStream(streamResponse("data: "+strings.Join(tc.chunks, "\ndata: ")+"\n"), "gemini", "m")
 			defer stream.Close()
 			got, err := litellm.Collect(stream)
 			if err != nil {
@@ -115,7 +115,7 @@ func TestStreamSignaturesMatchCompleteResponse(t *testing.T) {
 				t.Fatalf("stream=%#v\ncomplete=%#v", got, want)
 			}
 			for _, blocks := range [][]litellm.Block{want.Blocks, got.Blocks} {
-				contents, _, err := convertMessages([]litellm.Message{litellm.Assistant(blocks...)})
+				contents, _, err := convertMessages([]litellm.Message{litellm.Assistant(blocks...)}, "gemini")
 				if err != nil {
 					t.Fatal(err)
 				}

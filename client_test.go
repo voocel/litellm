@@ -8,7 +8,6 @@ import (
 	"math"
 	"strings"
 	"testing"
-	"time"
 )
 
 type testProvider struct {
@@ -34,15 +33,6 @@ func (p *testProvider) Stream(ctx context.Context, req *Request) (Stream, error)
 		return p.streamFunc(ctx, req)
 	}
 	return &testStream{events: append(textEvents(0, "ok"), DoneEvent{FinishReason: FinishReasonStop, Provider: p.name, Model: req.Model})}, nil
-}
-
-type testModelProvider struct {
-	*testProvider
-	listFunc func(context.Context) ([]ModelInfo, error)
-}
-
-func (p *testModelProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
-	return p.listFunc(ctx)
 }
 
 // testStream replays events, then returns err (io.EOF when nil). Close
@@ -112,14 +102,14 @@ func TestClientSendsHistoryUnchanged(t *testing.T) {
 	}
 	// A partial history with a provider-specific ID is the caller's business.
 	messages := []Message{
-		Assistant(ToolUseBlock{ID: "provider:id!", Name: "tool", Arguments: json.RawMessage(`{"q":`)}),
+		Assistant(ToolUseBlock{ID: "provider:id!", Name: "tool", Arguments: `{"q":`}),
 		UserText("next"),
 	}
 	if _, err := client.Chat(context.Background(), Request{Model: "m", Messages: messages}); err != nil {
 		t.Fatal(err)
 	}
 	tool := provider.lastReq.Messages[0].Blocks[0].(ToolUseBlock)
-	if tool.ID != "provider:id!" || string(tool.Arguments) != `{"q":` || len(provider.lastReq.Messages) != 2 {
+	if tool.ID != "provider:id!" || tool.Arguments != `{"q":` || len(provider.lastReq.Messages) != 2 {
 		t.Fatalf("Client modified history: %#v", provider.lastReq.Messages)
 	}
 }
@@ -150,13 +140,13 @@ func TestValidateRequest(t *testing.T) {
 		{"json schema without name", Request{Model: "m", Messages: hi, ResponseFormat: &ResponseFormat{Type: ResponseFormatJSONSchema, JSONSchema: &JSONSchema{}}}, "requires name"},
 		{"tool choice mode and name", Request{Model: "m", Messages: hi, ToolChoice: &ToolChoice{Mode: ToolChoiceAuto, Name: "t"}}, "mutually exclusive"},
 		{"unknown tool choice mode", Request{Model: "m", Messages: hi, ToolChoice: &ToolChoice{Mode: "any"}}, "unsupported tool choice mode"},
-		{"invalid thinking", Request{Model: "m", Messages: hi, Thinking: &Thinking{Mode: ThinkingDisabled, Effort: "high"}}, "thinking options cannot be set"},
+		{"invalid thinking", Request{Model: "m", Messages: hi, Thinking: &Thinking{Disabled: true, Effort: "high"}}, "thinking options cannot be set"},
 		// Vendor values are the vendor's to judge.
 		{"tool reference inside tool result", Request{Model: "m", Messages: []Message{
 			Assistant(ToolUseBlock{ID: "call", Name: "tool"}),
 			ToolResult("call", ToolReferenceBlock{ToolName: "lookup"}),
 		}}, ""},
-		{"vendor values", Request{Model: "any-model", Messages: []Message{User(TextBlock{Text: "x", Cache: &CacheControl{TTL: "24h"}})},
+		{"vendor values", Request{Model: "any-model", Messages: []Message{User(TextBlock{Text: "x", Cache: &CacheControl{}})},
 			Temperature: new(7.5), Thinking: &Thinking{Effort: "ultra", BudgetTokens: new(1 << 30)}, ProviderOptions: ProviderOptions{"anything": json.RawMessage(`1`)}}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -171,7 +161,7 @@ func TestValidateRequest(t *testing.T) {
 				}
 				return
 			}
-			if !IsValidationError(err) || !strings.Contains(err.Error(), tc.want) {
+			if ErrorTypeOf(err) != ErrorTypeValidation || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want validation error containing %q", err, tc.want)
 			}
 		})
@@ -188,11 +178,10 @@ func TestThinkingValidate(t *testing.T) {
 		{"zero value is enabled", &Thinking{}, ""},
 		{"effort", &Thinking{Effort: "max"}, ""},
 		{"budget", &Thinking{BudgetTokens: new(1), IncludeOutput: true}, ""},
-		{"disabled", &Thinking{Mode: ThinkingDisabled}, ""},
-		{"disabled with effort", &Thinking{Mode: ThinkingDisabled, Effort: "low"}, "cannot be set when thinking is disabled"},
-		{"disabled with output", &Thinking{Mode: ThinkingDisabled, IncludeOutput: true}, "cannot be set when thinking is disabled"},
+		{"disabled", &Thinking{Disabled: true}, ""},
+		{"disabled with effort", &Thinking{Disabled: true, Effort: "low"}, "cannot be set when thinking is disabled"},
+		{"disabled with output", &Thinking{Disabled: true, IncludeOutput: true}, "cannot be set when thinking is disabled"},
 		{"zero budget", &Thinking{BudgetTokens: new(0)}, "must be positive"},
-		{"unknown mode", &Thinking{Mode: 7}, "unknown thinking mode"},
 		{"invalid effort", &Thinking{Effort: "\xff"}, "valid UTF-8"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -203,22 +192,10 @@ func TestThinkingValidate(t *testing.T) {
 				}
 				return
 			}
-			if !IsValidationError(err) || !strings.Contains(err.Error(), tc.want) {
+			if ErrorTypeOf(err) != ErrorTypeValidation || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
 		})
-	}
-}
-
-func TestStrictModeValue(t *testing.T) {
-	for mode, want := range map[StrictMode][2]bool{
-		StrictDefault:  {false, false},
-		StrictEnabled:  {true, true},
-		StrictDisabled: {false, true},
-	} {
-		if strict, set := mode.Value(); strict != want[0] || set != want[1] {
-			t.Errorf("%d.Value() = %v, %v; want %v", mode, strict, set, want)
-		}
 	}
 }
 
@@ -230,7 +207,7 @@ func TestClientDeepClonesRequestForProvider(t *testing.T) {
 		TopP:        new(0.9),
 		Messages: []Message{
 			User(TextBlock{Text: "hi", Annotations: []Annotation{{Type: "note", Extra: json.RawMessage(`{"n":1}`)}}}),
-			Assistant(ToolUseBlock{ID: "call_1", Name: "tool", Arguments: json.RawMessage(`{}`), Cache: &CacheControl{TTL: CacheTTL1h}}),
+			Assistant(ToolUseBlock{ID: "call_1", Name: "tool", Arguments: `{}`, Cache: &CacheControl{}}),
 			ToolResultText("call_1", "ok"),
 		},
 		Tools:          []Tool{{Name: "tool", Parameters: Schema(`{"type":"object"}`)}},
@@ -249,9 +226,6 @@ func TestClientDeepClonesRequestForProvider(t *testing.T) {
 			cloned.ResponseFormat.JSONSchema.Schema[0] = '['
 			*cloned.Thinking.BudgetTokens = 4096
 			cloned.Messages[0].Blocks[0].(TextBlock).Annotations[0].Extra[0] = '['
-			tool := cloned.Messages[1].Blocks[0].(ToolUseBlock)
-			tool.Arguments[0] = '['
-			tool.Cache.TTL = CacheTTL5m
 			cloned.ToolChoice.Name = "mutated"
 			cloned.ProviderOptions["metadata"][0] = '['
 			return &Response{Blocks: []Block{Text("ok")}}, nil
@@ -273,57 +247,8 @@ func TestClientDeepClonesRequestForProvider(t *testing.T) {
 	if extra := req.Messages[0].Blocks[0].(TextBlock).Annotations[0].Extra; string(extra) != `{"n":1}` {
 		t.Fatalf("annotation extra mutated: %s", extra)
 	}
-	if tool := req.Messages[1].Blocks[0].(ToolUseBlock); string(tool.Arguments) != `{}` || tool.Cache.TTL != CacheTTL1h {
-		t.Fatalf("tool block mutated: %#v", tool)
-	}
 	if req.ToolChoice.Name != "tool" || string(req.ProviderOptions["metadata"]) != `{"tags":["a","b"]}` {
 		t.Fatal("tool choice or provider options mutated")
-	}
-}
-
-func TestStreamIdleTimeout(t *testing.T) {
-	client, err := New(&testProvider{
-		name: "test",
-		streamFunc: func(ctx context.Context, req *Request) (Stream, error) {
-			return blockingStream{ctx: ctx}, nil
-		},
-	}, WithStreamIdleTimeout(10*time.Millisecond))
-	if err != nil {
-		t.Fatal(err)
-	}
-	stream, err := client.Stream(context.Background(), Request{Model: "m", Messages: hi})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stream.Close()
-	if _, err = stream.Next(); !IsTimeoutError(err) || !IsStreamIdleError(err) {
-		t.Fatalf("expected stream idle timeout, got %v", err)
-	}
-}
-
-func TestStreamIdleTimeoutStopsAfterDoneEvent(t *testing.T) {
-	client, err := New(&testProvider{
-		name: "test",
-		streamFunc: func(ctx context.Context, req *Request) (Stream, error) {
-			return &testStream{events: []Event{DoneEvent{FinishReason: FinishReasonStop}}}, nil
-		},
-	}, WithStreamIdleTimeout(10*time.Millisecond))
-	if err != nil {
-		t.Fatal(err)
-	}
-	stream, err := client.Stream(context.Background(), Request{Model: "m", Messages: hi})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stream.Close()
-	if event, err := stream.Next(); err != nil {
-		t.Fatal(err)
-	} else if _, ok := event.(DoneEvent); !ok {
-		t.Fatalf("event = %#v, want DoneEvent", event)
-	}
-	time.Sleep(20 * time.Millisecond)
-	if _, err = stream.Next(); !errors.Is(err, io.EOF) {
-		t.Fatalf("expected EOF after done, got %v", err)
 	}
 }
 
@@ -378,7 +303,15 @@ func TestClientWarnsOnMalformedToolArguments(t *testing.T) {
 	client, err := New(&testProvider{
 		name: "test",
 		chatFunc: func(context.Context, *Request) (*Response, error) {
-			return &Response{FinishReason: FinishReasonToolCall, Blocks: []Block{ToolUseBlock{ID: "call_bad", Name: "lookup", Arguments: []byte(`{"q":`)}}}, nil
+			return &Response{FinishReason: FinishReasonToolCall, Blocks: []Block{ToolUseBlock{ID: "call_bad", Name: "lookup", Arguments: `{"q":`}}}, nil
+		},
+		streamFunc: func(context.Context, *Request) (Stream, error) {
+			return &testStream{events: []Event{
+				BlockStart{Index: 0, Block: ToolUseBlock{ID: "call_bad", Name: "lookup"}},
+				ToolUseDelta{Index: 0, Arguments: `{"q":`},
+				BlockEnd{Index: 0, Block: ToolUseBlock{}},
+				DoneEvent{FinishReason: FinishReasonToolCall},
+			}}, nil
 		},
 	})
 	if err != nil {
@@ -388,7 +321,7 @@ func TestClientWarnsOnMalformedToolArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls := resp.ToolCalls(); len(calls) != 1 || string(calls[0].Arguments) != `{"q":` {
+	if calls := resp.ToolCalls(); len(calls) != 1 || calls[0].Arguments != `{"q":` {
 		t.Fatalf("tool calls = %#v, want raw malformed args", calls)
 	}
 	if len(resp.Warnings) != 1 || resp.Warnings[0].Code != "litellm.tool_arguments_invalid" || resp.Warnings[0].Provider != "test" {
@@ -397,22 +330,30 @@ func TestClientWarnsOnMalformedToolArguments(t *testing.T) {
 	if resp.Provider != "test" || resp.Model != "m" {
 		t.Fatalf("provider/model = %q/%q", resp.Provider, resp.Model)
 	}
+	stream, err := client.Stream(context.Background(), Request{Model: "m", Messages: hi})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if resp, err = Collect(stream); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Warnings) != 1 || resp.Warnings[0].Code != "litellm.tool_arguments_invalid" {
+		t.Fatalf("stream warnings = %+v, want exactly one", resp.Warnings)
+	}
 }
 
 func TestClientWrapsProviderErrors(t *testing.T) {
 	boom := errors.New("boom")
-	provider := &testModelProvider{
-		testProvider: &testProvider{
-			name:     "test",
-			chatFunc: func(context.Context, *Request) (*Response, error) { return nil, boom },
-			streamFunc: func(_ context.Context, req *Request) (Stream, error) {
-				if req.Model == "start" {
-					return nil, boom
-				}
-				return &testStream{events: textEvents(0, "partial")[:2], err: boom}, nil
-			},
+	provider := &testProvider{
+		name:     "test",
+		chatFunc: func(context.Context, *Request) (*Response, error) { return nil, boom },
+		streamFunc: func(_ context.Context, req *Request) (Stream, error) {
+			if req.Model == "start" {
+				return nil, boom
+			}
+			return &testStream{events: textEvents(0, "partial")[:2], err: boom}, nil
 		},
-		listFunc: func(context.Context) ([]ModelInfo, error) { return nil, boom },
 	}
 	client, err := New(provider)
 	if err != nil {
@@ -421,30 +362,19 @@ func TestClientWrapsProviderErrors(t *testing.T) {
 	ctx := context.Background()
 	_, chatErr := client.Chat(ctx, Request{Model: "m", Messages: hi})
 	_, startErr := client.Stream(ctx, Request{Model: "start", Messages: hi})
-	_, listErr := client.ListModels(ctx)
 	stream, err := client.Stream(ctx, Request{Model: "m", Messages: hi})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stream.Close()
 	resp, runtimeErr := Collect(stream)
-	for name, err := range map[string]error{"chat": chatErr, "stream start": startErr, "list": listErr, "stream runtime": runtimeErr} {
-		if !IsProviderError(err) || !errors.Is(err, boom) || !strings.HasPrefix(err.Error(), "test: ") {
+	for name, err := range map[string]error{"chat": chatErr, "stream start": startErr, "stream runtime": runtimeErr} {
+		if ErrorTypeOf(err) != ErrorTypeProvider || !errors.Is(err, boom) || !strings.HasPrefix(err.Error(), "test: ") {
 			t.Errorf("%s: err = %v, want wrapped provider error", name, err)
 		}
 	}
 	if resp.Text() != "partial" {
 		t.Fatalf("partial response = %#v", resp)
-	}
-}
-
-func TestClientListModelsRequiresLister(t *testing.T) {
-	client, err := New(&testProvider{name: "test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.ListModels(context.Background()); !IsValidationError(err) {
-		t.Fatalf("err = %v, want validation error", err)
 	}
 }
 
@@ -481,46 +411,27 @@ func TestProviderOptionsJSONBoundary(t *testing.T) {
 		t.Fatal("Decode shares storage")
 	}
 	var unsupported *json.UnsupportedTypeError
-	if err := options.Set("invalid", func() {}); !IsValidationError(err) || !errors.As(err, &unsupported) {
+	if err := options.Set("invalid", func() {}); ErrorTypeOf(err) != ErrorTypeValidation || !errors.As(err, &unsupported) {
 		t.Fatalf("encoding error = %v", err)
 	}
 	if _, exists := options["invalid"]; exists {
 		t.Fatal("failed Set changed options")
 	}
 	for _, raw := range []json.RawMessage{nil, json.RawMessage(`{"unterminated":`), json.RawMessage(`1 2`), {'"', 0xff, '"'}} {
-		if _, err := (ProviderOptions{"invalid": raw}).Decode(); !IsValidationError(err) {
+		if _, err := (ProviderOptions{"invalid": raw}).Decode(); ErrorTypeOf(err) != ErrorTypeValidation {
 			t.Fatalf("raw %q: %v", raw, err)
 		}
 	}
 }
 
-func TestUsageSnapshotsAndKnownZero(t *testing.T) {
-	if (Usage{}).HasTokens() {
-		t.Fatal("unknown usage has tokens")
-	}
-	usage := Usage{InputTokens: new(0), OutputTokens: new(2)}
-	if !usage.HasTokens() {
-		t.Fatal("known zero is unknown")
-	}
+func TestLaterUsageReplacesEarlier(t *testing.T) {
 	collector := newCollector()
-	if _, _, err := collector.Apply(UsageEvent{Usage: Usage{InputTokens: new(5)}}); err != nil {
-		t.Fatal(err)
+	for _, usage := range []Usage{{InputTokens: 5}, {OutputTokens: 2}} {
+		if _, _, err := collector.Apply(UsageEvent{Usage: usage}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, _, err := collector.Apply(UsageEvent{Usage: usage}); err != nil {
-		t.Fatal(err)
-	}
-	*usage.InputTokens = 9
-	first := collector.Response()
-	if *first.Usage.InputTokens != 0 || first.Usage.TotalTokens != nil {
-		t.Fatalf("later usage must replace earlier and be copied: %+v", first.Usage)
-	}
-	*first.Usage.InputTokens = 8
-	if *collector.Response().Usage.InputTokens != 0 {
-		t.Fatal("Response shares collector usage")
-	}
-	original := &Response{Usage: Usage{InputTokens: new(0)}}
-	*cloneResponse(original).Usage.InputTokens = 6
-	if *original.Usage.InputTokens != 0 {
-		t.Fatal("response snapshot shares usage")
+	if got := collector.Response().Usage; got != (Usage{OutputTokens: 2}) {
+		t.Fatalf("usage = %+v, want the last snapshot", got)
 	}
 }

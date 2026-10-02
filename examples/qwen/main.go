@@ -68,7 +68,7 @@ func runStream(ctx context.Context, client *litellm.Client) {
 			litellm.UserText("Explain DashScope's OpenAI-compatible endpoint in one sentence."),
 		},
 		MaxTokens: new(256),
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled},
+		Thinking:  &litellm.Thinking{},
 	})
 	if err != nil {
 		log.Fatal(err)

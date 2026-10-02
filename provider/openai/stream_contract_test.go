@@ -22,7 +22,7 @@ func TestResponsesStreamMatchesCompleteResponse(t *testing.T) {
 	if err := json.Unmarshal([]byte(last), &completed); err != nil {
 		t.Fatal(err)
 	}
-	want := convertResponsesResponse(&completed.Response, "m")
+	want := convertResponsesResponse(&completed.Response, "openai", "m")
 
 	p, got := testProvider(t, Config{API: APIResponses}, fixture)
 	stream, err := p.Stream(context.Background(), &litellm.Request{Model: "m", Messages: []litellm.Message{litellm.UserText("hi")}})

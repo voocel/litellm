@@ -14,7 +14,7 @@ import (
 )
 
 func TestStreamFixtureEvents(t *testing.T) {
-	got, err := drain(newStream(fixtureResponse(t, "eventstream.bin"), "claude"))
+	got, err := drain(newStream(fixtureResponse(t, "eventstream.bin"), "bedrock", "claude"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func TestStreamFixtureEvents(t *testing.T) {
 		litellm.ToolUseDelta{Index: 1, Arguments: `{"q":`},
 		litellm.ToolUseDelta{Index: 1, Arguments: `"x"}`},
 		litellm.BlockEnd{Index: 1},
-		litellm.UsageEvent{Usage: litellm.Usage{InputTokens: new(10), OutputTokens: new(7), TotalTokens: new(17), CacheReadTokens: new(2), CacheWriteTokens: new(3)}},
+		litellm.UsageEvent{Usage: litellm.Usage{InputTokens: 10, OutputTokens: 7, CacheReadTokens: 2, CacheWriteTokens: 3}},
 		litellm.BlockEnd{Index: 0},
 		litellm.DoneEvent{FinishReason: litellm.FinishReasonToolCall, FinishReasonRaw: "tool_use", Provider: "bedrock", Model: "claude"},
 	}
@@ -44,11 +44,11 @@ func TestStreamMatchesCompleteResponse(t *testing.T) {
 	}`), &complete); err != nil {
 		t.Fatal(err)
 	}
-	got, err := litellm.Collect(newStream(fixtureResponse(t, "eventstream.bin"), "claude"))
+	got, err := litellm.Collect(newStream(fixtureResponse(t, "eventstream.bin"), "bedrock", "claude"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := convertResponse(&complete, "claude"); !reflect.DeepEqual(got, want) {
+	if want := convertResponse(&complete, "bedrock", "claude"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("stream   %#v\ncomplete %#v", got, want)
 	}
 }
@@ -136,7 +136,7 @@ func TestStreamEvents(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := drain(newStream(&http.Response{Body: eventStream(test.frames...)}, "m"))
+			got, err := drain(newStream(&http.Response{Body: eventStream(test.frames...)}, "bedrock", "m"))
 			if err != nil || !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("events = %#v, err = %v\nwant %#v", got, err, test.want)
 			}
@@ -145,6 +145,11 @@ func TestStreamEvents(t *testing.T) {
 }
 
 func TestStreamErrors(t *testing.T) {
+	is := func(want litellm.ErrorType, temporary bool) func(error) bool {
+		return func(err error) bool {
+			return litellm.ErrorTypeOf(err) == want && litellm.IsTemporaryError(err) == temporary
+		}
+	}
 	for _, test := range []struct {
 		name string
 		body io.ReadCloser
@@ -154,29 +159,32 @@ func TestStreamErrors(t *testing.T) {
 		{
 			name: "throttling exception",
 			body: fixtureResponse(t, "eventstream_exception.bin").Body,
-			is:   func(err error) bool { return litellm.IsRateLimitError(err) && litellm.IsTemporaryError(err) },
-			msg:  "bedrock: throttlingException: stream error: Too many requests, please wait before trying again.",
+			is: func(err error) bool {
+				return litellm.ErrorTypeOf(err) == litellm.ErrorTypeRateLimit && litellm.IsTemporaryError(err)
+			},
+			msg: "bedrock: throttlingException: stream error: Too many requests, please wait before trying again.",
 		},
-		{name: "validation exception", body: eventStream(exception("validationException", `{"message":"bad input"}`)), is: litellm.IsValidationError, msg: "bedrock: validationException: stream error: bad input"},
-		{name: "unavailable exception", body: eventStream(exception("serviceUnavailableException", `{"message":"busy"}`)), is: litellm.IsOverloadedError},
-		{name: "model exception", body: eventStream(exception("modelStreamErrorException", `{}`)), is: litellm.IsProviderError, msg: "bedrock: modelStreamErrorException: stream error: modelStreamErrorException"},
+		{name: "validation exception", body: eventStream(exception("validationException", `{"message":"bad input"}`)), is: is(litellm.ErrorTypeValidation, false), msg: "bedrock: validationException: stream error: bad input"},
+		{name: "unavailable exception", body: eventStream(exception("serviceUnavailableException", `{"message":"busy"}`)), is: is(litellm.ErrorTypeOverloaded, true)},
+		{name: "model exception", body: eventStream(exception("modelStreamErrorException", `{}`)), is: is(litellm.ErrorTypeProvider, true), msg: "bedrock: modelStreamErrorException: stream error: modelStreamErrorException"},
 		{
 			name: "error frame",
 			body: eventStream(eventFrame{headers: [][2]string{{":message-type", "error"}, {":error-code", "ThrottlingException"}, {":error-message", "slow down"}}}),
-			is:   litellm.IsRateLimitError,
+			is:   is(litellm.ErrorTypeRateLimit, true),
 			msg:  "bedrock: ThrottlingException: stream error: slow down",
 		},
 		{
+			// The Client reports the truncation as a temporary network error.
 			name: "EOF before metadata",
 			body: eventStream(event("contentBlockDelta", `{"contentBlockIndex":0,"delta":{"text":"partial"}}`)),
-			is:   litellm.IsProviderError,
-			msg:  "bedrock: stream ended before metadata",
+			is:   func(err error) bool { return err == io.EOF },
 		},
-		{name: "corrupt frame", body: io.NopCloser(strings.NewReader(strings.Repeat("\x00", 16))), is: litellm.IsProviderError},
-		{name: "malformed payload", body: eventStream(event("contentBlockDelta", `{`)), is: litellm.IsProviderError},
+		{name: "server fault", body: eventStream(exception("internalServerException", `{"message":"boom"}`)), is: is(litellm.ErrorTypeProvider, true)},
+		{name: "corrupt frame", body: io.NopCloser(strings.NewReader(strings.Repeat("\x00", 16))), is: is(litellm.ErrorTypeProvider, false)},
+		{name: "malformed payload", body: eventStream(event("contentBlockDelta", `{`)), is: is(litellm.ErrorTypeProvider, false)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			s := newStream(&http.Response{Body: test.body}, "m")
+			s := newStream(&http.Response{Body: test.body}, "bedrock", "m")
 			_, err := drain(s)
 			if err == nil || !test.is(err) || (test.msg != "" && err.Error() != test.msg) {
 				t.Fatalf("err = %v", err)

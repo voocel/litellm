@@ -15,6 +15,7 @@ import (
 	"github.com/voocel/litellm/provider/bedrock"
 	"github.com/voocel/litellm/provider/compat"
 	"github.com/voocel/litellm/provider/deepseek"
+	"github.com/voocel/litellm/provider/gateway"
 	"github.com/voocel/litellm/provider/gemini"
 	"github.com/voocel/litellm/provider/glm"
 	"github.com/voocel/litellm/provider/grok"
@@ -30,11 +31,16 @@ import (
 // that belong to one provider. Bedrock signs requests with Region and
 // Credentials instead of an API key, headers or user agent.
 type Config struct {
+	// Name identifies the provider in responses, errors and ProviderState;
+	// empty uses the provider's own name. Give each endpoint of one protocol
+	// its own name, so replay state reaches only the endpoint that issued it.
+	Name string
 	// APIKey authenticates requests; APIKeyFunc, when set, resolves it per
 	// request instead.
 	APIKey     string
 	APIKeyFunc func(context.Context) (string, error)
-	// BaseURL overrides the provider's endpoint; compat requires it.
+	// BaseURL overrides the provider's endpoint; compat and gateway require
+	// it, gateway as the URL its Server is served at.
 	BaseURL string
 	// HTTPClient sends requests; nil uses http.DefaultClient. Wrap it with
 	// retry.NewHTTPClient to retry.
@@ -67,8 +73,8 @@ func New(name string, cfg Config) (litellm.Provider, error) {
 // CatalogName returns the name LiteLLM's model list, which package catalog
 // loads, files model under when the provider called name serves it: OpenAI,
 // Anthropic and Bedrock models are unprefixed, others take the list's prefix
-// for the vendor, such as "xai/" for grok. It reports false for compat and
-// unknown names, whose vendor is not known.
+// for the vendor, such as "xai/" for grok. It reports false for compat,
+// gateway and unknown names, whose vendor is not known.
 func CatalogName(name, model string) (string, bool) {
 	prefix, ok := catalogPrefixes[name]
 	return prefix + model, ok
@@ -89,20 +95,26 @@ func Names() []string {
 var builders = map[string]func(Config) (litellm.Provider, error){
 	"anthropic": func(c Config) (litellm.Provider, error) {
 		return asProvider(anthropic.New(anthropic.Config{
-			APIKey: c.APIKey, APIKeyFunc: c.APIKeyFunc, BaseURL: c.BaseURL,
+			Name: c.Name, APIKey: c.APIKey, APIKeyFunc: c.APIKeyFunc, BaseURL: c.BaseURL,
 			HTTPClient: c.HTTPClient, UserAgent: c.UserAgent, Headers: c.Headers,
 		}))
 	},
 	"bedrock": func(c Config) (litellm.Provider, error) {
 		return asProvider(bedrock.New(bedrock.Config{
-			Region: c.Region, BaseURL: c.BaseURL, Credentials: c.Credentials, HTTPClient: c.HTTPClient,
+			Name: c.Name, Region: c.Region, BaseURL: c.BaseURL, Credentials: c.Credentials, HTTPClient: c.HTTPClient,
 		}))
 	},
 	"compat":   chatCompletions(compat.New),
 	"deepseek": chatCompletions(deepseek.New),
 	"gemini": func(c Config) (litellm.Provider, error) {
 		return asProvider(gemini.New(gemini.Config{
-			APIKey: c.APIKey, APIKeyFunc: c.APIKeyFunc, BaseURL: c.BaseURL,
+			Name: c.Name, APIKey: c.APIKey, APIKeyFunc: c.APIKeyFunc, BaseURL: c.BaseURL,
+			HTTPClient: c.HTTPClient, UserAgent: c.UserAgent, Headers: c.Headers,
+		}))
+	},
+	"gateway": func(c Config) (litellm.Provider, error) {
+		return asProvider(gateway.New(gateway.Config{
+			Name: c.Name, BaseURL: c.BaseURL, APIKey: c.APIKey, APIKeyFunc: c.APIKeyFunc,
 			HTTPClient: c.HTTPClient, UserAgent: c.UserAgent, Headers: c.Headers,
 		}))
 	},
@@ -113,7 +125,7 @@ var builders = map[string]func(Config) (litellm.Provider, error){
 	"ollama":  chatCompletions(ollama.New),
 	"openai": func(c Config) (litellm.Provider, error) {
 		return asProvider(openai.New(openai.Config{
-			API: c.API, APIKey: c.APIKey, APIKeyFunc: c.APIKeyFunc, BaseURL: c.BaseURL,
+			Name: c.Name, API: c.API, APIKey: c.APIKey, APIKeyFunc: c.APIKeyFunc, BaseURL: c.BaseURL,
 			HTTPClient: c.HTTPClient, UserAgent: c.UserAgent, Headers: c.Headers,
 		}))
 	},
@@ -125,7 +137,7 @@ var builders = map[string]func(Config) (litellm.Provider, error){
 func chatCompletions[P litellm.Provider](build func(compat.Config) (P, error)) func(Config) (litellm.Provider, error) {
 	return func(c Config) (litellm.Provider, error) {
 		return asProvider(build(compat.Config{
-			APIKey: c.APIKey, APIKeyFunc: c.APIKeyFunc, BaseURL: c.BaseURL,
+			Name: c.Name, APIKey: c.APIKey, APIKeyFunc: c.APIKeyFunc, BaseURL: c.BaseURL,
 			HTTPClient: c.HTTPClient, UserAgent: c.UserAgent, Headers: c.Headers,
 			AllowUnknownProviderOptions: c.AllowUnknownProviderOptions,
 		}))

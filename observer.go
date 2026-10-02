@@ -124,7 +124,7 @@ func (c *callObservation) end(status CallStatus, resp *Response, err error) {
 func callStatus(err error) CallStatus {
 	// Timeout cleanup may also return context.Canceled; retain the timeout as
 	// the outcome rather than interpreting its cancellation as a caller action.
-	if errors.Is(err, context.DeadlineExceeded) || IsTimeoutError(err) {
+	if errors.Is(err, context.DeadlineExceeded) || ErrorTypeOf(err) == ErrorTypeTimeout {
 		return CallFailed
 	}
 	if errors.Is(err, context.Canceled) {

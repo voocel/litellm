@@ -38,7 +38,7 @@ func TestCollectAssemblesInterleavedBlocks(t *testing.T) {
 		Blocks: []Block{
 			TextBlock{Text: "hello"},
 			ReasoningBlock{Text: "think", State: testState(`"sig"`)},
-			ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
+			ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: `{"q":"x"}`},
 		},
 		Provider:        "test",
 		Model:           "m",
@@ -61,7 +61,7 @@ func TestBlockEndMergesMetadataOnly(t *testing.T) {
 		BlockEnd{Index: 1, Block: ReasoningBlock{Text: "ignored", State: testState(`"late"`)}},
 		BlockStart{Index: 2, Block: ToolUseBlock{Name: "lookup"}},
 		ToolUseDelta{Index: 2, Arguments: `{}`},
-		BlockEnd{Index: 2, Block: ToolUseBlock{ID: "call", Arguments: json.RawMessage(`"ignored"`), State: testState(`"s"`)}},
+		BlockEnd{Index: 2, Block: ToolUseBlock{ID: "call", Arguments: `"ignored"`, State: testState(`"s"`)}},
 		BlockStart{Index: 3, Block: ToolUseBlock{ID: "empty", Name: "noop"}},
 		BlockEnd{Index: 3},
 		DoneEvent{Provider: "test", Model: "m"},
@@ -72,9 +72,9 @@ func TestBlockEndMergesMetadataOnly(t *testing.T) {
 	want := []Block{
 		TextBlock{Text: "hello", Annotations: []Annotation{{Type: "url", URL: "u"}}, Logprobs: json.RawMessage(`[]`), State: testState(`"t"`)},
 		ReasoningBlock{Text: "r", Summary: true, State: testState(`"late"`)},
-		ToolUseBlock{ID: "call", Name: "lookup", Arguments: json.RawMessage(`{}`), State: testState(`"s"`)},
+		ToolUseBlock{ID: "call", Name: "lookup", Arguments: `{}`, State: testState(`"s"`)},
 		// An argument-less call keeps valid JSON arguments.
-		ToolUseBlock{ID: "empty", Name: "noop", Arguments: json.RawMessage(`{}`)},
+		ToolUseBlock{ID: "empty", Name: "noop", Arguments: `{}`},
 	}
 	if !reflect.DeepEqual(resp.Blocks, want) {
 		t.Fatalf("blocks = %#v\nwant %#v", resp.Blocks, want)
@@ -244,8 +244,13 @@ func TestValidatedStreamStopsAtTerminalEvent(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stream := newValidatedStream("test", "m", &testStream{events: tc.events})
-			if _, err := stream.Next(); !errors.Is(err, tc.want) {
+			_, err := stream.Next()
+			if !errors.Is(err, tc.want) {
 				t.Fatalf("first error=%v want=%v", err, tc.want)
+			}
+			// A reply cut short is a dropped connection, which a retry may get past.
+			if tc.want != nil && (ErrorTypeOf(err) != ErrorTypeNetwork || !IsTemporaryError(err)) {
+				t.Fatalf("truncated stream error = %#v", err)
 			}
 			if event, err := stream.Next(); event != nil || err != io.EOF {
 				t.Fatalf("after terminal: event=%#v err=%v", event, err)
@@ -254,6 +259,8 @@ func TestValidatedStreamStopsAtTerminalEvent(t *testing.T) {
 	}
 }
 
+// TestMalformedToolArgumentsWarnOnce pins the one layer that warns: the
+// Client, not every collector of the stream.
 func TestMalformedToolArgumentsWarnOnce(t *testing.T) {
 	events := func() []Event {
 		return []Event{
@@ -263,18 +270,21 @@ func TestMalformedToolArgumentsWarnOnce(t *testing.T) {
 			DoneEvent{Provider: "test", Model: "m"},
 		}
 	}
-	for name, stream := range map[string]Stream{
-		"external": &testStream{events: events()},
-		"client":   newValidatedStream("test", "m", &testStream{events: events()}),
+	for name, tc := range map[string]struct {
+		stream   Stream
+		warnings int
+	}{
+		"external": {&testStream{events: events()}, 0},
+		"client":   {newValidatedStream("test", "m", &testStream{events: events()}), 1},
 	} {
-		resp, err := Collect(stream)
+		resp, err := Collect(tc.stream)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if len(resp.Warnings) != 1 || resp.Warnings[0].Code != "litellm.tool_arguments_invalid" {
+		if len(resp.Warnings) != tc.warnings || tc.warnings > 0 && resp.Warnings[0].Code != "litellm.tool_arguments_invalid" {
 			t.Fatalf("%s: warnings = %+v", name, resp.Warnings)
 		}
-		if got := string(resp.ToolCalls()[0].Arguments); got != `{"bad":` {
+		if got := resp.ToolCalls()[0].Arguments; got != `{"bad":` {
 			t.Fatalf("%s: arguments = %q", name, got)
 		}
 	}

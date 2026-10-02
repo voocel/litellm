@@ -32,9 +32,9 @@ func TestChatResponse(t *testing.T) {
           }
         ]`)}},
 					litellm.TextBlock{Text: "hello"},
-					litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
+					litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: `{"q":"x"}`},
 				},
-				Usage:           litellm.Usage{InputTokens: new(3), OutputTokens: new(4), TotalTokens: new(7), ReasoningTokens: new(2)},
+				Usage:           litellm.Usage{InputTokens: 3, OutputTokens: 4, ReasoningTokens: 2},
 				Model:           "provider-model",
 				Provider:        "test",
 				FinishReason:    litellm.FinishReasonToolCall,
@@ -80,7 +80,7 @@ func TestChatResponse(t *testing.T) {
 			newFn: plain,
 			body:  `{"choices":[{"message":{"tool_calls":[{"id":"c","type":"function","function":{"name":"f","arguments":""}}]},"finish_reason":"tool_calls"}]}`,
 			want: &litellm.Response{
-				Blocks: []litellm.Block{litellm.ToolUseBlock{ID: "c", Name: "f", Arguments: json.RawMessage(`{}`)}},
+				Blocks: []litellm.Block{litellm.ToolUseBlock{ID: "c", Name: "f", Arguments: `{}`}},
 				Model:  "m", Provider: "test", FinishReason: litellm.FinishReasonToolCall, FinishReasonRaw: "tool_calls",
 			},
 		},
@@ -89,16 +89,7 @@ func TestChatResponse(t *testing.T) {
 			newFn: plain,
 			body:  `{"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":1,"total_tokens":10,"prompt_tokens_details":{"cached_tokens":4,"cache_write_tokens":2}}}`,
 			want: &litellm.Response{
-				Usage: litellm.Usage{InputTokens: new(9), OutputTokens: new(1), TotalTokens: new(10), CacheReadTokens: new(4), CacheWriteTokens: new(2)},
-				Model: "m", Provider: "test",
-			},
-		},
-		{
-			name:  "unbilled cache writes",
-			newFn: compattest.Spec(openaicompat.Spec{Name: "test", CacheWritesUnbilled: true}),
-			body:  `{"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":5}}}`,
-			want: &litellm.Response{
-				Usage: litellm.Usage{InputTokens: new(9), OutputTokens: new(1), CacheReadTokens: new(5), CacheWriteTokens: new(0)},
+				Usage: litellm.Usage{InputTokens: 9, OutputTokens: 1, CacheReadTokens: 4, CacheWriteTokens: 2},
 				Model: "m", Provider: "test",
 			},
 		},
@@ -107,7 +98,7 @@ func TestChatResponse(t *testing.T) {
 			newFn: plain,
 			body:  `{"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":1,"prompt_cache_hit_tokens":5}}`,
 			want: &litellm.Response{
-				Usage: litellm.Usage{InputTokens: new(9), OutputTokens: new(1), CacheReadTokens: new(5)},
+				Usage: litellm.Usage{InputTokens: 9, OutputTokens: 1, CacheReadTokens: 5},
 				Model: "m", Provider: "test",
 			},
 		},
@@ -126,14 +117,14 @@ func TestChatResponse(t *testing.T) {
 }
 
 func TestChatErrors(t *testing.T) {
-	if _, err := compattest.Chat(t, plain, `{"choices":[{"message":{"content":[{"type":"audio"}]}}]}`); !litellm.IsProviderError(err) || !strings.Contains(err.Error(), `unsupported content part type "audio"`) {
+	if _, err := compattest.Chat(t, plain, `{"choices":[{"message":{"content":[{"type":"audio"}]}}]}`); litellm.ErrorTypeOf(err) != litellm.ErrorTypeProvider || !strings.Contains(err.Error(), `unsupported content part type "audio"`) {
 		t.Fatalf("unknown part: %v", err)
 	}
-	if _, err := compattest.Chat(t, plain, `{`); !litellm.IsProviderError(err) {
+	if _, err := compattest.Chat(t, plain, `{`); litellm.ErrorTypeOf(err) != litellm.ErrorTypeProvider {
 		t.Fatalf("malformed body: %v", err)
 	}
 	// Gateways report upstream failures with HTTP 200 and an error body.
-	if _, err := compattest.Chat(t, plain, `{"error":{"code":429,"message":"Rate limited"}}`); !litellm.IsRateLimitError(err) {
+	if _, err := compattest.Chat(t, plain, `{"error":{"code":429,"message":"Rate limited"}}`); litellm.ErrorTypeOf(err) != litellm.ErrorTypeRateLimit {
 		t.Fatalf("error body: %v", err)
 	}
 }

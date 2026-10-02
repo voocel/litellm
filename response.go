@@ -23,7 +23,6 @@ func cloneResponse(resp *Response) *Response {
 	}
 	out := *resp
 	out.Blocks = cloneBlocks(resp.Blocks)
-	out.Usage = resp.Usage.Clone()
 	out.Warnings = append([]Warning(nil), resp.Warnings...)
 	out.Raw = cloneBytes(resp.Raw)
 	return &out
@@ -71,58 +70,15 @@ func (r *Response) Reasoning() string {
 	return out
 }
 
-// Usage contains reported token counts. A nil count is unknown; a pointer to
-// zero is a known zero. InputTokens includes cache reads and writes;
-// OutputTokens includes reasoning. Detail counts are subsets, not additions.
+// Usage holds the token counts a response reported; a count the vendor did
+// not report is zero. InputTokens includes cache reads and writes;
+// OutputTokens includes reasoning.
 type Usage struct {
-	InputTokens      *int
-	OutputTokens     *int
-	TotalTokens      *int
-	ReasoningTokens  *int
-	CacheReadTokens  *int
-	CacheWriteTokens *int
-}
-
-// Input returns InputTokens and whether it is known.
-func (u Usage) Input() (int, bool) { return tokenCount(u.InputTokens) }
-
-// Output returns OutputTokens and whether it is known.
-func (u Usage) Output() (int, bool) { return tokenCount(u.OutputTokens) }
-
-// Total returns TotalTokens and whether it is known.
-func (u Usage) Total() (int, bool) { return tokenCount(u.TotalTokens) }
-
-// Reasoning returns ReasoningTokens and whether it is known.
-func (u Usage) Reasoning() (int, bool) { return tokenCount(u.ReasoningTokens) }
-
-// CacheRead returns CacheReadTokens and whether it is known.
-func (u Usage) CacheRead() (int, bool) { return tokenCount(u.CacheReadTokens) }
-
-// CacheWrite returns CacheWriteTokens and whether it is known.
-func (u Usage) CacheWrite() (int, bool) { return tokenCount(u.CacheWriteTokens) }
-
-func tokenCount(count *int) (int, bool) {
-	if count == nil {
-		return 0, false
-	}
-	return *count, true
-}
-
-// HasTokens reports whether any token count is known, including a known zero.
-func (u Usage) HasTokens() bool {
-	return u.InputTokens != nil || u.OutputTokens != nil || u.TotalTokens != nil ||
-		u.ReasoningTokens != nil || u.CacheReadTokens != nil || u.CacheWriteTokens != nil
-}
-
-// Clone returns an independent copy of the reported counts.
-func (u Usage) Clone() Usage {
-	u.InputTokens = clonePtr(u.InputTokens)
-	u.OutputTokens = clonePtr(u.OutputTokens)
-	u.TotalTokens = clonePtr(u.TotalTokens)
-	u.ReasoningTokens = clonePtr(u.ReasoningTokens)
-	u.CacheReadTokens = clonePtr(u.CacheReadTokens)
-	u.CacheWriteTokens = clonePtr(u.CacheWriteTokens)
-	return u
+	InputTokens      int `json:"input_tokens,omitempty"`
+	OutputTokens     int `json:"output_tokens,omitempty"`
+	ReasoningTokens  int `json:"reasoning_tokens,omitempty"`
+	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 }
 
 // FinishReason is a normalized stop reason; FinishReasonRaw keeps the vendor
@@ -144,7 +100,7 @@ const (
 // Warning reports a non-fatal issue, such as dropped content or a generated ID.
 // Code has the form "<source>.<snake_case>", such as "litellm.tool_arguments_invalid".
 type Warning struct {
-	Code     string
-	Provider string
-	Message  string
+	Code     string `json:"code"`
+	Provider string `json:"provider,omitempty"`
+	Message  string `json:"message"`
 }

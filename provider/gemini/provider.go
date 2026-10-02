@@ -16,6 +16,9 @@ import (
 
 // Config configures the Gemini API client. An API key is required.
 type Config struct {
+	// Name, when set, names the provider instead of "gemini", as a
+	// compatible endpoint should: provider state and errors carry it.
+	Name string
 	// APIKey authenticates requests; APIKeyFunc, when set, resolves it per
 	// request instead.
 	APIKey     string
@@ -31,8 +34,7 @@ type Config struct {
 	Headers map[string]string
 }
 
-// Provider implements litellm.Provider, litellm.CapabilityProvider and
-// litellm.ModelLister.
+// Provider implements litellm.Provider and litellm.CapabilityProvider.
 type Provider struct {
 	cfg Config
 }
@@ -52,14 +54,17 @@ func New(cfg Config) (*Provider, error) {
 	return &Provider{cfg: cfg}, nil
 }
 
-// Name returns "gemini".
+// Name returns Config.Name, or else "gemini".
 func (p *Provider) Name() string {
+	if p.cfg.Name != "" {
+		return p.cfg.Name
+	}
 	return "gemini"
 }
 
 // Capabilities reports the static protocol facts.
 func (p *Provider) Capabilities() litellm.Capabilities {
-	return litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true, ThinkingBudget: true, ProviderOptions: sortedOptions()}
+	return litellm.Capabilities{ThinkingEffort: true, DisableThinking: true, ProviderOptions: sortedOptions()}
 }
 
 // Chat sends a generateContent request.
@@ -77,7 +82,7 @@ func (p *Provider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Res
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeProvider, "decode response", err)
 	}
-	out := convertResponse(&parsed, req.Model)
+	out := convertResponse(&parsed, p.Name(), req.Model)
 	out.Raw = data
 	return out, nil
 }
@@ -88,11 +93,11 @@ func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.St
 	if err != nil {
 		return nil, err
 	}
-	return newStream(resp, req.Model), nil
+	return newStream(resp, p.Name(), req.Model), nil
 }
 
 func (p *Provider) post(ctx context.Context, req *litellm.Request, stream bool) (*http.Response, error) {
-	body, err := buildRequest(req)
+	body, err := buildRequest(req, p.Name())
 	if err != nil {
 		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
 	}
@@ -113,62 +118,6 @@ func (p *Provider) post(ctx context.Context, req *litellm.Request, stream bool) 
 		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
 	}
 	return wire.Do(p.cfg.HTTPClient, httpReq, p.Name(), "request")
-}
-
-// ListModels lists all pages of models available to the API key.
-func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) {
-	models := make([]litellm.ModelInfo, 0)
-	var pageToken string
-	for {
-		payload, err := p.listModelsPage(ctx, pageToken)
-		if err != nil {
-			return nil, err
-		}
-		for _, item := range payload.Models {
-			id := strings.TrimPrefix(item.Name, "models/")
-			name := item.DisplayName
-			if name == "" {
-				name = id
-			}
-			models = append(models, litellm.ModelInfo{
-				ID:               id,
-				Name:             name,
-				Provider:         p.Name(),
-				Description:      item.Description,
-				InputTokenLimit:  item.InputTokenLimit,
-				OutputTokenLimit: item.OutputTokenLimit,
-			})
-		}
-		pageToken = payload.NextPageToken
-		if pageToken == "" {
-			return models, nil
-		}
-	}
-}
-
-func (p *Provider) listModelsPage(ctx context.Context, pageToken string) (*modelList, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(p.cfg.BaseURL, "/")+"/v1beta/models", nil)
-	if err != nil {
-		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeInternal, "create models request", err)
-	}
-	if pageToken != "" {
-		query := httpReq.URL.Query()
-		query.Set("pageToken", pageToken)
-		httpReq.URL.RawQuery = query.Encode()
-	}
-	if err := p.setHeaders(ctx, httpReq); err != nil {
-		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
-	}
-	resp, err := wire.Do(p.cfg.HTTPClient, httpReq, p.Name(), "models request")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	var payload modelList
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeProvider, "decode models response", err)
-	}
-	return &payload, nil
 }
 
 func (p *Provider) setHeaders(ctx context.Context, req *http.Request) error {

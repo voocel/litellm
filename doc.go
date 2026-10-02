@@ -77,7 +77,14 @@ The SDK is intentionally not a gateway, router, agent runtime, account system,
 or request scheduler. It binds one Client to one Provider and exposes explicit
 configuration and structural validation. It maps structure only: it does not
 infer model features, validate vendor values locally, or rewrite user input;
-the vendor API is the authority. ProviderOptions carry native wire fields, and
-optional usage counters distinguish unknown from zero.
+the vendor API is the authority. ProviderOptions carry native wire fields.
+Usage counts are plain ints; a count the vendor does not report is zero.
+
+# Errors
+
+Errors are *Error values. Switch on ErrorTypeOf to act on a failure, and use
+IsTemporaryError to tell whether a fresh request may succeed: a stream cut off
+before its end is a temporary network error, and a call the caller's context
+cancelled is ErrorTypeCanceled.
 */
 package litellm

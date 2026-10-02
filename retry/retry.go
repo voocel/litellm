@@ -29,9 +29,10 @@ type Policy struct {
 	Multiplier   float64
 	// Jitter varies each delay by up to ±25%.
 	Jitter bool
-	// RespectRetryAfter uses the server's Retry-After instead, even beyond
-	// MaxDelay. One beyond MaxRetryAfter, 60s by default, ends retrying with
-	// the response, whose error reports the wait in RetryAfter.
+	// RespectRetryAfter uses the wait the server suggests instead, in a
+	// Retry-After header or a Google API error body, even beyond MaxDelay.
+	// One beyond MaxRetryAfter, 60s by default, ends retrying with the
+	// response, whose error reports the wait in RetryAfter.
 	RespectRetryAfter bool
 	MaxRetryAfter     time.Duration
 }
@@ -96,10 +97,14 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, err
 		}
 		// A body that cannot be resent ends retrying with the response as is.
-		if attempt == policy.MaxAttempts || (req.Body != nil && req.GetBody == nil) || !temporary(resp) {
+		if attempt == policy.MaxAttempts || (req.Body != nil && req.GetBody == nil) {
 			return resp, nil
 		}
-		delay, ok := policy.delay(attempt, resp)
+		temp, retryAfter := temporary(resp)
+		if !temp {
+			return resp, nil
+		}
+		delay, ok := policy.delay(attempt, retryAfter)
 		if !ok {
 			return resp, nil
 		}
@@ -146,12 +151,10 @@ func normalizePolicy(policy Policy) Policy {
 }
 
 // delay returns the wait before the next attempt, or false when the server
-// asks for a longer one than MaxRetryAfter.
-func (p Policy) delay(attempt int, resp *http.Response) (time.Duration, bool) {
-	if p.RespectRetryAfter {
-		if retryAfter := parseRetryAfter(resp); retryAfter > 0 {
-			return retryAfter, retryAfter <= p.MaxRetryAfter
-		}
+// asks, with retryAfter, for a longer one than MaxRetryAfter.
+func (p Policy) delay(attempt int, retryAfter time.Duration) (time.Duration, bool) {
+	if p.RespectRetryAfter && retryAfter > 0 {
+		return retryAfter, retryAfter <= p.MaxRetryAfter
 	}
 	delay := p.InitialDelay
 	for i := 1; i < attempt; i++ {
@@ -174,12 +177,13 @@ func (p Policy) delay(attempt int, resp *http.Response) (time.Duration, bool) {
 	return delay, true
 }
 
-// temporary classifies a failed response as the provider will report it. The
-// status decides unless the body can rule a retry out; the body prefix read
-// for that is put back.
-func temporary(resp *http.Response) bool {
+// temporary classifies a failed response as the provider will report it:
+// whether it is temporary, and the wait the server suggests. The status
+// decides unless the body can rule a retry out; the body prefix read for
+// that is put back.
+func temporary(resp *http.Response) (bool, time.Duration) {
 	if resp.StatusCode < 400 || !wire.HTTPError("", resp.StatusCode, nil, "").Temporary {
-		return false
+		return false, 0
 	}
 	var data []byte
 	if resp.Body != nil {
@@ -189,14 +193,8 @@ func temporary(resp *http.Response) bool {
 			io.Closer
 		}{io.MultiReader(bytes.NewReader(data), resp.Body), resp.Body}
 	}
-	return wire.HTTPError("", resp.StatusCode, resp.Header, string(data)).Temporary
-}
-
-func parseRetryAfter(resp *http.Response) time.Duration {
-	if resp == nil {
-		return 0
-	}
-	return wire.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+	e := wire.HTTPError("", resp.StatusCode, resp.Header, string(data))
+	return e.Temporary, e.RetryAfter
 }
 
 func sleep(ctx context.Context, delay time.Duration) error {

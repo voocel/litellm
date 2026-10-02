@@ -41,6 +41,7 @@ func itemKey(output int) partKey { return partKey{output, -1} }
 type responsesStream struct {
 	resp      *http.Response
 	sse       *wire.SSEReader
+	name      string // the provider's
 	pending   []litellm.Event
 	done      bool
 	requested string // the requested model, for ProviderState
@@ -56,10 +57,11 @@ type responsesStream struct {
 	sequence  int
 }
 
-func newResponsesStream(resp *http.Response, model string) *responsesStream {
+func newResponsesStream(resp *http.Response, name, model string) *responsesStream {
 	return &responsesStream{
 		resp:      resp,
-		sse:       wire.NewSSEReader(resp.Body, "openai"),
+		sse:       wire.NewSSEReader(resp.Body, name),
+		name:      name,
 		requested: model,
 		model:     model,
 		messages:  make(map[int]itemState),
@@ -82,14 +84,16 @@ func (s *responsesStream) Next() (event litellm.Event, err error) {
 		}
 		frame, err := s.sse.Next()
 		if errors.Is(err, io.EOF) {
-			return nil, litellm.NewError("openai", litellm.ErrorTypeProvider, "stream ended before response.completed", nil)
+			// Before response.completed: the Client reports the truncation
+			// as a retryable network error.
+			return nil, io.EOF
 		}
 		if err != nil {
 			return nil, err
 		}
 		var e responsesEvent
 		if err := json.Unmarshal([]byte(frame.Data), &e); err != nil {
-			return nil, litellm.NewError("openai", litellm.ErrorTypeProvider, "parse stream event", err)
+			return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "parse stream event", err)
 		}
 		e.Type = cmp.Or(frame.Name, e.Type)
 		// Resumed streams may repeat events; sequence numbers identify them.
@@ -123,7 +127,7 @@ func (s *responsesStream) events(events []litellm.Event, e responsesEvent, raw j
 				s.messages[e.OutputIndex] = itemState{e.Item.ID, e.Item.Phase}
 				return events, nil
 			case "function_call":
-				tool := litellm.ToolUseBlock{ID: e.Item.CallID, Name: e.Item.Name, State: itemState{ID: e.Item.ID}.state(s.requested)}
+				tool := litellm.ToolUseBlock{ID: e.Item.CallID, Name: e.Item.Name, State: itemState{ID: e.Item.ID}.state(s.name, s.requested)}
 				s.tools[e.OutputIndex] = tool
 				s.toolCalls = true
 				events, _ = s.blocks.Open(events, itemKey(e.OutputIndex), tool)
@@ -149,10 +153,10 @@ func (s *responsesStream) events(events []litellm.Event, e responsesEvent, raw j
 				delete(s.messages, e.OutputIndex)
 				return events, nil
 			case "function_call":
-				final := litellm.ToolUseBlock{ID: e.Item.CallID, Name: e.Item.Name, State: itemState{ID: e.Item.ID}.state(s.requested)}
+				final := litellm.ToolUseBlock{ID: e.Item.CallID, Name: e.Item.Name, State: itemState{ID: e.Item.ID}.state(s.name, s.requested)}
 				return s.blocks.Close(events, itemKey(e.OutputIndex), final), nil
 			case "reasoning":
-				block := reasoningBlock(*e.Item, s.requested)
+				block := reasoningBlock(*e.Item, s.name, s.requested)
 				events, _ = s.blocks.Open(events, itemKey(e.OutputIndex), litellm.ReasoningBlock{Summary: block.Summary})
 				return s.blocks.Close(events, itemKey(e.OutputIndex), litellm.ReasoningBlock{State: block.State}), nil
 			}
@@ -215,33 +219,33 @@ func (s *responsesStream) events(events []litellm.Event, e responsesEvent, raw j
 			return nil
 		})
 		s.done = true
-		return append(events, litellm.DoneEvent{FinishReason: reasonCode, FinishReasonRaw: reasonRaw, Provider: "openai", Model: s.model}), nil
+		return append(events, litellm.DoneEvent{FinishReason: reasonCode, FinishReasonRaw: reasonRaw, Provider: s.name, Model: s.model}), nil
 	case "response.failed":
 		var code, message string
 		if e.Response != nil && e.Response.Error != nil {
 			code, message = e.Response.Error.Code, e.Response.Error.Message
 		}
-		return nil, wire.StreamError("openai", code, "response failed: "+message)
+		return nil, wire.StreamError(s.name, code, "response failed: "+message)
 	case "error":
 		code, message := e.Code, e.Message
 		if e.Error != nil {
 			code, message = cmp.Or(e.Error.Code, e.Error.Type, code), cmp.Or(e.Error.Message, message)
 		}
-		return nil, wire.StreamError("openai", code, "stream error: "+message)
+		return nil, wire.StreamError(s.name, code, "stream error: "+message)
 	case "":
-		return nil, litellm.NewError("openai", litellm.ErrorTypeProvider, "stream event missing type", nil)
+		return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "stream event missing type", nil)
 	}
 	return append(events, litellm.ProviderEvent{Name: e.Type, Raw: raw}), nil
 }
 
 // text opens a content part of the message item at output.
 func (s *responsesStream) text(output int) litellm.TextBlock {
-	return litellm.TextBlock{State: s.messages[output].state(s.requested)}
+	return litellm.TextBlock{State: s.messages[output].state(s.name, s.requested)}
 }
 
 func (s *responsesStream) finalText(key partKey) litellm.TextBlock {
 	block := s.parts[key]
-	block.State = s.messages[key.output].state(s.requested)
+	block.State = s.messages[key.output].state(s.name, s.requested)
 	return block
 }
 

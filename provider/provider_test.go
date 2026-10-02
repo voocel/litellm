@@ -15,7 +15,7 @@ import (
 // Every name builds the provider of that name.
 func TestNamesBuild(t *testing.T) {
 	names := Names()
-	if len(names) != 13 || !slices.IsSorted(names) {
+	if len(names) != 14 || !slices.IsSorted(names) {
 		t.Fatalf("names = %v", names)
 	}
 	cfg := Config{APIKey: "k", BaseURL: "https://example.test", Credentials: bedrock.StaticCredentials("id", "secret", "")}
@@ -27,14 +27,19 @@ func TestNamesBuild(t *testing.T) {
 		if p.Name() != name {
 			t.Fatalf("New(%q) built %q", name, p.Name())
 		}
+		named := cfg
+		named.Name = "custom"
+		if p, err := New(name, named); err != nil || p.Name() != "custom" {
+			t.Fatalf("New(%q) with a name built %v, %v", name, p, err)
+		}
 	}
 }
 
 func TestNewUnknown(t *testing.T) {
-	if p, err := New("nope", Config{}); p != nil || !litellm.IsValidationError(err) {
+	if p, err := New("nope", Config{}); p != nil || litellm.ErrorTypeOf(err) != litellm.ErrorTypeValidation {
 		t.Fatalf("New = %v, %v", p, err)
 	}
-	if p, err := New("bedrock", Config{}); p != nil || !litellm.IsValidationError(err) {
+	if p, err := New("bedrock", Config{}); p != nil || litellm.ErrorTypeOf(err) != litellm.ErrorTypeValidation {
 		t.Fatalf("bedrock without credentials = %v, %v", p, err)
 	}
 }
@@ -79,7 +84,7 @@ func TestNewPassesConfig(t *testing.T) {
 		}
 		_, err = client.Chat(context.Background(), litellm.Request{Model: "m", Messages: []litellm.Message{litellm.UserText("hi")}, ProviderOptions: options})
 		if !allow {
-			if capture.req != nil || !litellm.IsValidationError(err) {
+			if capture.req != nil || litellm.ErrorTypeOf(err) != litellm.ErrorTypeValidation {
 				t.Fatalf("unlisted option sent: %v", err)
 			}
 			continue
@@ -92,10 +97,11 @@ func TestNewPassesConfig(t *testing.T) {
 	}
 }
 
-// Every provider but compat, which serves no known vendor, has a list name.
+// Every provider but compat and gateway, which serve no known vendor, has a
+// list name.
 func TestCatalogName(t *testing.T) {
 	for _, name := range Names() {
-		if _, ok := CatalogName(name, "m"); ok == (name == "compat") {
+		if _, ok := CatalogName(name, "m"); ok == (name == "compat" || name == "gateway") {
 			t.Errorf("CatalogName(%q) ok = %v", name, ok)
 		}
 	}

@@ -19,10 +19,9 @@ const (
 	ProviderOptionSeed             = "seed"
 	ProviderOptionLogitBias        = "logit_bias"
 	ProviderOptionUser             = "user"
-	ProviderOptionN                = "n"
 )
 
-// New sends Thinking.Effort as reasoning_effort and ThinkingDisabled as
+// New sends Thinking.Effort as reasoning_effort and Thinking.Disabled as
 // reasoning_effort "none". No API key is required.
 func New(cfg Config) (*Provider, error) {
 	return openaicompat.New(cfg, openaicompat.Spec{
@@ -30,7 +29,7 @@ func New(cfg Config) (*Provider, error) {
 		BaseURL: "http://localhost:11434/v1",
 		Options: []string{
 			ProviderOptionFrequencyPenalty, ProviderOptionPresencePenalty, ProviderOptionSeed,
-			ProviderOptionLogitBias, ProviderOptionUser, ProviderOptionN,
+			ProviderOptionLogitBias, ProviderOptionUser,
 		},
 		ReasoningFields: []string{"reasoning", "reasoning_content", "thinking"},
 	})

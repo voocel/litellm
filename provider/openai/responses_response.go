@@ -49,11 +49,11 @@ type itemState struct {
 
 // state returns the State of a block from an output item with the given id
 // and phase, nil when there are neither.
-func (s itemState) state(model string) *litellm.ProviderState {
+func (s itemState) state(provider, model string) *litellm.ProviderState {
 	if s == (itemState{}) {
 		return nil
 	}
-	return wire.NewState("openai", model, s)
+	return wire.NewState(provider, model, s)
 }
 
 func (i *responsesOutputItem) UnmarshalJSON(data []byte) error {
@@ -74,22 +74,21 @@ type responsesContentPart struct {
 }
 
 type responsesUsage struct {
-	InputTokens        *int `json:"input_tokens"`
-	OutputTokens       *int `json:"output_tokens"`
-	TotalTokens        *int `json:"total_tokens"`
-	InputTokensDetails *struct {
-		CachedTokens     *int `json:"cached_tokens"`
-		CacheWriteTokens *int `json:"cache_write_tokens"`
+	InputTokens        int `json:"input_tokens"`
+	OutputTokens       int `json:"output_tokens"`
+	InputTokensDetails struct {
+		CachedTokens     int `json:"cached_tokens"`
+		CacheWriteTokens int `json:"cache_write_tokens"`
 	} `json:"input_tokens_details"`
-	OutputTokensDetails *struct {
-		ReasoningTokens *int `json:"reasoning_tokens"`
+	OutputTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
 	} `json:"output_tokens_details"`
 }
 
 // convertResponsesResponse maps output items in order. Item types without a
 // Block equivalent, such as hosted tool calls, remain available in Raw.
-func convertResponsesResponse(resp *responsesResponse, model string) *litellm.Response {
-	out := &litellm.Response{Provider: "openai", Model: model, Usage: convertResponsesUsage(resp.Usage)}
+func convertResponsesResponse(resp *responsesResponse, provider, model string) *litellm.Response {
+	out := &litellm.Response{Provider: provider, Model: model, Usage: convertResponsesUsage(resp.Usage)}
 	if resp.Model != "" {
 		out.Model = resp.Model
 	}
@@ -99,19 +98,19 @@ func convertResponsesResponse(resp *responsesResponse, model string) *litellm.Re
 		case "message":
 			for _, part := range item.Content {
 				if block, refusal, ok := contentPartBlock(part); ok {
-					block.State = itemState{item.ID, item.Phase}.state(model)
+					block.State = itemState{item.ID, item.Phase}.state(provider, model)
 					out.Blocks = append(out.Blocks, block)
 					refused = refused || refusal
 				}
 			}
 		case "function_call":
 			out.Blocks = append(out.Blocks, litellm.ToolUseBlock{
-				ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(cmp.Or(item.Arguments, "{}")),
-				State: itemState{ID: item.ID}.state(model),
+				ID: item.CallID, Name: item.Name, Arguments: cmp.Or(item.Arguments, "{}"),
+				State: itemState{ID: item.ID}.state(provider, model),
 			})
 			toolCalls = true
 		case "reasoning":
-			out.Blocks = append(out.Blocks, reasoningBlock(item, model))
+			out.Blocks = append(out.Blocks, reasoningBlock(item, provider, model))
 		}
 	}
 	reason := ""
@@ -124,7 +123,7 @@ func convertResponsesResponse(resp *responsesResponse, model string) *litellm.Re
 
 // reasoningBlock uses the summary, or the raw reasoning text some models
 // return instead. The item is its State.
-func reasoningBlock(item responsesOutputItem, model string) litellm.ReasoningBlock {
+func reasoningBlock(item responsesOutputItem, provider, model string) litellm.ReasoningBlock {
 	var summaries, texts []string
 	for _, summary := range item.Summary {
 		summaries = append(summaries, summary.Text)
@@ -134,7 +133,7 @@ func reasoningBlock(item responsesOutputItem, model string) litellm.ReasoningBlo
 			texts = append(texts, part.Text)
 		}
 	}
-	state := wire.NewState("openai", model, item.Raw)
+	state := wire.NewState(provider, model, item.Raw)
 	if len(summaries) == 0 && len(texts) > 0 {
 		return litellm.ReasoningBlock{Text: strings.Join(texts, ""), State: state}
 	}
@@ -167,13 +166,11 @@ func finish(status, incompleteReason string, toolCalls, refused bool) (litellm.F
 }
 
 func convertResponsesUsage(u responsesUsage) litellm.Usage {
-	out := litellm.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, TotalTokens: u.TotalTokens}
-	if u.InputTokensDetails != nil {
-		out.CacheReadTokens = u.InputTokensDetails.CachedTokens
-		out.CacheWriteTokens = u.InputTokensDetails.CacheWriteTokens
+	return litellm.Usage{
+		InputTokens:      u.InputTokens,
+		OutputTokens:     u.OutputTokens,
+		ReasoningTokens:  u.OutputTokensDetails.ReasoningTokens,
+		CacheReadTokens:  u.InputTokensDetails.CachedTokens,
+		CacheWriteTokens: u.InputTokensDetails.CacheWriteTokens,
 	}
-	if u.OutputTokensDetails != nil {
-		out.ReasoningTokens = u.OutputTokensDetails.ReasoningTokens
-	}
-	return out
 }

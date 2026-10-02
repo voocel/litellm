@@ -76,7 +76,7 @@ func runStream(ctx context.Context, client *litellm.Client) {
 			litellm.UserText("Explain Amazon Bedrock in one sentence."),
 		},
 		MaxTokens: new(2048),
-		Thinking:  &litellm.Thinking{Mode: litellm.ThinkingEnabled, Effort: "minimal"},
+		Thinking:  &litellm.Thinking{Effort: "minimal"},
 	})
 	if err != nil {
 		log.Fatal(err)

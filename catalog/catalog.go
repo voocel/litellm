@@ -190,14 +190,12 @@ func parse(reader io.Reader) (map[string]Model, error) {
 	return models, nil
 }
 
-// Cost prices usage. Input and output counts must be known; cache counts may
-// be unknown only when their rate equals the input rate.
+// Cost prices usage. Cache reads and writes are priced at their rates and
+// the rest of the input at the input rate; a cache count the vendor did not
+// report is zero, its tokens priced as input.
 func (p Pricing) Cost(usage litellm.Usage) (Cost, error) {
 	if err := p.validate(); err != nil {
 		return Cost{}, fmt.Errorf("catalog: %w", err)
-	}
-	if usage.InputTokens == nil || usage.OutputTokens == nil {
-		return Cost{}, fmt.Errorf("catalog: input and output token counts must be known")
 	}
 	cacheReadRate, cacheWriteRate := p.InputCostPerToken, p.InputCostPerToken
 	if p.CacheReadCostPerToken != nil {
@@ -206,28 +204,14 @@ func (p Pricing) Cost(usage litellm.Usage) (Cost, error) {
 	if p.CacheWriteCostPerToken != nil {
 		cacheWriteRate = *p.CacheWriteCostPerToken
 	}
-	cacheRead, cacheWrite := 0, 0
-	if usage.CacheReadTokens != nil {
-		cacheRead = *usage.CacheReadTokens
-	} else if cacheReadRate != p.InputCostPerToken {
-		return Cost{}, fmt.Errorf("catalog: cache read token count is unknown for a distinct cache rate")
-	}
-	if usage.CacheWriteTokens != nil {
-		cacheWrite = *usage.CacheWriteTokens
-	} else if cacheWriteRate != p.InputCostPerToken {
-		return Cost{}, fmt.Errorf("catalog: cache write token count is unknown for a distinct cache rate")
-	}
-	if *usage.InputTokens < 0 || *usage.OutputTokens < 0 || cacheRead < 0 || cacheWrite < 0 ||
-		cacheRead > *usage.InputTokens || cacheWrite > *usage.InputTokens-cacheRead {
+	in, out, cacheRead, cacheWrite := usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens
+	if in < 0 || out < 0 || cacheRead < 0 || cacheWrite < 0 || cacheRead+cacheWrite > in {
 		return Cost{}, fmt.Errorf("catalog: invalid token counts: cache reads and writes must fit within input tokens")
 	}
-	// Unknown cache details stay in Input when all applicable rates are equal.
-	nonCachedInput := *usage.InputTokens - cacheRead - cacheWrite
-	inputCost := float64(nonCachedInput) * p.InputCostPerToken
-	outputCost := float64(*usage.OutputTokens) * p.OutputCostPerToken
+	inputCost := float64(in-cacheRead-cacheWrite) * p.InputCostPerToken
+	outputCost := float64(out) * p.OutputCostPerToken
 	cacheReadCost := float64(cacheRead) * cacheReadRate
 	cacheWriteCost := float64(cacheWrite) * cacheWriteRate
-
 	return Cost{
 		Input:      inputCost,
 		Output:     outputCost,

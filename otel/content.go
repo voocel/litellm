@@ -99,7 +99,7 @@ func genAIParts(blocks []litellm.Block) []any {
 				Type:      "tool_call",
 				ID:        b.ID,
 				Name:      b.Name,
-				Arguments: rawJSONValue(b.Arguments),
+				Arguments: arguments(b.Arguments),
 			})
 		case litellm.ToolResultBlock:
 			parts = append(parts, genAIToolCallResponsePart{
@@ -146,13 +146,14 @@ func toolResponse(blocks []litellm.Block) any {
 	return parts
 }
 
-func rawJSONValue(data json.RawMessage) any {
-	if len(data) == 0 {
+// arguments is the decoded value of tool call arguments, or else their text.
+func arguments(text string) any {
+	if text == "" {
 		return nil
 	}
 	var value any
-	if json.Unmarshal(data, &value) != nil {
-		return string(data)
+	if json.Unmarshal([]byte(text), &value) != nil {
+		return text
 	}
 	return value
 }

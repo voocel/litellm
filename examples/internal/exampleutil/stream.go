@@ -55,22 +55,9 @@ func Stream(ctx context.Context, client *litellm.Client, req litellm.Request) (*
 }
 
 func PrintUsage(usage litellm.Usage) {
-	if !usage.HasTokens() {
+	if usage == (litellm.Usage{}) {
 		return
 	}
-	fmt.Printf("usage: input=%s output=%s total=%s reasoning=%s cache_read=%s cache_write=%s\n",
-		tokenCount(usage.Input()),
-		tokenCount(usage.Output()),
-		tokenCount(usage.Total()),
-		tokenCount(usage.Reasoning()),
-		tokenCount(usage.CacheRead()),
-		tokenCount(usage.CacheWrite()),
-	)
-}
-
-func tokenCount(count int, known bool) string {
-	if !known {
-		return "unknown"
-	}
-	return fmt.Sprint(count)
+	fmt.Printf("usage: input=%d output=%d reasoning=%d cache_read=%d cache_write=%d\n",
+		usage.InputTokens, usage.OutputTokens, usage.ReasoningTokens, usage.CacheReadTokens, usage.CacheWriteTokens)
 }

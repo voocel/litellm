@@ -39,9 +39,7 @@ func New(cfg Config) (*Provider, error) {
 		},
 		ReasoningFields:    []string{"reasoning_content"},
 		StringContentRoles: []litellm.Role{litellm.RoleSystem, litellm.RoleAssistant},
-		// Prompt tokens split into cache hits and misses; misses bill as input.
-		CacheWritesUnbilled: true,
-		ImageFileID:         true,
-		SchemaFallback:      litellm.ResponseFormatJSONObject,
+		ImageFileID:        true,
+		SchemaFallback:     litellm.ResponseFormatJSONObject,
 	})
 }

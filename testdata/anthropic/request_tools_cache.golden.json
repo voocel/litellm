@@ -5,7 +5,6 @@
       "content": [
         {
           "cache_control": {
-            "ttl": "1h",
             "type": "ephemeral"
           },
           "text": "Use the tool.",

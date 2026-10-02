@@ -26,16 +26,16 @@ func TestConvertResponse(t *testing.T) {
 			litellm.ReasoningBlock{Text: "think", State: testState(`{"signature":"sig"}`)},
 			litellm.ReasoningBlock{State: testState(`{"redactedContent":"b3BhcXVl"}`)},
 			litellm.TextBlock{Text: "hello"},
-			litellm.ToolUseBlock{ID: "toolu_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
+			litellm.ToolUseBlock{ID: "toolu_1", Name: "lookup", Arguments: `{"q":"x"}`},
 		},
 		// Input counts cache reads and writes.
-		Usage:           litellm.Usage{InputTokens: new(10), OutputTokens: new(7), TotalTokens: new(17), CacheReadTokens: new(2), CacheWriteTokens: new(3)},
+		Usage:           litellm.Usage{InputTokens: 10, OutputTokens: 7, CacheReadTokens: 2, CacheWriteTokens: 3},
 		Model:           "m",
 		Provider:        "bedrock",
 		FinishReason:    litellm.FinishReasonToolCall,
 		FinishReasonRaw: "tool_use",
 	}
-	if got := convertResponse(&resp, "m"); !reflect.DeepEqual(got, want) {
+	if got := convertResponse(&resp, "bedrock", "m"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got  %#v\nwant %#v", got, want)
 	}
 }

@@ -15,7 +15,7 @@ import (
 )
 
 func (p *Provider) responses(ctx context.Context, req *litellm.Request) (*litellm.Response, error) {
-	body, err := buildResponsesRequest(req, false)
+	body, err := buildResponsesRequest(req, p.Name(), false)
 	if err != nil {
 		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
 	}
@@ -37,13 +37,13 @@ func (p *Provider) responses(ctx context.Context, req *litellm.Request) (*litell
 	if parsed.Status == "queued" || parsed.Status == "in_progress" {
 		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeProvider, "response is not complete: "+parsed.Status, nil)
 	}
-	out := convertResponsesResponse(&parsed, req.Model)
+	out := convertResponsesResponse(&parsed, p.Name(), req.Model)
 	out.Raw = data
 	return out, nil
 }
 
 func (p *Provider) responsesStream(ctx context.Context, req *litellm.Request) (litellm.Stream, error) {
-	body, err := buildResponsesRequest(req, true)
+	body, err := buildResponsesRequest(req, p.Name(), true)
 	if err != nil {
 		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
 	}
@@ -51,10 +51,10 @@ func (p *Provider) responsesStream(ctx context.Context, req *litellm.Request) (l
 	if err != nil {
 		return nil, err
 	}
-	return newResponsesStream(resp, req.Model), nil
+	return newResponsesStream(resp, p.Name(), req.Model), nil
 }
 
-func buildResponsesRequest(req *litellm.Request, stream bool) ([]byte, error) {
+func buildResponsesRequest(req *litellm.Request, provider string, stream bool) ([]byte, error) {
 	if len(req.Stop) > 0 {
 		return nil, errors.New("stop is not supported by the responses API")
 	}
@@ -83,7 +83,7 @@ func buildResponsesRequest(req *litellm.Request, stream bool) ([]byte, error) {
 	if req.TopP != nil {
 		body["top_p"] = *req.TopP
 	}
-	instructions, input, err := responsesInput(req.Messages, req.Model)
+	instructions, input, err := responsesInput(req.Messages, provider, req.Model)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +125,7 @@ func responsesReasoning(thinking *litellm.Thinking) (map[string]any, error) {
 	if thinking.BudgetTokens != nil {
 		return nil, errors.New("thinking budget_tokens is not supported; use effort")
 	}
-	if thinking.Mode == litellm.ThinkingDisabled {
+	if thinking.Disabled {
 		return map[string]any{"effort": "none"}, nil
 	}
 	out := map[string]any{}
@@ -153,8 +153,8 @@ func responsesFormat(format *litellm.ResponseFormat) map[string]any {
 	if len(format.JSONSchema.Schema) > 0 {
 		out["schema"] = json.RawMessage(format.JSONSchema.Schema)
 	}
-	if strict, ok := format.JSONSchema.Strict.Value(); ok {
-		out["strict"] = strict
+	if strict := format.JSONSchema.Strict; strict != nil {
+		out["strict"] = *strict
 	}
 	return out
 }
@@ -169,8 +169,8 @@ func responsesTools(tools []litellm.Tool) []any {
 		if len(tool.Parameters) > 0 {
 			fn["parameters"] = json.RawMessage(tool.Parameters)
 		}
-		if strict, ok := tool.Strict.Value(); ok {
-			fn["strict"] = strict
+		if tool.Strict != nil {
+			fn["strict"] = *tool.Strict
 		}
 		out = append(out, fn)
 	}
@@ -181,7 +181,7 @@ func responsesTools(tools []litellm.Tool) []any {
 // messages stay in place as developer messages, where changing them keeps the
 // cached prefix valid; so does one with a cache breakpoint, which instructions
 // cannot carry.
-func responsesInput(messages []litellm.Message, model string) (string, []any, error) {
+func responsesInput(messages []litellm.Message, provider, model string) (string, []any, error) {
 	var instructions []string
 	items := make([]any, 0, len(messages))
 	for i, msg := range messages {
@@ -192,11 +192,11 @@ func responsesInput(messages []litellm.Message, model string) (string, []any, er
 				instructions = append(instructions, text)
 				continue
 			}
-			items, err = appendMessage(items, "developer", "input_text", msg.Blocks)
+			items, err = appendMessage(items, "developer", msg.Blocks)
 		case litellm.RoleUser:
-			items, err = appendMessage(items, "user", "input_text", msg.Blocks)
+			items, err = appendMessage(items, "user", msg.Blocks)
 		case litellm.RoleAssistant:
-			items, err = appendAssistant(items, msg.Blocks, model)
+			items, err = appendAssistant(items, msg.Blocks, provider, model)
 		case litellm.RoleTool:
 			items, err = appendToolResults(items, msg.Blocks)
 		}
@@ -222,8 +222,18 @@ func textContent(blocks []litellm.Block) (text string, cached, ok bool) {
 	return strings.Join(parts, "\n"), cached, true
 }
 
-func appendMessage(items []any, role, textType string, blocks []litellm.Block) ([]any, error) {
-	content := make([]any, 0, len(blocks))
+func appendMessage(items []any, role string, blocks []litellm.Block) ([]any, error) {
+	content, err := inputContent(blocks)
+	if err != nil || len(content) == 0 {
+		return items, err
+	}
+	return append(items, map[string]any{"type": "message", "role": role, "content": content}), nil
+}
+
+// inputContent maps blocks to input content parts. Tool references, which
+// have no input part, are sent as text.
+func inputContent(blocks []litellm.Block) ([]map[string]any, error) {
+	content := make([]map[string]any, 0, len(blocks))
 	for _, block := range blocks {
 		var part map[string]any
 		var cache *litellm.CacheControl
@@ -232,7 +242,7 @@ func appendMessage(items []any, role, textType string, blocks []litellm.Block) (
 			if b.Text == "" {
 				continue
 			}
-			part, cache = map[string]any{"type": textType, "text": b.Text}, b.Cache
+			part, cache = map[string]any{"type": "input_text", "text": b.Text}, b.Cache
 		case litellm.ImageBlock:
 			part, cache = map[string]any{"type": "input_image"}, b.Cache
 			if b.FileURI != "" {
@@ -247,23 +257,17 @@ func appendMessage(items []any, role, textType string, blocks []litellm.Block) (
 			if b.Detail != "" {
 				part["detail"] = b.Detail
 			}
+		case litellm.ToolReferenceBlock:
+			part, cache = map[string]any{"type": "input_text", "text": wire.ToolReferenceText(b)}, b.Cache
 		default:
 			return nil, fmt.Errorf("unsupported block %T", block)
 		}
-		// Only input content has a breakpoint slot.
-		if cache != nil && textType == "input_text" {
-			fields, err := promptCacheBreakpoint(cache)
-			if err != nil {
-				return nil, err
-			}
-			maps.Copy(part, fields)
+		if cache != nil {
+			maps.Copy(part, promptCacheBreakpoint)
 		}
 		content = append(content, part)
 	}
-	if len(content) == 0 {
-		return items, nil
-	}
-	return append(items, map[string]any{"type": "message", "role": role, "content": content}), nil
+	return content, nil
 }
 
 // appendAssistant maps an assistant message. The API pairs a reasoning item
@@ -272,10 +276,10 @@ func appendMessage(items []any, role, textType string, blocks []litellm.Block) (
 // model is replayed whole, reasoning items and ids included; any other is sent
 // as plain content, without reasoning or ids. Reasoning from other providers
 // is never sent: an input reasoning item needs the id the API assigned to it.
-func appendAssistant(items []any, blocks []litellm.Block, model string) ([]any, error) {
+func appendAssistant(items []any, blocks []litellm.Block, provider, model string) ([]any, error) {
 	replay := slices.ContainsFunc(blocks, func(block litellm.Block) bool {
 		b, ok := block.(litellm.ReasoningBlock)
-		return ok && b.State != nil && b.State.Provider == "openai" && b.State.Model == model
+		return ok && b.State != nil && b.State.Provider == provider && b.State.Model == model
 	})
 	for _, block := range blocks {
 		switch b := block.(type) {
@@ -283,18 +287,18 @@ func appendAssistant(items []any, blocks []litellm.Block, model string) ([]any, 
 			if b.Text == "" {
 				continue
 			}
-			state, _ := wire.ReadState[itemState](b.State, "openai")
+			state, _ := wire.ReadState[itemState](b.State, provider)
 			if !replay {
 				state.ID = ""
 			}
 			items = appendOutputText(items, b.Text, state)
 		case litellm.ReasoningBlock:
-			if item, ok := wire.ReadState[json.RawMessage](b.State, "openai"); ok && replay {
+			if item, ok := wire.ReadState[json.RawMessage](b.State, provider); ok && replay {
 				items = append(items, item)
 			}
 		case litellm.ToolUseBlock:
-			call := map[string]any{"type": "function_call", "call_id": b.ID, "name": b.Name, "arguments": string(b.Arguments)}
-			if state, ok := wire.ReadState[itemState](b.State, "openai"); ok && replay && state.ID != "" {
+			call := map[string]any{"type": "function_call", "call_id": b.ID, "name": b.Name, "arguments": b.Arguments}
+			if state, ok := wire.ReadState[itemState](b.State, provider); ok && replay && state.ID != "" {
 				call["id"] = state.ID
 			}
 			items = append(items, call)
@@ -325,40 +329,27 @@ func appendOutputText(items []any, text string, state itemState) []any {
 	return append(items, msg)
 }
 
+// appendToolResults sends text-only output as a string and any other as a
+// content list, which can hold images and cache breakpoints.
 func appendToolResults(items []any, blocks []litellm.Block) ([]any, error) {
 	for _, block := range blocks {
 		result, ok := block.(litellm.ToolResultBlock)
 		if !ok {
 			return nil, fmt.Errorf("tool role only supports ToolResultBlock, got %T", block)
 		}
-		text, cached, ok := textContent(result.Content)
-		if !ok {
-			return nil, fmt.Errorf("tool result %q only supports text content", result.ToolUseID)
-		}
-		var output any = text
-		if cached || result.Cache != nil {
-			parts := make([]map[string]any, 0, len(result.Content))
-			for _, block := range result.Content {
-				b := block.(litellm.TextBlock) // checked by textContent
-				part := map[string]any{"type": "input_text", "text": b.Text}
-				if b.Cache != nil {
-					fields, err := promptCacheBreakpoint(b.Cache)
-					if err != nil {
-						return nil, err
-					}
-					maps.Copy(part, fields)
-				}
-				parts = append(parts, part)
+		var output any
+		if text, cached, ok := textContent(result.Content); ok && !cached && result.Cache == nil {
+			output = text
+		} else {
+			parts, err := inputContent(result.Content)
+			if err != nil {
+				return nil, fmt.Errorf("tool result %q: %w", result.ToolUseID, err)
 			}
 			if result.Cache != nil {
-				fields, err := promptCacheBreakpoint(result.Cache)
-				if err != nil {
-					return nil, err
-				}
 				if len(parts) == 0 {
 					parts = append(parts, map[string]any{"type": "input_text", "text": ""})
 				}
-				maps.Copy(parts[len(parts)-1], fields)
+				maps.Copy(parts[len(parts)-1], promptCacheBreakpoint)
 			}
 			output = parts
 		}

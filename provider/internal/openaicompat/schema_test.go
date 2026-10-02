@@ -18,7 +18,7 @@ func schemaRequest() *litellm.Request {
 	req.ResponseFormat = &litellm.ResponseFormat{
 		Type: litellm.ResponseFormatJSONSchema,
 		JSONSchema: &litellm.JSONSchema{
-			Name: "answer", Description: "天气预报", Strict: litellm.StrictEnabled,
+			Name: "answer", Description: "天气预报", Strict: new(true),
 			Schema: litellm.Schema(`{"type":"object","properties":{"city":{"type":"string"}},"required":["city"],"additionalProperties":false}`),
 		},
 	}
@@ -116,7 +116,7 @@ func TestSchemaPromptPreservesHistory(t *testing.T) {
 		litellm.UserText("earlier"),
 		litellm.Assistant(litellm.Text("OK")),
 		litellm.User(blocks[:2]...),
-		litellm.Assistant(litellm.ReasoningBlock{Text: "check weather"}, litellm.ToolUseBlock{ID: "call_1", Name: "weather", Arguments: json.RawMessage(`{}`)}),
+		litellm.Assistant(litellm.ReasoningBlock{Text: "check weather"}, litellm.ToolUseBlock{ID: "call_1", Name: "weather", Arguments: `{}`}),
 		litellm.ToolResultText("call_1", "sunny"),
 	}
 	req.Tools = []litellm.Tool{{Name: "weather", Parameters: litellm.Schema(`{"type":"object"}`)}}

@@ -254,17 +254,17 @@ func finalizeResponse(resp *Response, provider, model string) {
 }
 
 // malformedToolArgumentWarnings reports tool calls whose arguments are not valid
-// JSON. Raw arguments stay out of warnings so observers never receive large or
-// sensitive payloads.
+// JSON; the Client adds them to a response once. Raw arguments stay out of
+// warnings so observers never receive large or sensitive payloads.
 func malformedToolArgumentWarnings(blocks []Block, provider string) []Warning {
 	var warnings []Warning
 	for _, block := range blocks {
 		tool, ok := block.(ToolUseBlock)
-		if !ok || len(tool.Arguments) == 0 || json.Valid(tool.Arguments) {
+		if !ok || tool.Arguments == "" || json.Valid([]byte(tool.Arguments)) {
 			continue
 		}
 		var probe any
-		parseErr := json.Unmarshal(tool.Arguments, &probe)
+		parseErr := json.Unmarshal([]byte(tool.Arguments), &probe)
 		warnings = append(warnings, Warning{
 			Code:     "litellm.tool_arguments_invalid",
 			Provider: provider,

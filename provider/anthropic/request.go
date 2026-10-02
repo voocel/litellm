@@ -13,26 +13,26 @@ import (
 )
 
 // ProviderOptions are native Messages API fields copied into the body. An
-// option naming a generated object or array is merged into or appended to it,
-// e.g. server tools under "tools".
+// option naming a generated object is merged into it; setting a field the
+// request already generated is an error. Options whose results litellm does
+// not model, such as server tools, are not offered.
 const (
-	ProviderOptionMetadata          = "metadata"
-	ProviderOptionServiceTier       = "service_tier"
-	ProviderOptionTopK              = "top_k"
-	ProviderOptionContextManagement = "context_management"
-	ProviderOptionContainer         = "container"
-	ProviderOptionMCPServers        = "mcp_servers"
-	ProviderOptionTools             = "tools"
-	ProviderOptionOutputConfig      = "output_config"
+	ProviderOptionMetadata     = "metadata"
+	ProviderOptionServiceTier  = "service_tier"
+	ProviderOptionTopK         = "top_k"
+	ProviderOptionOutputConfig = "output_config"
+	// ProviderOptionThinking sends a thinking object as given when
+	// Request.Thinking is nil, for shapes litellm does not map, and is merged
+	// into the generated one otherwise, e.g. {"display": "omitted"}.
+	ProviderOptionThinking = "thinking"
 	// ProviderOptionToolChoice is merged into the generated tool_choice, e.g.
 	// {"disable_parallel_tool_use": true}.
 	ProviderOptionToolChoice = "tool_choice"
 )
 
 var providerOptions = []string{
-	ProviderOptionMetadata, ProviderOptionServiceTier, ProviderOptionTopK, ProviderOptionContextManagement,
-	ProviderOptionContainer, ProviderOptionMCPServers, ProviderOptionTools, ProviderOptionOutputConfig,
-	ProviderOptionToolChoice,
+	ProviderOptionMetadata, ProviderOptionServiceTier, ProviderOptionTopK, ProviderOptionOutputConfig,
+	ProviderOptionThinking, ProviderOptionToolChoice,
 }
 
 func sortedOptions() []string {
@@ -97,7 +97,6 @@ type imageSource struct {
 
 type cacheControl struct {
 	Type string `json:"type"`
-	TTL  string `json:"ttl,omitempty"`
 }
 
 type tool struct {
@@ -107,7 +106,7 @@ type tool struct {
 	Strict      *bool           `json:"strict,omitempty"`
 }
 
-func buildRequest(req *litellm.Request, stream bool) ([]byte, error) {
+func buildRequest(req *litellm.Request, provider string, stream bool) ([]byte, error) {
 	if req.MaxTokens == nil {
 		return nil, errors.New("max_tokens is required by the Messages API")
 	}
@@ -144,7 +143,7 @@ func buildRequest(req *litellm.Request, stream bool) ([]byte, error) {
 	for _, t := range req.Tools {
 		out.Tools = append(out.Tools, convertTool(t))
 	}
-	if out.System, out.Messages, err = convertMessages(req.Messages); err != nil {
+	if out.System, out.Messages, err = convertMessages(req.Messages, provider); err != nil {
 		return nil, err
 	}
 	return wire.MarshalBody(out, opts)
@@ -185,9 +184,7 @@ func convertTool(t litellm.Tool) tool {
 	if len(t.Parameters) > 0 {
 		out.InputSchema = json.RawMessage(t.Parameters)
 	}
-	if strict, ok := t.Strict.Value(); ok {
-		out.Strict = &strict
-	}
+	out.Strict = t.Strict
 	return out
 }
 
@@ -195,11 +192,11 @@ func convertTool(t litellm.Tool) tool {
 // ones in place, where changing them keeps the cached prefix and thinking
 // valid. Messages left empty, such as one holding only foreign reasoning, are
 // omitted.
-func convertMessages(messages []litellm.Message) (any, []message, error) {
+func convertMessages(messages []litellm.Message, provider string) (any, []message, error) {
 	var system []content
 	out := make([]message, 0, len(messages))
 	for i, msg := range messages {
-		blocks, err := convertBlocks(msg.Blocks)
+		blocks, err := convertBlocks(msg.Blocks, provider)
 		if err != nil {
 			return nil, nil, fmt.Errorf("messages[%d]: %w", i, err)
 		}
@@ -233,7 +230,7 @@ func convertMessages(messages []litellm.Message) (any, []message, error) {
 	return system, out, nil
 }
 
-func convertBlocks(blocks []litellm.Block) ([]content, error) {
+func convertBlocks(blocks []litellm.Block, provider string) ([]content, error) {
 	out := make([]content, 0, len(blocks))
 	for _, block := range blocks {
 		var c content
@@ -252,11 +249,11 @@ func convertBlocks(blocks []litellm.Block) ([]content, error) {
 		case litellm.ReasoningBlock:
 			// Thinking is valid only with the signature Claude issued, so
 			// reasoning from elsewhere is dropped.
-			state, ok := wire.ReadState[thinkingState](b.State, "anthropic")
+			state, ok := wire.ReadState[thinkingState](b.State, provider)
 			if !ok {
 				continue
 			}
-			c = content{Type: state.Type, Signature: state.Signature, Data: state.Data, CacheControl: convertCache(b.Cache)}
+			c = content{Type: state.Type, Signature: state.Signature, Data: state.Data}
 			if state.Type == "thinking" {
 				c.Thinking = new(b.Text)
 			}
@@ -267,7 +264,7 @@ func convertBlocks(blocks []litellm.Block) ([]content, error) {
 			}
 			c = content{Type: "tool_use", ID: claude.ToolUseID(b.ID), Name: b.Name, Input: input, CacheControl: convertCache(b.Cache)}
 		case litellm.ToolResultBlock:
-			result, err := convertToolResult(b.Content)
+			result, err := convertToolResult(b.Content, provider)
 			if err != nil {
 				return nil, err
 			}
@@ -284,17 +281,17 @@ func convertBlocks(blocks []litellm.Block) ([]content, error) {
 
 // toolInput returns the arguments as the input object the protocol requires.
 func toolInput(b litellm.ToolUseBlock) (json.RawMessage, error) {
-	if len(b.Arguments) == 0 {
+	if b.Arguments == "" {
 		return json.RawMessage("{}"), nil
 	}
 	var object map[string]json.RawMessage
-	if json.Unmarshal(b.Arguments, &object) != nil || object == nil {
-		return nil, fmt.Errorf("tool use %q arguments must be a JSON object", b.ID)
+	if json.Unmarshal([]byte(b.Arguments), &object) != nil || object == nil {
+		return nil, fmt.Errorf("tool use %q (%s) arguments are not a JSON object", b.ID, b.Name)
 	}
 	return json.RawMessage(b.Arguments), nil
 }
 
-func convertToolResult(blocks []litellm.Block) (any, error) {
+func convertToolResult(blocks []litellm.Block, provider string) (any, error) {
 	if len(blocks) == 0 {
 		return nil, nil
 	}
@@ -303,14 +300,14 @@ func convertToolResult(blocks []litellm.Block) (any, error) {
 			return text.Text, nil
 		}
 	}
-	return convertBlocks(blocks)
+	return convertBlocks(blocks, provider)
 }
 
 func convertCache(cache *litellm.CacheControl) *cacheControl {
 	if cache == nil {
 		return nil
 	}
-	return &cacheControl{Type: "ephemeral", TTL: cache.TTL}
+	return &cacheControl{Type: "ephemeral"}
 }
 
 func convertImage(block litellm.ImageBlock) (*imageSource, error) {

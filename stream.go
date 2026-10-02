@@ -97,9 +97,6 @@ func cloneEvent(event Event) Event {
 	case BlockEnd:
 		e.Block = cloneBlock(e.Block)
 		return e
-	case UsageEvent:
-		e.Usage = e.Usage.Clone()
-		return e
 	case ProviderEvent:
 		e.Raw = cloneBytes(e.Raw)
 		return e
@@ -140,7 +137,8 @@ func (s *validatedStream) Next() (Event, error) {
 	if err != nil {
 		s.done = true
 		if errors.Is(err, io.EOF) {
-			err = io.ErrUnexpectedEOF
+			// The connection ended mid-reply: a fresh request may complete.
+			return nil, NewNetworkError(s.provider, "stream ended before done", io.ErrUnexpectedEOF)
 		}
 		return nil, WrapError(s.provider, ErrorTypeProvider, err)
 	}
@@ -151,6 +149,7 @@ func (s *validatedStream) Next() (Event, error) {
 	event, done, err := s.state.Apply(event)
 	if err == nil && done {
 		err = validateResponse(&Response{Blocks: s.state.blocks, Provider: s.state.provider, Model: s.state.model}, s.provider, s.state.model)
+		s.state.warnings = append(s.state.warnings, malformedToolArgumentWarnings(s.state.blocks, s.provider)...)
 	}
 	if err != nil {
 		s.done = true
@@ -294,7 +293,7 @@ func (c *collector) Apply(event Event) (Event, bool, error) {
 		}
 		return BlockEnd{Index: e.Index, Block: block}, false, nil
 	case UsageEvent:
-		c.usage = e.Usage.Clone()
+		c.usage = e.Usage
 	case WarningEvent:
 		c.warnings = append(c.warnings, e.Warning)
 	case ProviderEvent:
@@ -313,7 +312,6 @@ func (c *collector) Apply(event Event) (Event, bool, error) {
 		if e.Model != "" {
 			c.model = e.Model
 		}
-		c.warnings = append(c.warnings, malformedToolArgumentWarnings(c.blocks, c.provider)...)
 		return event, true, nil
 	default:
 		return nil, false, fmt.Errorf("unknown stream event %T", event)
@@ -364,8 +362,8 @@ func (c *collector) end(e BlockEnd) (Block, error) {
 		block = merged
 	}
 	// An argument-less call streams no deltas; keep its arguments valid JSON.
-	if tool, ok := block.(ToolUseBlock); ok && len(tool.Arguments) == 0 {
-		tool.Arguments = json.RawMessage("{}")
+	if tool, ok := block.(ToolUseBlock); ok && tool.Arguments == "" {
+		tool.Arguments = "{}"
 		block = tool
 	}
 	c.blocks[e.Index] = block
@@ -389,7 +387,7 @@ func (c *collector) flushed(index int) Block {
 		b.Text = builder.String()
 		return b
 	case ToolUseBlock:
-		b.Arguments = json.RawMessage(builder.String())
+		b.Arguments = builder.String()
 		return b
 	}
 	return block
@@ -412,7 +410,7 @@ func (c *collector) Response() *Response {
 	}
 	return &Response{
 		Blocks:          blocks,
-		Usage:           c.usage.Clone(),
+		Usage:           c.usage,
 		Model:           c.model,
 		Provider:        c.provider,
 		FinishReason:    c.finish,
@@ -441,7 +439,7 @@ func blockContent(block Block) string {
 	case ReasoningBlock:
 		return b.Text
 	case ToolUseBlock:
-		return string(b.Arguments)
+		return b.Arguments
 	default:
 		return ""
 	}

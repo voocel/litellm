@@ -54,7 +54,7 @@ func main() {
 }
 ```
 
-Provider 可在多个 Client 间共享。`litellm.New` 接受 `WithObservers`、`WithStreamIdleTimeout`、`WithCaptureRawResponse` 等 `ClientOption`。
+Provider 可在多个 Client 间共享。`litellm.New` 接受 `WithObservers`、`WithCaptureRawResponse` 等 `ClientOption`。
 
 ## 核心模型
 
@@ -76,6 +76,8 @@ msgs = append(msgs,
 ```
 
 推理签名、item id 等厂商需要原样取回的数据放在块的 `State` 中，只回传给产生它的 Provider，因此历史可以在 Provider 之间切换（[详见](providers.md#replay-state)）。Client 只校验消息结构，从不改写历史。工具调用配对与修复属于会话策略，由持有会话的上层负责。
+
+消息可编码为 JSON，每个块以 `type` 标明种类，State 一并保留：`json.Marshal` 存储历史，`json.Unmarshal` 原样读回。
 
 原始响应体仅在 `litellm.WithCaptureRawResponse(true)` 时保留。
 
@@ -106,7 +108,7 @@ resp, err := litellm.Handle(stream, func(event litellm.Event) error {
 })
 ```
 
-`Client.Stream` 在读取时即完成聚合，因此即便先用 `Next` 读过部分事件，`Handle` / `Collect` 仍返回完整响应。流只能由一个 goroutine 消费。`WithStreamIdleTimeout` 可设置逐事件空闲超时，默认关闭。
+`Client.Stream` 在读取时即完成聚合，因此即便先用 `Next` 读过部分事件，`Handle` / `Collect` 仍返回完整响应。流只能由一个 goroutine 消费。
 
 ## 工具
 
@@ -121,7 +123,7 @@ tool, err := litellm.NewTool("get_weather", "Get weather for a city.", map[strin
 if err != nil {
 	log.Fatal(err)
 }
-tool.Strict = litellm.StrictEnabled
+tool.Strict = new(true)
 
 resp, err := client.Chat(ctx, litellm.Request{
 	Model:      "gpt-5.6",
@@ -133,6 +135,10 @@ resp, err := client.Chat(ctx, litellm.Request{
 
 `ToolChoice` 取 `Mode`（`Auto`、`None`、`Required`）或工具 `Name`；nil 表示沿用厂商默认。
 
+`ToolUseBlock.Arguments` 是模型写出的文本。它本应是 JSON 对象，但不一定是，例如回复在输出上限处被截断；此时 Client 追加 `litellm.tool_arguments_invalid` 警告，线上格式要求对象的 Provider 在回放这条历史时返回点名该调用的校验错误。
+
+工具结果在所有 Provider 上都可包含文本、图片和工具引用。工具结果只能承载文本的协议（如 Chat Completions）把图片放进紧随本轮 tool 消息之后的 user 消息。
+
 ## 结构化输出
 
 ```go
@@ -142,10 +148,11 @@ format, err := litellm.NewResponseFormatJSONSchema("person", "", map[string]any{
 		"name": map[string]any{"type": "string"},
 	},
 	"required": []string{"name"},
-}, litellm.StrictEnabled)
+})
 if err != nil {
 	log.Fatal(err)
 }
+format.JSONSchema.Strict = new(true)
 
 resp, err := client.Chat(ctx, litellm.Request{
 	Model:          "gpt-5.6",
@@ -156,7 +163,7 @@ resp, err := client.Chat(ctx, litellm.Request{
 
 ## Thinking
 
-`Thinking == nil` 不发送任何 thinking 字段，保持厂商默认。否则零值 `Mode` 即开启，`ThinkingDisabled` 关闭；`Effort` 与 `BudgetTokens` 原样发送；`IncludeOutput` 在厂商可选时请求返回推理文本。
+`Thinking == nil` 不发送任何 thinking 字段，保持厂商默认。否则即开启，`Disabled` 关闭；`Effort` 与 `BudgetTokens` 原样发送；`IncludeOutput` 在厂商可选时请求返回推理文本。
 
 ```go
 resp, err := client.Chat(ctx, litellm.Request{
@@ -171,10 +178,10 @@ resp, err := client.Chat(ctx, litellm.Request{
 
 ## 提示缓存
 
-在块上标记缓存断点：截至并包含该块的提示前缀可被缓存。`TTL` 原样传递（`litellm.CacheTTL5m`、`litellm.CacheTTL1h`，或留空使用厂商默认）。断点只是提示，没有对应字段的 Provider 会丢弃。
+在块上标记缓存断点：截至并包含该块的提示前缀可按厂商默认时长缓存，Anthropic 与 Bedrock 为五分钟。断点只是提示，没有对应字段的 Provider 会丢弃。
 
 ```go
-litellm.User(litellm.TextBlock{Text: longDocument, Cache: &litellm.CacheControl{TTL: litellm.CacheTTL1h}})
+litellm.User(litellm.TextBlock{Text: longDocument, Cache: &litellm.CacheControl{}})
 ```
 
 ## Provider Options
@@ -206,6 +213,7 @@ resp, err := client.Chat(ctx, litellm.Request{
 | `provider/bedrock` | Amazon Bedrock Converse（SigV4） |
 | `provider/deepseek`、`glm`、`grok`、`mimo`、`minimax`、`ollama`、`openrouter`、`qwen` | 各厂商的 Chat Completions 方言 |
 | `provider/compat` | 其他任意 OpenAI 兼容端点（vLLM、LM Studio、网关） |
+| `provider/gateway` | litellm [网关](#网关) |
 
 ```go
 anthropic.New(anthropic.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
@@ -234,45 +242,64 @@ names := provider.Names() // "anthropic"、"bedrock"、"compat"……
 
 `openai` 只讲官方协议。`compat` 用于其他任意 OpenAI 兼容服务，provider option 不检查、原样透传，因为它无从知道服务端字段。
 
-`client.Capabilities()` 报告适配器能表达什么：是否发送 `Thinking`、`ThinkingDisabled`、`Effort`、`BudgetTokens`，是否必须设置 `MaxTokens`，以及可接受的选项键。它按 Provider 静态固定（自定义 Provider 未声明时 `ok` 为 false）；模型是否接受仍由厂商裁决。
+每个 Provider 的 `Config.Name`（或 `provider.Config.Name`）可为它改名：响应、错误和回放状态都带这个名字。同一协议的不同端点（例如 Anthropic 兼容代理）应各取一个名字，推理签名只会回放给签发它的端点。
+
+`client.Capabilities()` 报告适配器的协议事实：是否必须设置 `MaxTokens`，能否发送 `Thinking.Effort` 与 `Thinking.Disabled`，以及可接受的选项键。它按 Provider 静态固定，未声明的 Provider（例如网关）`ok` 为 false。哪些模型支持推理属于模型数据，见[模型目录](#用量与模型目录)；模型是否接受请求由厂商裁决。
 
 ### OpenAI Responses
 
-设置 `openai.Config.API = openai.APIResponses`，即可让 `Chat` 与 `Stream` 走 Responses API，请求与响应类型不变。Responses 原生字段通过 provider option 传入；使用另一种 API 的选项会报错。
+设置 `openai.Config.API = openai.APIResponses`，即可让 `Chat` 与 `Stream` 走 Responses API，请求与响应类型不变。Responses 原生字段通过 provider option 传入；使用另一种 API 的选项会报错。托管工具和服务端压缩的输出 litellm 不建模，因此不提供这些选项；也不提供 `previous_response_id`：历史总是完整发送。
 
 ```go
 provider, err := openai.New(openai.Config{APIKey: os.Getenv("OPENAI_API_KEY"), API: openai.APIResponses})
 
 options, err := litellm.NewProviderOptions(map[string]any{
-	openai.ProviderOptionPreviousResponseID: "resp_123",
-	openai.ProviderOptionTools:              []any{map[string]any{"type": "web_search"}},
+	openai.ProviderOptionStore:   false,
+	openai.ProviderOptionInclude: []any{"reasoning.encrypted_content"},
 })
 ```
 
-## 模型列表
+## 网关
+
+`provider/gateway` 让调用经由持有厂商 key 的网关完成，例如运行在沙盒里、不能接触 key 的 agent。客户端就是一个普通 Provider；网关端挂载 `gateway.Server`，由 `Route` 为每次调用选择 Client，并可改写请求：
 
 ```go
-models, err := client.ListModels(ctx)
+// 网关
+srv := &gateway.Server{Route: func(r *http.Request, req *litellm.Request) (*litellm.Client, error) {
+	if req.Model != "smart" {
+		return nil, errors.New("unknown model")
+	}
+	req.Model = "claude-sonnet-4-5"
+	return anthropicClient, nil
+}}
+http.Handle("/v1/llm", auth(srv))
+
+// 沙盒
+p, _ := gateway.New(gateway.Config{BaseURL: "https://gw.example.com/v1/llm", APIKey: teamToken})
 ```
 
-仅实现了 `ModelLister` 的 Provider 可用，返回字段尽力而为。
+调用途中不丢信息：请求除 key 外原样送达，块保留 State，错误保留类型、重试信息和上游 Provider。唯一的例外是上游拒绝了网关自己的厂商 key：调用方收到的是 provider 错误 "upstream key rejected"，而不是会被误认为调用方 key 有问题的 auth 错误。Server 不做认证也不做计量：在你的认证层把调用方放进请求 context，再在路由到的 Client 上挂 Observer 计量，Observer 能看到这个 context。
+
+上游静默期间，Server 每 15 秒写一行心跳，防止中间代理切断连接，客户端会跳过它。请求体超过 `gateway.MaxRequestBytes`（64 MiB）时拒绝。调用方看不到厂商的能力，所以厂商要求 `MaxTokens` 时由 `Route` 填写。
 
 ## 错误
 
-HTTP 失败与流内错误按同一规则分类；用 `Is*` 判断，不要匹配消息文本：
+HTTP 失败与流内错误按同一规则分类；按 `ErrorTypeOf` 判断，不要匹配消息文本：
 
 ```go
-switch {
-case litellm.IsContextOverflowError(err):
+switch litellm.ErrorTypeOf(err) {
+case litellm.ErrorTypeContextOverflow:
 	// 压缩历史后重发
-case litellm.IsRateLimitError(err), litellm.IsOverloadedError(err):
+case litellm.ErrorTypeRateLimit, litellm.ErrorTypeOverloaded:
 	time.Sleep(litellm.RetryAfter(err)) // 厂商未给 Retry-After 时为 0
-case litellm.IsContentFilterError(err):
+case litellm.ErrorTypeContentFilter:
 	// 不要重试
+case litellm.ErrorTypeCanceled:
+	// 调用方已取消；errors.Is(err, context.Canceled) 同样成立
 }
 ```
 
-消息格式为 `provider: code: message`。即使代理把状态码改写，上下文超限与内容过滤仍按厂商错误码和消息识别，且永不标记为临时错误。
+`IsTemporaryError` 判断重新请求可能成功的失败：限流、过载、网络故障、在结束前中断的流，以及服务端故障（无论是 HTTP 5xx 还是流内报告）。消息格式为 `provider: code: message`。即使代理把状态码改写，上下文超限与内容过滤仍按厂商错误码和消息识别，且永不标记为临时错误。
 
 ## 重试
 
@@ -319,7 +346,7 @@ observer := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
 
 ## 用量与模型目录
 
-Token 计数为 `*int`：nil 表示未知，`new(0)` 表示已知为零。`Input()`、`Output()`、`Total()`、`Reasoning()`、`CacheRead()`、`CacheWrite()` 返回 `(count, known)`。输入含缓存读写，输出含推理，明细计数是子集。
+Token 计数为普通 int，厂商未报告的计数为零。输入含缓存读写，输出含推理，明细计数是子集。`Pricing.Cost` 把未读写缓存的输入按输入价计费，因此不报告缓存计数的厂商按未缓存输入计价。
 
 模型目录来自 LiteLLM 的模型表，包含上下文窗口、输出上限、是否支持推理和价格，从不隐式加载远程数据：
 
@@ -359,7 +386,7 @@ if err != nil {
 
 ## 自定义 Provider
 
-实现 Provider 接口即可；`CapabilityProvider` 与 `ModelLister` 可选：
+实现 Provider 接口即可；`CapabilityProvider` 可选：
 
 ```go
 type Provider interface {
@@ -368,6 +395,8 @@ type Provider interface {
 	Stream(context.Context, *litellm.Request) (litellm.Stream, error)
 }
 ```
+
+测试调用模型的代码时，`litellmtest.New` 返回一个按脚本流式回复、并记录收到的请求的 Provider。
 
 ## 许可证
 

@@ -62,7 +62,7 @@ func TestHTTPErrorTemporary(t *testing.T) {
 			t.Errorf("%d %s: temporary = %v, want %v", tc.status, tc.body, err.Temporary, tc.temporary)
 		}
 	}
-	if got := HTTPError("p", 400, nil, `{"error":{"code":"bad","message":"no"}}`).Error(); got != "p: bad: no" {
+	if got := HTTPError("p", 400, nil, `{"error":{"code":"bad","message":"no"}}`).Error(); got != "p: bad: no (HTTP 400)" {
 		t.Errorf("Error() = %q", got)
 	}
 }
@@ -119,6 +119,11 @@ func TestStreamErrorClassifiesVendorCodes(t *testing.T) {
 		{"server_is_overloaded", "Our servers are currently overloaded.", litellm.ErrorTypeOverloaded, true},
 		{"context_length_exceeded", "Your input exceeds the context window of this model.", litellm.ErrorTypeContextOverflow, false},
 		{"unknown", "boom", litellm.ErrorTypeProvider, false},
+		// Server faults are as retryable in a stream as their HTTP 5xx.
+		{"api_error", "Internal server error", litellm.ErrorTypeProvider, true},
+		{"server_error", "The server had an error", litellm.ErrorTypeProvider, true},
+		{"internalServerException", "Internal failure", litellm.ErrorTypeProvider, true},
+		{"modelStreamErrorException", "Model stream failed", litellm.ErrorTypeProvider, true},
 	} {
 		err := StreamError("test", tc.code, tc.message)
 		if err.Type != tc.want || err.Temporary != tc.temporary || err.Code != tc.code {

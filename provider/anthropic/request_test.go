@@ -17,10 +17,10 @@ func TestBuildRequestGolden(t *testing.T) {
 		Temperature: new(1.0),
 		Messages: []litellm.Message{
 			litellm.System("You are helpful."),
-			litellm.User(litellm.TextBlock{Text: "Use the tool.", Cache: &litellm.CacheControl{TTL: litellm.CacheTTL1h}}),
+			litellm.User(litellm.TextBlock{Text: "Use the tool.", Cache: &litellm.CacheControl{}}),
 			litellm.Assistant(
-				litellm.ReasoningBlock{Text: "I should call the tool.", State: reasoningState("claude-sonnet-5", "thinking", "sig-thinking", "")},
-				litellm.ToolUseBlock{ID: "toolu_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
+				litellm.ReasoningBlock{Text: "I should call the tool.", State: reasoningState("anthropic", "claude-sonnet-5", "thinking", "sig-thinking", "")},
+				litellm.ToolUseBlock{ID: "toolu_1", Name: "lookup", Arguments: `{"q":"x"}`},
 			),
 			litellm.ToolResult("toolu_1", litellm.Text("result text"), litellm.ToolReferenceBlock{ToolName: "lookup"}),
 			litellm.AssistantText("done"),
@@ -31,7 +31,7 @@ func TestBuildRequestGolden(t *testing.T) {
 			Parameters:  litellm.Schema(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`),
 		}},
 		Thinking: &litellm.Thinking{Effort: "low"},
-	}, false)
+	}, "anthropic", false)
 	if err != nil {
 		t.Fatalf("buildRequest: %v", err)
 	}
@@ -82,17 +82,17 @@ func TestBuildRequest(t *testing.T) {
 		{
 			name: "tool results share a user turn",
 			req: withMessages(
-				litellm.Assistant(litellm.ToolUseBlock{ID: "t1", Name: "f"}, litellm.ToolUseBlock{ID: "t2", Name: "f", Arguments: json.RawMessage(`{}`)}),
+				litellm.Assistant(litellm.ToolUseBlock{ID: "t1", Name: "f"}, litellm.ToolUseBlock{ID: "t2", Name: "f", Arguments: `{}`}),
 				litellm.ToolResultText("t1", "one"),
 				litellm.Message{Role: litellm.RoleTool, Blocks: []litellm.Block{litellm.ToolResultBlock{
-					ToolUseID: "t2", IsError: true, Content: []litellm.Block{litellm.TextBlock{Text: "boom", Cache: &litellm.CacheControl{TTL: litellm.CacheTTL5m}}},
+					ToolUseID: "t2", IsError: true, Content: []litellm.Block{litellm.TextBlock{Text: "boom", Cache: &litellm.CacheControl{}}},
 				}}},
 			),
 			want: map[string]string{"messages": `[
 				{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"f","input":{}},{"type":"tool_use","id":"t2","name":"f","input":{}}]},
 				{"role":"user","content":[
 					{"type":"tool_result","tool_use_id":"t1","content":"one"},
-					{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":[{"type":"text","text":"boom","cache_control":{"type":"ephemeral","ttl":"5m"}}]}]}]`},
+					{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":[{"type":"text","text":"boom","cache_control":{"type":"ephemeral"}}]}]}]`},
 		},
 		{
 			name: "images",
@@ -129,12 +129,13 @@ func TestBuildRequest(t *testing.T) {
 		{
 			name: "own reasoning is replayed, foreign reasoning dropped",
 			req: withMessages(litellm.UserText("hi"), litellm.Assistant(
-				litellm.ReasoningBlock{Text: "t", State: reasoningState("m", "thinking", "sig", "")},
-				litellm.ReasoningBlock{State: reasoningState("m", "thinking", "omitted", "")},
-				litellm.ReasoningBlock{State: reasoningState("m", "redacted_thinking", "", "opaque")},
+				litellm.ReasoningBlock{Text: "t", State: reasoningState("anthropic", "m", "thinking", "sig", "")},
+				litellm.ReasoningBlock{State: reasoningState("anthropic", "m", "thinking", "omitted", "")},
+				litellm.ReasoningBlock{State: reasoningState("anthropic", "m", "redacted_thinking", "", "opaque")},
 				litellm.ReasoningBlock{Text: "foreign", State: &litellm.ProviderState{Provider: "gemini", Data: json.RawMessage(`{"thoughtSignature":"g"}`)}},
+				litellm.ReasoningBlock{Text: "other endpoint", State: reasoningState("proxy", "m", "thinking", "proxy-sig", "")},
 				litellm.ReasoningBlock{Text: "unsigned"},
-				litellm.ToolUseBlock{ID: "t1", Name: "f", Arguments: json.RawMessage(`{"q":"x"}`)},
+				litellm.ToolUseBlock{ID: "t1", Name: "f", Arguments: `{"q":"x"}`},
 			)),
 			want: map[string]string{"messages": `[
 				{"role":"user","content":[{"type":"text","text":"hi"}]},
@@ -172,15 +173,20 @@ func TestBuildRequest(t *testing.T) {
 		},
 		{
 			name:    "tool arguments must be an object",
-			req:     withMessages(litellm.Assistant(litellm.ToolUseBlock{ID: "t1", Name: "f", Arguments: json.RawMessage(`[1]`)})),
-			wantErr: `messages[0]: tool use "t1" arguments must be a JSON object`,
+			req:     withMessages(litellm.Assistant(litellm.ToolUseBlock{ID: "t1", Name: "f", Arguments: `[1]`})),
+			wantErr: `messages[0]: tool use "t1" (f) arguments are not a JSON object`,
+		},
+		{
+			name:    "malformed tool arguments",
+			req:     withMessages(litellm.Assistant(litellm.ToolUseBlock{ID: "t1", Name: "f", Arguments: `{"q":`})),
+			wantErr: `messages[0]: tool use "t1" (f) arguments are not a JSON object`,
 		},
 		{
 			name: "tools",
 			req: func(r *litellm.Request) {
 				r.Tools = []litellm.Tool{
-					{Name: "a", Parameters: litellm.Schema(schema), Strict: litellm.StrictEnabled},
-					{Name: "b", Description: "d", Strict: litellm.StrictDisabled},
+					{Name: "a", Parameters: litellm.Schema(schema), Strict: new(true)},
+					{Name: "b", Description: "d", Strict: new(false)},
 				}
 			},
 			want: map[string]string{"tools": `[
@@ -244,12 +250,17 @@ func TestBuildRequest(t *testing.T) {
 			want: map[string]string{"metadata": `{"user_id":"u"}`, "top_k": `5`, "service_tier": `"auto"`},
 		},
 		{
-			name: "tools option appends to generated tools",
+			name: "thinking option sends a shape litellm does not map",
+			req:  withOptions(map[string]any{ProviderOptionThinking: map[string]any{"type": "enabled", "budget_tokens": 2048, "display": "omitted"}}),
+			want: map[string]string{"thinking": `{"budget_tokens":2048,"display":"omitted","type":"enabled"}`},
+		},
+		{
+			name: "thinking option merges into generated thinking",
 			req: func(r *litellm.Request) {
-				r.Tools = []litellm.Tool{{Name: "a"}}
-				withOptions(map[string]any{ProviderOptionTools: []any{map[string]any{"type": "web_search_20250305", "name": "web_search"}}})(r)
+				r.Thinking = &litellm.Thinking{Effort: "high"}
+				withOptions(map[string]any{ProviderOptionThinking: map[string]any{"display": "omitted"}})(r)
 			},
-			want: map[string]string{"tools": `[{"name":"a","input_schema":{"type":"object"}},{"type":"web_search_20250305","name":"web_search"}]`},
+			want: map[string]string{"thinking": `{"type":"adaptive","display":"omitted"}`, "output_config": `{"effort":"high"}`},
 		},
 		{
 			name: "output_config option merges into generated output_config",
@@ -268,23 +279,24 @@ func TestBuildRequest(t *testing.T) {
 			want: map[string]string{"tool_choice": `{"type":"auto","disable_parallel_tool_use":true}`},
 		},
 		{
-			name:    "unknown option",
-			req:     withOptions(map[string]any{"thinking": map[string]any{"type": "enabled"}}),
-			wantErr: `unsupported provider option "thinking"`,
+			// Server tools produce blocks litellm drops.
+			name:    "server tool option",
+			req:     withOptions(map[string]any{"tools": []any{map[string]any{"type": "web_search_20250305", "name": "web_search"}}}),
+			wantErr: `unsupported provider option "tools"`,
 		},
 		{
 			name: "option conflicting with a generated field",
 			req: func(r *litellm.Request) {
-				r.Tools = []litellm.Tool{{Name: "a"}}
-				withOptions(map[string]any{ProviderOptionTools: map[string]any{"name": "b"}})(r)
+				r.Thinking = &litellm.Thinking{Disabled: true}
+				withOptions(map[string]any{ProviderOptionThinking: map[string]any{"type": "enabled"}})(r)
 			},
-			wantErr: `provider option "tools" conflicts with a generated request field`,
+			wantErr: `provider option "thinking.type" conflicts with a generated request field`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			req := &litellm.Request{Model: "claude", MaxTokens: new(1024), Messages: []litellm.Message{litellm.UserText("hi")}}
 			test.req(req)
-			data, err := buildRequest(req, false)
+			data, err := buildRequest(req, "anthropic", false)
 			if test.wantErr != "" {
 				if err == nil || err.Error() != test.wantErr {
 					t.Fatalf("err = %v, want %q", err, test.wantErr)

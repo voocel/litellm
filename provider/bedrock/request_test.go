@@ -10,23 +10,23 @@ import (
 )
 
 func TestBuildRequestGolden(t *testing.T) {
-	hour := &litellm.CacheControl{TTL: litellm.CacheTTL1h}
+	cache := &litellm.CacheControl{}
 	data, err := buildRequest(&litellm.Request{
 		Model:       "anthropic.claude-opus-5",
 		MaxTokens:   new(4096),
 		Temperature: new(1.0),
 		Messages: []litellm.Message{
-			{Role: litellm.RoleSystem, Blocks: []litellm.Block{litellm.TextBlock{Text: "be concise", Cache: hour}}},
+			{Role: litellm.RoleSystem, Blocks: []litellm.Block{litellm.TextBlock{Text: "be concise", Cache: cache}}},
 			litellm.UserText("use tool"),
-			litellm.Assistant(litellm.ToolUseBlock{ID: "toolu_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)}),
-			{Role: litellm.RoleTool, Blocks: []litellm.Block{litellm.ToolResultBlock{ToolUseID: "toolu_1", Content: []litellm.Block{litellm.Text("result")}, Cache: hour}}},
+			litellm.Assistant(litellm.ToolUseBlock{ID: "toolu_1", Name: "lookup", Arguments: `{"q":"x"}`}),
+			{Role: litellm.RoleTool, Blocks: []litellm.Block{litellm.ToolResultBlock{ToolUseID: "toolu_1", Content: []litellm.Block{litellm.Text("result")}, Cache: cache}}},
 		},
 		Tools: []litellm.Tool{{
-			Name: "lookup", Description: "Lookup data.", Strict: litellm.StrictEnabled,
+			Name: "lookup", Description: "Lookup data.", Strict: new(true),
 			Parameters: litellm.Schema(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`),
 		}},
 		Thinking: &litellm.Thinking{Effort: "low"},
-	})
+	}, "bedrock")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestBuildRequest(t *testing.T) {
 		},
 		{
 			name: "thinking disabled",
-			req:  func(r *litellm.Request) { r.Thinking = &litellm.Thinking{Mode: litellm.ThinkingDisabled} },
+			req:  func(r *litellm.Request) { r.Thinking = &litellm.Thinking{Disabled: true} },
 			want: map[string]string{"additionalModelRequestFields": `{"thinking":{"type":"disabled"}}`},
 		},
 		{
@@ -108,7 +108,7 @@ func TestBuildRequest(t *testing.T) {
 		{
 			name: "tools and choices",
 			req: func(r *litellm.Request) {
-				r.Tools = []litellm.Tool{{Name: "a", Parameters: litellm.Schema(schema), Strict: litellm.StrictDisabled}, {Name: "b"}}
+				r.Tools = []litellm.Tool{{Name: "a", Parameters: litellm.Schema(schema), Strict: new(false)}, {Name: "b"}}
 				r.ToolChoice = &litellm.ToolChoice{Name: "a"}
 			},
 			want: map[string]string{"toolConfig": `{"tools":[
@@ -233,9 +233,24 @@ func TestBuildRequest(t *testing.T) {
 		{
 			name: "tool arguments must be an object",
 			req: func(r *litellm.Request) {
-				r.Messages = []litellm.Message{litellm.Assistant(litellm.ToolUseBlock{ID: "t1", Arguments: json.RawMessage(`[1]`)})}
+				r.Messages = []litellm.Message{litellm.Assistant(litellm.ToolUseBlock{ID: "t1", Name: "f", Arguments: `{"q":`})}
 			},
-			wantErr: `messages[0]: tool use "t1" arguments must be a JSON object`,
+			wantErr: `messages[0]: tool use "t1" (f) arguments are not a JSON object`,
+		},
+		{
+			name: "tool result images and tool references",
+			req: func(r *litellm.Request) {
+				r.Messages = []litellm.Message{
+					litellm.Assistant(litellm.ToolUseBlock{ID: "t1", Name: "read"}),
+					litellm.ToolResult("t1", litellm.Text("a.png"), litellm.ImageBlock{Data: []byte("png"), MIME: "image/png"}, litellm.ToolReferenceBlock{ToolName: "grep"}),
+				}
+			},
+			want: map[string]string{"messages": `[
+				{"role":"assistant","content":[{"toolUse":{"toolUseId":"t1","name":"read","input":{}}}]},
+				{"role":"user","content":[{"toolResult":{"toolUseId":"t1","content":[
+					{"text":"a.png"},
+					{"image":{"format":"png","source":{"bytes":"cG5n"}}},
+					{"text":"Tool grep is now available."}]}}]}]`},
 		},
 		{
 			name: "json schema output",
@@ -253,7 +268,7 @@ func TestBuildRequest(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			req := &litellm.Request{Model: "m", Messages: []litellm.Message{litellm.UserText("hi")}}
 			test.req(req)
-			data, err := buildRequest(req)
+			data, err := buildRequest(req, "bedrock")
 			if test.wantErr != "" {
 				if err == nil || err.Error() != test.wantErr {
 					t.Fatalf("err = %v, want %q", err, test.wantErr)

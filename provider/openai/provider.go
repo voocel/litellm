@@ -6,7 +6,6 @@ package openai
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,6 +25,10 @@ const (
 
 // Config configures the OpenAI client. An API key is required.
 type Config struct {
+	// Name identifies the provider in responses, errors and ProviderState,
+	// "openai" by default. Give each endpoint its own name, such as an Azure
+	// deployment, so reasoning state is replayed only where it was issued.
+	Name string
 	// API selects Chat Completions (APIChat, the default) or APIResponses.
 	API string
 	// APIKey authenticates requests; APIKeyFunc, when set, resolves it per
@@ -42,8 +45,7 @@ type Config struct {
 	Headers map[string]string
 }
 
-// Provider implements litellm.Provider, litellm.CapabilityProvider and
-// litellm.ModelLister.
+// Provider implements litellm.Provider and litellm.CapabilityProvider.
 type Provider struct {
 	cfg  Config
 	chat *openaicompat.Provider
@@ -51,12 +53,15 @@ type Provider struct {
 
 // New returns a Provider for cfg.
 func New(cfg Config) (*Provider, error) {
+	if cfg.Name == "" {
+		cfg.Name = "openai"
+	}
 	switch cfg.API {
 	case "":
 		cfg.API = APIChat
 	case APIChat, APIResponses:
 	default:
-		return nil, litellm.NewError("openai", litellm.ErrorTypeValidation, fmt.Sprintf("api must be %q or %q, got %q", APIChat, APIResponses, cfg.API), nil)
+		return nil, litellm.NewError(cfg.Name, litellm.ErrorTypeValidation, fmt.Sprintf("api must be %q or %q, got %q", APIChat, APIResponses, cfg.API), nil)
 	}
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "https://api.openai.com/v1"
@@ -66,7 +71,7 @@ func New(cfg Config) (*Provider, error) {
 		cfg.UserAgent = wire.DefaultUserAgent
 	}
 	chat, err := openaicompat.New(openaicompat.Config{
-		APIKey: cfg.APIKey, APIKeyFunc: cfg.APIKeyFunc, BaseURL: cfg.BaseURL,
+		Name: cfg.Name, APIKey: cfg.APIKey, APIKeyFunc: cfg.APIKeyFunc, BaseURL: cfg.BaseURL,
 		HTTPClient: cfg.HTTPClient, UserAgent: cfg.UserAgent, Headers: cfg.Headers,
 	}, openaicompat.Spec{
 		Name:           "openai",
@@ -81,15 +86,15 @@ func New(cfg Config) (*Provider, error) {
 	return &Provider{cfg: cfg, chat: chat}, nil
 }
 
-// Name returns "openai".
+// Name returns the configured name.
 func (p *Provider) Name() string {
-	return "openai"
+	return p.cfg.Name
 }
 
 // Capabilities reports the static protocol facts of the selected API.
 func (p *Provider) Capabilities() litellm.Capabilities {
 	if p.cfg.API == APIResponses {
-		return litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true, ProviderOptions: sortedCopy(responsesOptions)}
+		return litellm.Capabilities{ThinkingEffort: true, DisableThinking: true, ProviderOptions: sortedCopy(responsesOptions)}
 	}
 	return p.chat.Capabilities()
 }
@@ -114,11 +119,6 @@ func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.St
 		return p.responsesStream(ctx, req)
 	}
 	return p.chat.Stream(ctx, req)
-}
-
-// ListModels calls GET /models.
-func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) {
-	return p.chat.ListModels(ctx)
 }
 
 // checkOptions points options of the other API to the Config.API that accepts
@@ -160,14 +160,9 @@ func (p *Provider) post(ctx context.Context, body []byte, stream bool) (*http.Re
 	return wire.Do(p.cfg.HTTPClient, httpReq, p.Name(), "request")
 }
 
-// promptCacheBreakpoint marks an explicit prompt cache breakpoint. OpenAI sets
-// the TTL for the whole request through prompt_cache_options.
-func promptCacheBreakpoint(cache *litellm.CacheControl) (map[string]any, error) {
-	if cache.TTL != "" {
-		return nil, errors.New("cache breakpoint TTL is set through the prompt_cache_options provider option")
-	}
-	return map[string]any{"prompt_cache_breakpoint": map[string]any{"mode": "explicit"}}, nil
-}
+// promptCacheBreakpoint holds the content part fields of an explicit prompt
+// cache breakpoint.
+var promptCacheBreakpoint = map[string]any{"prompt_cache_breakpoint": map[string]any{"mode": "explicit"}}
 
 func (p *Provider) readResponse(resp *http.Response) ([]byte, error) {
 	defer resp.Body.Close()

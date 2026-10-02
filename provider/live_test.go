@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -68,18 +69,15 @@ type target struct {
 	model    string
 	keyEnv   string
 	urlEnv   string
-	// pricedUsage: the vendor reports or implies every token count, cache
-	// reads and writes included, so usage can be priced.
-	pricedUsage bool
 }
 
 var targets = []target{
 	{provider: "anthropic", model: "claude-haiku-4-5", keyEnv: "ANTHROPIC_API_KEY", urlEnv: "ANTHROPIC_BASE_URL"},
-	{provider: "deepseek", model: "deepseek-flash", keyEnv: "DEEPSEEK_API_KEY", urlEnv: "DEEPSEEK_BASE_URL", pricedUsage: true},
+	{provider: "deepseek", model: "deepseek-flash", keyEnv: "DEEPSEEK_API_KEY", urlEnv: "DEEPSEEK_BASE_URL"},
 	{provider: "gemini", model: "gemini-3.7-flash", keyEnv: "GEMINI_API_KEY", urlEnv: "GEMINI_BASE_URL"},
-	{provider: "glm", model: "glm-5.3-flash", keyEnv: "GLM_API_KEY", urlEnv: "GLM_BASE_URL", pricedUsage: true},
+	{provider: "glm", model: "glm-5.3-flash", keyEnv: "GLM_API_KEY", urlEnv: "GLM_BASE_URL"},
 	{provider: "openai", model: "gpt-5-mini", keyEnv: "OPENAI_API_KEY", urlEnv: "OPENAI_BASE_URL"},
-	{provider: "qwen", model: "qwen3.8-max-0902", keyEnv: "QWEN_API_KEY", urlEnv: "QWEN_BASE_URL", pricedUsage: true},
+	{provider: "qwen", model: "qwen3.8-max-0902", keyEnv: "QWEN_API_KEY", urlEnv: "QWEN_BASE_URL"},
 }
 
 var scenarios = []struct {
@@ -90,6 +88,8 @@ var scenarios = []struct {
 	{"stream", testStream},
 	{"tools", testTools},
 	{"cache", testCache},
+	{"thinking", testThinking},
+	{"structured", testStructured},
 }
 
 func testChat(t *testing.T, c *litellm.Client, tg target) {
@@ -97,7 +97,7 @@ func testChat(t *testing.T, c *litellm.Client, tg target) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkAnswer(t, resp, tg)
+	checkAnswer(t, resp)
 }
 
 func testStream(t *testing.T, c *litellm.Client, tg target) {
@@ -110,7 +110,7 @@ func testStream(t *testing.T, c *litellm.Client, tg target) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkAnswer(t, resp, tg)
+	checkAnswer(t, resp)
 }
 
 // testTools sends the tool call turn back as produced, reasoning state
@@ -132,10 +132,10 @@ func testTools(t *testing.T, c *litellm.Client, tg target) {
 			call = &b
 		}
 	}
-	if resp.FinishReason != litellm.FinishReasonToolCall || call == nil || call.Name != "get_weather" || !json.Valid(call.Arguments) {
+	if resp.FinishReason != litellm.FinishReasonToolCall || call == nil || call.Name != "get_weather" || !json.Valid([]byte(call.Arguments)) {
 		t.Fatalf("finish %q, tool call %+v", resp.FinishReason, call)
 	}
-	checkUsage(t, resp.Usage, tg)
+	checkUsage(t, resp.Usage)
 	req.Messages = append(req.Messages,
 		litellm.Message{Role: litellm.RoleAssistant, Blocks: resp.Blocks},
 		litellm.Message{Role: litellm.RoleTool, Blocks: []litellm.Block{litellm.ToolResultBlock{
@@ -147,7 +147,7 @@ func testTools(t *testing.T, c *litellm.Client, tg target) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkAnswer(t, final, tg)
+	checkAnswer(t, final)
 }
 
 // testCache sends a long prefix twice. A hit is logged rather than required:
@@ -166,29 +166,90 @@ func testCache(t *testing.T, c *litellm.Client, tg target) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		checkAnswer(t, resp, tg)
-		read, _ := resp.Usage.CacheRead()
-		write, _ := resp.Usage.CacheWrite()
-		t.Logf("cache read %d, write %d", read, write)
+		checkAnswer(t, resp)
+		t.Logf("cache read %d, write %d", resp.Usage.CacheReadTokens, resp.Usage.CacheWriteTokens)
 	}
 }
 
-func checkAnswer(t *testing.T, resp *litellm.Response, tg target) {
+// testThinking sends the thinking settings the adapter's capabilities say it
+// sends, and checks it refuses the others before any call. A model may
+// still refuse a setting sent, as one that always thinks refuses Disabled:
+// that is logged, not failed.
+func testThinking(t *testing.T, c *litellm.Client, tg target) {
+	caps, _ := c.Capabilities()
+	for _, tc := range []struct {
+		name     string
+		thinking litellm.Thinking
+		sent     bool
+	}{
+		{"effort", litellm.Thinking{Effort: "high"}, caps.ThinkingEffort},
+		{"disabled", litellm.Thinking{Disabled: true}, caps.DisableThinking},
+	} {
+		req := request(tg, userText("Reply with the single word: pong"))
+		req.Thinking = &tc.thinking
+		resp, err := c.Chat(callContext(t), req)
+		refused := litellm.ErrorTypeOf(err) == litellm.ErrorTypeValidation
+		switch {
+		case !tc.sent:
+			if !refused || fromVendor(err) {
+				t.Errorf("%s: undeclared setting gave %v, want a refusal before the call", tc.name, err)
+			}
+		case refused && fromVendor(err):
+			t.Logf("%s: the model refused it: %v", tc.name, err)
+		case err != nil:
+			t.Errorf("%s: %v", tc.name, err)
+		default:
+			checkAnswer(t, resp)
+		}
+	}
+}
+
+// fromVendor reports whether err is the vendor's answer, rather than the
+// adapter's refusal before the call.
+func fromVendor(err error) bool {
+	var e *litellm.Error
+	return errors.As(err, &e) && e.StatusCode != 0
+}
+
+// testStructured asks for JSON of a schema, natively or through the prompt
+// fallback, and decodes the answer.
+func testStructured(t *testing.T, c *litellm.Client, tg target) {
+	format, err := litellm.NewResponseFormatJSONSchema("answer", "The answer.", map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{"word": map[string]any{"type": "string"}},
+		"required":             []string{"word"},
+		"additionalProperties": false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := request(tg, userText(`Answer with the word "pong".`))
+	req.ResponseFormat = format
+	resp, err := c.Chat(callContext(t), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkAnswer(t, resp)
+	var out struct {
+		Word string `json:"word"`
+	}
+	if err := json.Unmarshal([]byte(resp.Text()), &out); err != nil || out.Word == "" {
+		t.Fatalf("answer %q: %v", resp.Text(), err)
+	}
+}
+
+func checkAnswer(t *testing.T, resp *litellm.Response) {
 	t.Helper()
 	if resp.FinishReason != litellm.FinishReasonStop || strings.TrimSpace(resp.Text()) == "" {
 		t.Fatalf("finish %q, text %q", resp.FinishReason, resp.Text())
 	}
-	checkUsage(t, resp.Usage, tg)
+	checkUsage(t, resp.Usage)
 }
 
-func checkUsage(t *testing.T, u litellm.Usage, tg target) {
+func checkUsage(t *testing.T, u litellm.Usage) {
 	t.Helper()
-	counts, _ := json.Marshal(u)
-	if u.InputTokens == nil || u.OutputTokens == nil {
-		t.Fatalf("usage %s lacks input or output tokens", counts)
-	}
-	if tg.pricedUsage && (u.CacheReadTokens == nil || u.CacheWriteTokens == nil) {
-		t.Fatalf("usage %s lacks cache counts", counts)
+	if u.InputTokens == 0 || u.OutputTokens == 0 {
+		t.Fatalf("usage %+v lacks input or output tokens", u)
 	}
 }
 

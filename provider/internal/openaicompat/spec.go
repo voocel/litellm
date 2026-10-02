@@ -7,10 +7,12 @@ import (
 	"github.com/voocel/litellm"
 )
 
-// Config configures an OpenAI-compatible provider.
 // Config holds the connection settings shared by compat and the vendor
 // wrappers.
 type Config struct {
+	// Name, when set, names the provider instead of the vendor, as a
+	// compatible endpoint should: provider state and errors carry it.
+	Name string
 	// APIKey is sent as a bearer token; APIKeyFunc, when set, resolves it per
 	// request instead.
 	APIKey     string
@@ -39,19 +41,19 @@ type Spec struct {
 	// MaxTokensField names the output limit field; empty means max_tokens.
 	MaxTokensField string
 	// Thinking maps Request.Thinking to body fields. Nil sends Effort as
-	// reasoning_effort and ThinkingDisabled as reasoning_effort "none".
+	// reasoning_effort and Thinking.Disabled as reasoning_effort "none".
 	Thinking func(*litellm.Thinking) (map[string]any, error)
 	// ThinkingAlwaysOn reports that the vendor cannot disable thinking, so
-	// ThinkingDisabled is rejected.
+	// Thinking.Disabled is rejected.
 	ThinkingAlwaysOn bool
 	// Fields are sent on every request.
 	Fields map[string]any
 	// Options lists the accepted ProviderOptions keys. Options are copied into
 	// the body; one naming a generated object field is merged into it.
 	Options []string
-	// Cache encodes a block cache breakpoint as content part fields. Nil drops
-	// breakpoints, which are hints.
-	Cache func(*litellm.CacheControl) (map[string]any, error)
+	// Cache holds the content part fields of a block cache breakpoint. Nil
+	// drops breakpoints, which are hints.
+	Cache map[string]any
 	// ReasoningFields names the message fields that carry reasoning, in
 	// priority order. reasoning_details is kept as the ReasoningBlock State and
 	// replayed verbatim to this provider; history text is sent in the first
@@ -69,10 +71,6 @@ type Spec struct {
 	SchemaFallback litellm.ResponseFormatType
 	// OmitStreamOptions leaves stream_options out of stream requests.
 	OmitStreamOptions bool
-	// CacheWritesUnbilled reports that the vendor caches prompts without a
-	// cache write charge: uncached prompt tokens bill as input, so reported
-	// usage has no cache writes.
-	CacheWritesUnbilled bool
 }
 
 func (s Spec) maxTokensField() string {
@@ -88,7 +86,7 @@ func reasoningEffort(thinking *litellm.Thinking) (map[string]any, error) {
 	if thinking.BudgetTokens != nil {
 		return nil, errors.New("thinking budget_tokens is not supported; use effort")
 	}
-	if thinking.Mode == litellm.ThinkingDisabled {
+	if thinking.Disabled {
 		return map[string]any{"reasoning_effort": "none"}, nil
 	}
 	if thinking.Effort != "" {
@@ -105,7 +103,7 @@ func ThinkingType(on string, effort bool) func(*litellm.Thinking) (map[string]an
 		if thinking.BudgetTokens != nil {
 			return nil, errors.New("thinking budget_tokens is not supported")
 		}
-		if thinking.Mode == litellm.ThinkingDisabled {
+		if thinking.Disabled {
 			return map[string]any{"thinking": map[string]any{"type": "disabled"}}, nil
 		}
 		body := map[string]any{"thinking": map[string]any{"type": on}}

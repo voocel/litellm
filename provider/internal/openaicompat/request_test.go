@@ -3,7 +3,6 @@ package openaicompat_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -29,7 +28,7 @@ func TestRequestBody(t *testing.T) {
 		Messages: []litellm.Message{
 			litellm.System("be brief"),
 			litellm.User(litellm.Text("look"), litellm.ImageBlock{Data: []byte("png"), MIME: "image/png", Detail: "low"}),
-			litellm.Assistant(litellm.ReasoningBlock{Text: "plan"}, litellm.Text("calling"), litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)}),
+			litellm.Assistant(litellm.ReasoningBlock{Text: "plan"}, litellm.Text("calling"), litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: `{"q":"x"}`}),
 			litellm.ToolResult("call_1", litellm.Text("a"), litellm.Text("b")),
 		},
 		MaxTokens:   new(64),
@@ -37,8 +36,8 @@ func TestRequestBody(t *testing.T) {
 		TopP:        new(0.9),
 		Stop:        []string{"END"},
 		Tools: []litellm.Tool{
-			{Name: "lookup", Description: "Lookup.", Parameters: litellm.Schema(`{"type":"object","properties":{"q":{"type":"string"}}}`), Strict: litellm.StrictEnabled},
-			{Name: "ping", Strict: litellm.StrictDisabled},
+			{Name: "lookup", Description: "Lookup.", Parameters: litellm.Schema(`{"type":"object","properties":{"q":{"type":"string"}}}`), Strict: new(true)},
+			{Name: "ping", Strict: new(false)},
 		},
 		ToolChoice:     &litellm.ToolChoice{Name: "lookup"},
 		ResponseFormat: &litellm.ResponseFormat{Type: litellm.ResponseFormatJSONSchema, JSONSchema: &litellm.JSONSchema{Name: "out", Schema: litellm.Schema(`{"type":"object"}`)}},
@@ -127,7 +126,6 @@ func TestRequestErrors(t *testing.T) {
 		{name: "unknown option", newFn: compattest.Spec(openaicompat.Spec{Name: "test", Options: []string{"seed"}}), req: litellm.Request{ProviderOptions: map[string]json.RawMessage{"top_k": json.RawMessage(`1`)}}, want: `unsupported provider option "top_k"`},
 		{name: "option replaces generated scalar", newFn: allowUnknown(openaicompat.Spec{Name: "test"}), req: litellm.Request{ProviderOptions: map[string]json.RawMessage{"model": json.RawMessage(`"x"`)}}, want: `provider option "model" conflicts`},
 		{name: "several outputs", newFn: allowUnknown(openaicompat.Spec{Name: "test"}), req: litellm.Request{ProviderOptions: map[string]json.RawMessage{"n": json.RawMessage(`2`)}}, want: `provider option "n" must be 1`},
-		{name: "cache hook", newFn: compattest.Spec(openaicompat.Spec{Name: "test", Cache: func(*litellm.CacheControl) (map[string]any, error) { return nil, errors.New("ttl is not supported") }}), req: litellm.Request{Messages: []litellm.Message{litellm.User(litellm.TextBlock{Text: "hi", Cache: &litellm.CacheControl{TTL: litellm.CacheTTL1h}})}}, want: "ttl is not supported"},
 		{name: "inline image without MIME", newFn: plain, req: litellm.Request{Messages: []litellm.Message{litellm.User(litellm.ImageBlock{Data: []byte("x")})}}, want: "inline image requires MIME"},
 	}
 	for _, tt := range tests {
@@ -138,7 +136,7 @@ func TestRequestErrors(t *testing.T) {
 				req.Messages = []litellm.Message{litellm.UserText("hi")}
 			}
 			err := compattest.Err(t, tt.newFn, &req)
-			if !litellm.IsValidationError(err) || !strings.Contains(err.Error(), tt.want) {
+			if litellm.ErrorTypeOf(err) != litellm.ErrorTypeValidation || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("err = %v, want validation error containing %q", err, tt.want)
 			}
 		})
@@ -155,7 +153,7 @@ func TestThinking(t *testing.T) {
 	enabled := &litellm.Thinking{}
 	high := &litellm.Thinking{Effort: "high"}
 	budget := &litellm.Thinking{BudgetTokens: new(1024)}
-	disabled := &litellm.Thinking{Mode: litellm.ThinkingDisabled}
+	disabled := &litellm.Thinking{Disabled: true}
 	tests := []struct {
 		spec     string
 		thinking *litellm.Thinking
@@ -199,18 +197,16 @@ func TestFieldsAreNotShared(t *testing.T) {
 }
 
 func TestCacheBreakpoints(t *testing.T) {
-	cache := &litellm.CacheControl{TTL: litellm.CacheTTL5m}
+	cache := &litellm.CacheControl{}
 	messages := []litellm.Message{
 		litellm.User(litellm.TextBlock{Text: "hi", Cache: cache}, litellm.ImageBlock{URL: "https://img.test/a.png", Cache: cache}),
 		litellm.User(litellm.TextBlock{Text: "only", Cache: cache}),
 		{Role: litellm.RoleTool, Blocks: []litellm.Block{litellm.ToolResultBlock{ToolUseID: "call_1", Content: []litellm.Block{litellm.Text("ok")}, Cache: cache}}},
 	}
-	mark := func(c *litellm.CacheControl) (map[string]any, error) {
-		return map[string]any{"cache_control": map[string]any{"ttl": c.TTL}}, nil
-	}
+	mark := map[string]any{"cache_control": map[string]any{"type": "ephemeral"}}
 	tests := []struct {
 		name  string
-		cache func(*litellm.CacheControl) (map[string]any, error)
+		cache map[string]any
 		want  string
 	}{
 		{name: "dropped without hook", want: `[
@@ -220,11 +216,11 @@ func TestCacheBreakpoints(t *testing.T) {
 		]`},
 		{name: "hook", cache: mark, want: `[
 			{"role": "user", "content": [
-				{"type": "text", "text": "hi", "cache_control": {"ttl": "5m"}},
-				{"type": "image_url", "image_url": {"url": "https://img.test/a.png"}, "cache_control": {"ttl": "5m"}}
+				{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}},
+				{"type": "image_url", "image_url": {"url": "https://img.test/a.png"}, "cache_control": {"type": "ephemeral"}}
 			]},
-			{"role": "user", "content": [{"type": "text", "text": "only", "cache_control": {"ttl": "5m"}}]},
-			{"role": "tool", "tool_call_id": "call_1", "content": [{"type": "text", "text": "ok", "cache_control": {"ttl": "5m"}}]}
+			{"role": "user", "content": [{"type": "text", "text": "only", "cache_control": {"type": "ephemeral"}}]},
+			{"role": "tool", "tool_call_id": "call_1", "content": [{"type": "text", "text": "ok", "cache_control": {"type": "ephemeral"}}]}
 		]`},
 	}
 	for _, tt := range tests {
@@ -241,7 +237,7 @@ func TestAssistantMessage(t *testing.T) {
 		return &litellm.ProviderState{Provider: provider, Data: json.RawMessage(data)}
 	}
 	details := litellm.ReasoningBlock{Text: "t", State: state("test", `[{"type":"reasoning.text","text":"t"}]`)}
-	call := litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{}`)}
+	call := litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: `{}`}
 	toolCalls := `[{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}]`
 	both := []string{"reasoning_details", "reasoning"}
 	tests := []struct {
@@ -281,6 +277,34 @@ func TestAssistantMessage(t *testing.T) {
 
 // A message left with nothing to send, such as reasoning no field can carry,
 // is omitted rather than sent empty.
+// TestToolResultImages checks that tool messages keep the text of their
+// results while the images follow the turn's tool messages in a user message.
+func TestToolResultImages(t *testing.T) {
+	png := litellm.ImageBlock{Data: []byte("png"), MIME: "image/png"}
+	body := compattest.Body(t, plain, &litellm.Request{
+		Model: "m",
+		Messages: []litellm.Message{
+			litellm.Assistant(litellm.ToolUseBlock{ID: "c1", Name: "read", Arguments: `{}`}, litellm.ToolUseBlock{ID: "c2", Name: "find", Arguments: `{}`}),
+			litellm.ToolResult("c1", litellm.Text("a.png, 3 bytes"), png),
+			litellm.ToolResult("c2", litellm.ToolReferenceBlock{ToolName: "grep"}),
+			litellm.UserText("next"),
+		},
+	}, false)
+	compattest.AssertJSON(t, body["messages"], `[
+		{"role": "assistant", "tool_calls": [
+			{"id": "c1", "type": "function", "function": {"name": "read", "arguments": "{}"}},
+			{"id": "c2", "type": "function", "function": {"name": "find", "arguments": "{}"}}
+		]},
+		{"role": "tool", "tool_call_id": "c1", "content": "a.png, 3 bytes"},
+		{"role": "tool", "tool_call_id": "c2", "content": "Tool grep is now available."},
+		{"role": "user", "content": [
+			{"type": "text", "text": "The image of tool call c1:"},
+			{"type": "image_url", "image_url": {"url": "data:image/png;base64,cG5n"}}
+		]},
+		{"role": "user", "content": "next"}
+	]`)
+}
+
 func TestEmptyMessageOmitted(t *testing.T) {
 	messages := []litellm.Message{litellm.UserText("a"), litellm.Assistant(litellm.ReasoningBlock{Text: "t"}), litellm.UserText("b")}
 	body := compattest.Body(t, compattest.Spec(openaicompat.Spec{Name: "test"}), &litellm.Request{Model: "m", Messages: messages}, false)

@@ -27,13 +27,13 @@ func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func TestNewRequiresCredentials(t *testing.T) {
 	_, err := New(Config{})
-	if !litellm.IsValidationError(err) || err.Error() != "bedrock: credentials provider is required" {
+	if litellm.ErrorTypeOf(err) != litellm.ErrorTypeValidation || err.Error() != "bedrock: credentials provider is required" {
 		t.Fatalf("err = %v", err)
 	}
 }
 
 func TestCapabilities(t *testing.T) {
-	want := litellm.Capabilities{Thinking: true, DisableThinking: true, ThinkingEffort: true, ThinkingBudget: true, ProviderOptions: []string{
+	want := litellm.Capabilities{ThinkingEffort: true, DisableThinking: true, ProviderOptions: []string{
 		"additionalModelRequestFields", "additionalModelResponseFieldPaths", "guardrailConfig",
 		"performanceConfig", "promptVariables", "requestMetadata",
 	}}
@@ -95,22 +95,8 @@ func TestChatReturnsHTTPErrors(t *testing.T) {
 		return jsonResponse(http.StatusBadRequest, `{"message":"bad model"}`), nil
 	}))
 	_, err := p.Chat(context.Background(), &litellm.Request{Model: "m", Messages: []litellm.Message{litellm.UserText("hi")}})
-	if !litellm.IsValidationError(err) || !strings.Contains(err.Error(), "bad model") {
+	if litellm.ErrorTypeOf(err) != litellm.ErrorTypeValidation || !strings.Contains(err.Error(), "bad model") {
 		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestListModels(t *testing.T) {
-	p := newProvider(t, doerFunc(func(r *http.Request) (*http.Response, error) {
-		if r.URL.String() != "https://bedrock.us-west-2.amazonaws.com/foundation-models" {
-			t.Fatalf("url = %s", r.URL)
-		}
-		return jsonResponse(http.StatusOK, `{"modelSummaries":[{"modelId":"a.b-v1:0","providerName":"A"},{"modelId":"c","modelName":"C"}]}`), nil
-	}))
-	models, err := p.ListModels(context.Background())
-	want := []litellm.ModelInfo{{ID: "a.b-v1:0", Name: "a.b-v1:0", Provider: "A"}, {ID: "c", Name: "C"}}
-	if err != nil || !reflect.DeepEqual(models, want) {
-		t.Fatalf("models = %+v, err = %v", models, err)
 	}
 }
 

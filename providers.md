@@ -2,7 +2,7 @@
 
 Each adapter maps the shared `litellm.Request` onto its vendor's wire format, including the documented JSON Schema prompt fallback below. It does not infer what a model supports and does not check vendor values; whatever is sent is judged by the vendor API, and its error is returned as is. This page records the mapping so you can predict the request an adapter sends.
 
-`client.Capabilities()` reports the same static facts at runtime: whether `Thinking`, `ThinkingDisabled`, `Effort` and `BudgetTokens` can be expressed (the table below), and the accepted `ProviderOptions` keys.
+`client.Capabilities()` reports the static protocol facts at runtime: whether `MaxTokens` is required, whether `Thinking.Effort` and `Thinking.Disabled` can be sent (the "error" cells of the thinking table below), and the accepted `ProviderOptions` keys.
 
 ## Output Limit
 
@@ -19,7 +19,7 @@ Each adapter maps the shared `litellm.Request` onto its vendor's wire format, in
 
 `Thinking == nil` sends no thinking fields. `Effort` and `BudgetTokens` are sent as given. A combination the wire format cannot express returns a validation error before the request is sent.
 
-| Provider | Enabled | `ThinkingDisabled` | `Effort` | `BudgetTokens` | `IncludeOutput` |
+| Provider | Enabled | `Disabled` | `Effort` | `BudgetTokens` | `IncludeOutput` |
 | --- | --- | --- | --- | --- | --- |
 | OpenAI Chat, compat, Ollama | — | `reasoning_effort: "none"` | `reasoning_effort` | error | ignored |
 | OpenAI Responses | — | `reasoning.effort: "none"` | `reasoning.effort` | error | `reasoning.summary: "auto"` |
@@ -34,6 +34,8 @@ Each adapter maps the shared `litellm.Request` onto its vendor's wire format, in
 | Qwen | `enable_thinking: true` | `enable_thinking: false` | error | `thinking_budget` | ignored |
 
 Bedrock sends Claude's thinking format. For other model families, set their fields through the `additionalModelRequestFields` option instead of `Thinking`.
+
+Anthropic also accepts a `thinking` provider option, for shapes litellm does not map: it is sent as given when `Thinking` is nil, and merged into the generated object otherwise, such as `{"display": "omitted"}`.
 
 ## Reasoning Output
 
@@ -86,13 +88,13 @@ Callers use `ResponseFormatJSONSchema` with the same `JSONSchema` across provide
 
 The fallback appends the schema name, description and full document to the last user message, or adds a user message if none exists. It preserves the caller's messages and reasoning/tool history. Both `Chat` and `Stream` use this mapping; fallback requests return `litellm.schema_prompt_fallback` in `Response.Warnings` or as a `WarningEvent` (also retained by `Collect`).
 
-Prompting is best effort, including with `StrictEnabled`: JSON mode constrains JSON syntax, not schema adherence, and prompting alone guarantees neither. The SDK does not validate or retry generated output; callers needing schema guarantees must validate it. Native adapters do not automatically retry with prompting when a particular model rejects a schema request.
+Prompting is best effort, including with `Strict` set: JSON mode constrains JSON syntax, not schema adherence, and prompting alone guarantees neither. The SDK does not validate or retry generated output; callers needing schema guarantees must validate it. Native adapters do not automatically retry with prompting when a particular model rejects a schema request.
 
 ## Gemini Request Formats
 
 The adapter uses `generateContent` and `streamGenerateContent`. JSON output maps to `generationConfig.responseFormat.text.mimeType: "APPLICATION_JSON"`; JSON Schema also sets `responseFormat.text.schema`, preserving the schema document. The MIME value follows the enum in the [REST reference](https://ai.google.dev/api/generate-content#TextResponseFormat), rather than the string used by legacy `responseMimeType`.
 
-`generationConfig.candidateCount` in `ProviderOptions` must be 1 when supplied: `litellm.Response` represents one output. Tool results marked `IsError` always go under `functionResponse.response.error`, including JSON objects. `ListModels` follows `nextPageToken` until the full list has been retrieved.
+`generationConfig.candidateCount` in `ProviderOptions` must be 1 when supplied: `litellm.Response` represents one output. Tool results marked `IsError` always go under `functionResponse.response.error`, including JSON objects.
 
 ## DeepSeek Request Formats
 
@@ -100,7 +102,7 @@ The default example model is `deepseek-flash`. Per the [Chat Completions API](ht
 
 The API supports `text` and `json_object`; the SDK maps `json_schema` to the prompt fallback described above. When using `json_object` directly, also instruct the model to produce JSON in a system or user message.
 
-For strict tool calls, set `deepseek.Config.BaseURL` to `https://api.deepseek.com/beta` and use `litellm.StrictEnabled` on every tool. The provider sends the selected strict flags and uses the configured endpoint; DeepSeek validates the tool schemas. See [Tool Calls](https://api-docs.deepseek.com/guides/tool_calls/).
+For strict tool calls, set `deepseek.Config.BaseURL` to `https://api.deepseek.com/beta` and set `Strict: new(true)` on every tool. The provider sends the selected strict flags and uses the configured endpoint; DeepSeek validates the tool schemas. See [Tool Calls](https://api-docs.deepseek.com/guides/tool_calls/).
 
 ## System Messages
 
@@ -125,11 +127,13 @@ Anthropic requires tool call ids matching `[a-zA-Z0-9_-]+`, and Bedrock Converse
 
 | Provider | Encoding |
 | --- | --- |
-| OpenAI Chat and Responses | content part `prompt_cache_breakpoint: {"mode": "explicit"}`; a `TTL` is an error |
-| Anthropic | `cache_control: {"type": "ephemeral", "ttl": TTL}` |
-| OpenRouter | `cache_control: {"type": "ephemeral", "ttl": TTL}` on the content part |
-| Bedrock | a `cachePoint: {"type": "default", "ttl": TTL}` block after the marked block |
+| OpenAI Chat and Responses | content part `prompt_cache_breakpoint: {"mode": "explicit"}`; the `prompt_cache_retention` option sets the lifetime for the whole request |
+| Anthropic | `cache_control: {"type": "ephemeral"}` |
+| OpenRouter | `cache_control: {"type": "ephemeral"}` on the content part |
+| Bedrock | a `cachePoint: {"type": "default"}` block after the marked block |
 | others | dropped; Gemini uses the `cachedContent` option |
+
+Breakpoints use the vendor's default lifetime, five minutes on Anthropic and Bedrock. Longer lifetimes are priced differently, and usage does not tell them apart. Thinking blocks cannot carry a breakpoint ([Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)), so `ReasoningBlock` has none.
 
 OpenAI Responses sends cached tool results as `input_text` content parts. A
 breakpoint on `ToolResultBlock` marks the last part; breakpoints on individual
@@ -138,8 +142,9 @@ text blocks mark those parts. Unmarked results remain strings.
 ## Usage
 
 `Usage.InputTokens` counts every prompt token, cache reads and writes
-included. A nil count is one the vendor did not report; `catalog.Pricing.Cost`
-cannot price a cache count it cannot tell apart from input.
+included. A count the vendor does not report is zero, and `catalog.Pricing.Cost`
+prices the input outside the cache counts at the input rate, so a vendor that
+reports no cache counts, such as MiniMax, is priced as uncached input.
 
 | Provider | Cache reads | Cache writes |
 | --- | --- | --- |
@@ -166,6 +171,28 @@ known, so replay state matches non-streaming replies.
 completed reply and rejects background jobs before sending a request; the SDK
 does not expose background job polling or stream resumption.
 
+## Tool Results
+
+A `ToolResultBlock` holds text, images and tool references on every provider:
+
+| Provider | Images | Tool references |
+| --- | --- | --- |
+| Chat Completions adapters | text stays in the tool message; the images follow the turn's tool messages in one user message, each result's introduced by `The image of tool call <id>:` | text |
+| OpenAI Responses | `function_call_output.output` becomes a content list of `input_text` and `input_image` parts; text-only output stays a string ([Function calling](https://developers.openai.com/api/docs/guides/function-calling)) | text |
+| Anthropic | `tool_result` content | native `tool_reference` |
+| Bedrock | `toolResult.content` image blocks, which AWS supports for Nova and Claude models ([ToolResultContentBlock](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolResultContentBlock.html)) | text |
+| Gemini | `functionResponse.parts` as `inlineData`, a multimodal function response of Gemini 3 models; images by URL or file are rejected ([Multimodal function responses](https://ai.google.dev/gemini-api/docs/generate-content/function-calling)) | text |
+
+A tool reference sent as text reads `Tool <name> is now available.`; the tool must be among the request's tools.
+
+`ToolUseBlock.Arguments` is the text the model wrote. Anthropic, Bedrock and Gemini need a JSON object on the wire and return a validation error naming the call when the arguments are not one; the Chat Completions and Responses adapters send the text as it is.
+
+## Stream Endings
+
+A stream that ends before the vendor's terminal event (`message_stop`, a finish reason, `response.completed`, Bedrock `metadata`) returns `io.EOF` from the adapter, which the Client reports as a temporary network error: a fresh request may complete. A server fault reported inside a stream (`api_error`, `server_error`, `internalServerException`, `modelStreamErrorException`) is temporary, as its HTTP 5xx would be.
+
 ## Provider Options
 
 `ProviderOptions` carry native wire fields: each key is a top-level field of the vendor's request body. Keys are checked against the adapter's list and rejected when unknown, except in `compat`, which passes every key through. When a key names a field the adapter also generates, an object is merged into it and an array is appended to it; any other collision is an error. Generated JSON outside the merged objects is sent byte for byte, so schema property order is kept. The constants in each provider package name the accepted keys.
+
+Options whose output litellm drops are not offered: Anthropic server tools (`tools`), `mcp_servers`, `container` and `context_management`; OpenAI Responses hosted tools (`tools`), `max_tool_calls`, server-side compaction (`context_management`) and `previous_response_id`, which a `Response` carries no id for.

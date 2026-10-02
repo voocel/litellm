@@ -68,7 +68,7 @@ func TestReaderLongLine(t *testing.T) {
 
 func TestReaderReadFailureIsNetworkError(t *testing.T) {
 	_, err := NewSSEReader(iotest.ErrReader(errors.New("reset")), "test").Next()
-	if !litellm.IsNetworkError(err) {
+	if litellm.ErrorTypeOf(err) != litellm.ErrorTypeNetwork {
 		t.Fatalf("err = %v", err)
 	}
 }

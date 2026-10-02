@@ -52,7 +52,7 @@ func TestResponsesStreamEvents(t *testing.T) {
 		`{"type":"response.reasoning_summary_text.delta","sequence_number":8,"output_index":3,"summary_index":0,"delta":"x"}`,
 		`{"type":"response.reasoning_summary_text.delta","sequence_number":9,"output_index":3,"summary_index":1,"delta":"y"}`,
 		`{"type":"response.completed","sequence_number":10,"response":{"status":"completed","usage":{"input_tokens":1}}}`,
-	), "m"))
+	), "openai", "m"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestResponsesStreamEvents(t *testing.T) {
 		litellm.BlockStart{Index: 2, Block: litellm.ReasoningBlock{Summary: true}},
 		litellm.ReasoningDelta{Index: 2, Text: "x"},
 		litellm.ReasoningDelta{Index: 2, Text: "\ny"},
-		litellm.UsageEvent{Usage: litellm.Usage{InputTokens: new(1)}},
+		litellm.UsageEvent{Usage: litellm.Usage{InputTokens: 1}},
 		litellm.BlockEnd{Index: 0},
 		litellm.BlockEnd{Index: 2},
 		litellm.DoneEvent{FinishReason: litellm.FinishReasonToolCall, FinishReasonRaw: "completed", Provider: "openai", Model: "m"},
@@ -108,17 +108,13 @@ func TestResponsesStreamTermination(t *testing.T) {
 		payloads: []string{`{"type":"error","error":{"type":"invalid_request_error","message":"bad input"}}`},
 		code:     "invalid_request_error", wantErr: "stream error: bad input",
 	}, {
-		name:     "EOF before completed",
-		payloads: []string{`{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"par"}`},
-		wantErr:  "stream ended before response.completed",
-	}, {
 		name:     "missing type",
 		payloads: []string{`{"delta":"x"}`},
 		wantErr:  "stream event missing type",
 	}}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			stream := newResponsesStream(sseBody(test.payloads...), "m")
+			stream := newResponsesStream(sseBody(test.payloads...), "openai", "m")
 			events, err := readAll(stream)
 			if test.wantErr != "" {
 				var e *litellm.Error
@@ -134,6 +130,25 @@ func TestResponsesStreamTermination(t *testing.T) {
 				t.Fatalf("events = %#v, err = %v", events, err)
 			}
 		})
+	}
+}
+
+// TestResponsesStreamTruncationIsRetryable checks that a stream cut off before
+// response.completed ends in io.EOF, which the Client reports as a temporary
+// network error.
+func TestResponsesStreamTruncationIsRetryable(t *testing.T) {
+	p, _ := testProvider(t, Config{API: APIResponses}, "data: "+`{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"par"}`+"\n\n")
+	client, err := litellm.New(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := client.Stream(t.Context(), litellm.Request{Model: "m", Messages: []litellm.Message{litellm.UserText("hi")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if _, err := litellm.Collect(stream); litellm.ErrorTypeOf(err) != litellm.ErrorTypeNetwork || !litellm.IsTemporaryError(err) {
+		t.Fatalf("err = %v, want a temporary network error", err)
 	}
 }
 
@@ -155,7 +170,7 @@ func TestResponsesStreamFinalMessageState(t *testing.T) {
 				`{"type":"response.content_part.done","output_index":0,"content_index":1,"part":{"type":"output_text","text":"b","annotations":[`+citation+`],"logprobs":[]}}`,
 				`{"type":"response.output_item.done","output_index":0,"item":`+finalMessage+`}`,
 				`{"type":"response.completed","response":`+response+`}`,
-			), "m")
+			), "openai", "m")
 			defer stream.Close()
 			var ends []litellm.Block
 			got, err := litellm.Handle(stream, func(event litellm.Event) error {
@@ -171,12 +186,12 @@ func TestResponsesStreamFinalMessageState(t *testing.T) {
 			if err := json.Unmarshal([]byte(response), &parsed); err != nil {
 				t.Fatal(err)
 			}
-			want := convertResponsesResponse(&parsed, "m")
+			want := convertResponsesResponse(&parsed, "openai", "m")
 			if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(ends, want.Blocks) {
 				t.Fatalf("stream = %+v, ends = %+v, want = %+v", got, ends, want)
 			}
 			// The completed phase must survive the next request as well.
-			body, err := buildResponsesRequest(&litellm.Request{Model: "m", Messages: []litellm.Message{litellm.Assistant(got.Blocks...)}}, false)
+			body, err := buildResponsesRequest(&litellm.Request{Model: "m", Messages: []litellm.Message{litellm.Assistant(got.Blocks...)}}, "openai", false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -193,7 +208,7 @@ func TestResponsesStreamContentMetadataWithoutItemDone(t *testing.T) {
 		`{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"partial"}`,
 		`{"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":"partial","annotations":[],"logprobs":[{"token":"partial"}]}}`,
 		`{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}`,
-	), "m")
+	), "openai", "m")
 	defer stream.Close()
 	resp, err := litellm.Collect(stream)
 	if err != nil {

@@ -12,8 +12,8 @@ import (
 )
 
 func TestBuildResponsesRequest(t *testing.T) {
-	lookup := litellm.Tool{Name: "lookup", Description: "Lookup.", Parameters: litellm.Schema(`{"type":"object","properties":{"q":{"type":"string"}}}`), Strict: litellm.StrictEnabled}
-	schema := &litellm.ResponseFormat{Type: litellm.ResponseFormatJSONSchema, JSONSchema: &litellm.JSONSchema{Name: "answer", Description: "d", Schema: litellm.Schema(`{"type":"object"}`), Strict: litellm.StrictEnabled}}
+	lookup := litellm.Tool{Name: "lookup", Description: "Lookup.", Parameters: litellm.Schema(`{"type":"object","properties":{"q":{"type":"string"}}}`), Strict: new(true)}
+	schema := &litellm.ResponseFormat{Type: litellm.ResponseFormatJSONSchema, JSONSchema: &litellm.JSONSchema{Name: "answer", Description: "d", Schema: litellm.Schema(`{"type":"object"}`), Strict: new(true)}}
 	cached := &litellm.CacheControl{}
 	own := func(data string) *litellm.ProviderState {
 		return &litellm.ProviderState{Provider: "openai", Model: "gpt-5.1", Data: json.RawMessage(data)}
@@ -25,7 +25,7 @@ func TestBuildResponsesRequest(t *testing.T) {
 		litellm.ReasoningBlock{Text: "summary", Summary: true, State: own(`{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"enc"}`)},
 		litellm.TextBlock{Text: "call", State: own(`{"id":"msg_1","phase":"commentary"}`)},
 		litellm.TextBlock{Text: "ing", State: own(`{"id":"msg_1","phase":"commentary"}`)},
-		litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`), State: own(`{"id":"fc_1"}`)},
+		litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: `{"q":"x"}`, State: own(`{"id":"fc_1"}`)},
 	)
 	tests := []struct {
 		name   string
@@ -79,7 +79,7 @@ func TestBuildResponsesRequest(t *testing.T) {
 		name: "text state naming a function call item",
 		req: litellm.Request{Model: "gpt-5.1", Messages: []litellm.Message{litellm.Assistant(
 			litellm.ReasoningBlock{State: own(`{"type":"reasoning","id":"rs_1"}`)},
-			litellm.ToolUseBlock{ID: "call_1", Name: "f", Arguments: json.RawMessage(`{}`), State: own(`{"id":"fc_1"}`)},
+			litellm.ToolUseBlock{ID: "call_1", Name: "f", Arguments: `{}`, State: own(`{"id":"fc_1"}`)},
 			litellm.TextBlock{Text: "x", State: own(`{"id":"fc_1"}`)},
 		)}},
 		want: `{"model":"gpt-5.1","input":[
@@ -106,30 +106,44 @@ func TestBuildResponsesRequest(t *testing.T) {
 			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"a"}]}]}`,
 	}, {
 		name:   "disabled thinking and tool choice mode",
-		req:    litellm.Request{Model: "m", Thinking: &litellm.Thinking{Mode: litellm.ThinkingDisabled}, ToolChoice: &litellm.ToolChoice{Mode: litellm.ToolChoiceRequired}},
+		req:    litellm.Request{Model: "m", Thinking: &litellm.Thinking{Disabled: true}, ToolChoice: &litellm.ToolChoice{Mode: litellm.ToolChoiceRequired}},
 		stream: true,
 		want:   `{"model":"m","stream":true,"tool_choice":"required","reasoning":{"effort":"none"}}`,
 	}, {
-		// Options merge into generated objects and append to generated arrays.
+		// Options merge into generated objects.
 		name: "provider options",
 		req: litellm.Request{
 			Model: "m", Tools: []litellm.Tool{{Name: "ping"}}, ResponseFormat: schema, Thinking: &litellm.Thinking{Effort: "low"},
 			ProviderOptions: providerOptions(t, map[string]any{
 				ProviderOptionText:      map[string]any{"verbosity": "low"},
 				ProviderOptionReasoning: map[string]any{"summary": "detailed"},
-				ProviderOptionTools:     []any{map[string]any{"type": "web_search"}},
 				ProviderOptionInclude:   []any{"reasoning.encrypted_content"},
 				ProviderOptionStore:     false,
 			}),
 		},
 		want: `{"model":"m","store":false,"include":["reasoning.encrypted_content"],
-			"tools":[{"type":"function","name":"ping","parameters":{"type":"object"}},{"type":"web_search"}],
+			"tools":[{"type":"function","name":"ping","parameters":{"type":"object"}}],
 			"text":{"format":{"type":"json_schema","name":"answer","description":"d","schema":{"type":"object"},"strict":true},"verbosity":"low"},
 			"reasoning":{"effort":"low","summary":"detailed"}}`,
+	}, {
+		// Text-only output is a string; any other is a content list.
+		name: "tool result images and tool references",
+		req: litellm.Request{Model: "m", Messages: []litellm.Message{
+			litellm.Assistant(litellm.ToolUseBlock{ID: "c1", Name: "read", Arguments: `{}`}, litellm.ToolUseBlock{ID: "c2", Name: "find", Arguments: `{}`}),
+			litellm.ToolResult("c1", litellm.Text("a.png"), litellm.ImageBlock{Data: []byte("png"), MIME: "image/png"}),
+			litellm.ToolResult("c2", litellm.ToolReferenceBlock{ToolName: "grep"}),
+		}},
+		want: `{"model":"m","input":[
+			{"type":"function_call","call_id":"c1","name":"read","arguments":"{}"},
+			{"type":"function_call","call_id":"c2","name":"find","arguments":"{}"},
+			{"type":"function_call_output","call_id":"c1","output":[
+				{"type":"input_text","text":"a.png"},
+				{"type":"input_image","image_url":"data:image/png;base64,cG5n"}]},
+			{"type":"function_call_output","call_id":"c2","output":[{"type":"input_text","text":"Tool grep is now available."}]}]}`,
 	}}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			body, err := buildResponsesRequest(&test.req, test.stream)
+			body, err := buildResponsesRequest(&test.req, "openai", test.stream)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -145,13 +159,14 @@ func TestBuildResponsesRequestErrors(t *testing.T) {
 	}{
 		{"stop", "stop is not supported", litellm.Request{Stop: []string{"x"}}},
 		{"budget", "budget_tokens is not supported", litellm.Request{Thinking: &litellm.Thinking{BudgetTokens: new(1024)}}},
-		{"cache TTL", "prompt_cache_options", litellm.Request{Messages: []litellm.Message{litellm.User(litellm.TextBlock{Text: "x", Cache: &litellm.CacheControl{TTL: litellm.CacheTTL5m}})}}},
-		{"image tool result", "only supports text content", litellm.Request{Messages: []litellm.Message{litellm.ToolResult("call_1", litellm.ImageURL("https://x.test/a.png"))}}},
+		{"inline tool result image without MIME", `tool result "call_1": inline image requires MIME`, litellm.Request{Messages: []litellm.Message{litellm.ToolResult("call_1", litellm.ImageBlock{Data: []byte("png")})}}},
 		{"nested option conflict", `provider option "reasoning.summary" conflicts`, litellm.Request{Thinking: &litellm.Thinking{IncludeOutput: true}, ProviderOptions: providerOptions(t, map[string]any{ProviderOptionReasoning: map[string]any{"summary": "detailed"}})}},
-		{"option conflict", `provider option "tools" conflicts`, litellm.Request{Tools: []litellm.Tool{{Name: "ping"}}, ProviderOptions: providerOptions(t, map[string]any{ProviderOptionTools: map[string]any{"type": "web_search"}})}},
+		// Hosted tools produce items litellm drops.
+		{"hosted tool option", `unsupported provider option "tools"`, litellm.Request{ProviderOptions: providerOptions(t, map[string]any{"tools": []any{map[string]any{"type": "web_search"}}})}},
+		{"previous response option", `unsupported provider option "previous_response_id"`, litellm.Request{ProviderOptions: providerOptions(t, map[string]any{"previous_response_id": "resp_1"})}},
 	}
 	for _, test := range tests {
-		if _, err := buildResponsesRequest(&test.req, false); err == nil || !strings.Contains(err.Error(), test.wantErr) {
+		if _, err := buildResponsesRequest(&test.req, "openai", false); err == nil || !strings.Contains(err.Error(), test.wantErr) {
 			t.Errorf("%s: err = %v, want %q", test.name, err, test.wantErr)
 		}
 	}
@@ -183,9 +198,9 @@ func TestConvertResponsesResponse(t *testing.T) {
 					Text: "hi", Annotations: []litellm.Annotation{{Type: "url_citation", URL: "https://example.com", Extra: json.RawMessage(citation)}}, Logprobs: json.RawMessage(`[{"token":"hi"}]`),
 					State: state(`{"id":"msg_1","phase":"final_answer"}`),
 				},
-				litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`), State: state(`{"id":"fc_1"}`)},
+				litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: `{"q":"x"}`, State: state(`{"id":"fc_1"}`)},
 			},
-			Usage:        litellm.Usage{InputTokens: new(5), OutputTokens: new(3), TotalTokens: new(8), CacheReadTokens: new(2), ReasoningTokens: new(1)},
+			Usage:        litellm.Usage{InputTokens: 5, OutputTokens: 3, CacheReadTokens: 2, ReasoningTokens: 1},
 			Model:        "gpt-5.1",
 			FinishReason: litellm.FinishReasonToolCall, FinishReasonRaw: "completed",
 		},
@@ -201,7 +216,7 @@ func TestConvertResponsesResponse(t *testing.T) {
 		name: "argument-less call is an empty object, as streamed",
 		body: `{"status":"completed","output":[{"type":"function_call","call_id":"c","name":"f","arguments":""}]}`,
 		want: litellm.Response{
-			Blocks:       []litellm.Block{litellm.ToolUseBlock{ID: "c", Name: "f", Arguments: json.RawMessage(`{}`)}},
+			Blocks:       []litellm.Block{litellm.ToolUseBlock{ID: "c", Name: "f", Arguments: `{}`}},
 			Model:        "req-model",
 			FinishReason: litellm.FinishReasonToolCall, FinishReasonRaw: "completed",
 		},
@@ -221,7 +236,7 @@ func TestConvertResponsesResponse(t *testing.T) {
 				t.Fatal(err)
 			}
 			test.want.Provider = "openai"
-			if got := convertResponsesResponse(&parsed, "req-model"); !reflect.DeepEqual(*got, test.want) {
+			if got := convertResponsesResponse(&parsed, "openai", "req-model"); !reflect.DeepEqual(*got, test.want) {
 				t.Fatalf("response = %#v\nwant %#v", *got, test.want)
 			}
 		})
@@ -238,8 +253,8 @@ func TestResponsesOutputReplaysAsInput(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"status":"completed","output":`+output+`}`), &parsed); err != nil {
 		t.Fatal(err)
 	}
-	history := []litellm.Message{litellm.Assistant(convertResponsesResponse(&parsed, "gpt-5.1").Blocks...)}
-	body, err := buildResponsesRequest(&litellm.Request{Model: "gpt-5.1", Messages: history}, false)
+	history := []litellm.Message{litellm.Assistant(convertResponsesResponse(&parsed, "openai", "gpt-5.1").Blocks...)}
+	body, err := buildResponsesRequest(&litellm.Request{Model: "gpt-5.1", Messages: history}, "openai", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +291,7 @@ func TestResponsesBackground(t *testing.T) {
 		req := &litellm.Request{Model: "m", ProviderOptions: providerOptions(t, map[string]any{ProviderOptionBackground: background})}
 		_, err := p.Chat(context.Background(), req)
 		if background == true {
-			if !litellm.IsValidationError(err) || !strings.Contains(err.Error(), "requires Stream") || sent.req != nil {
+			if litellm.ErrorTypeOf(err) != litellm.ErrorTypeValidation || !strings.Contains(err.Error(), "requires Stream") || sent.req != nil {
 				t.Fatalf("background Chat: err = %v, sent = %v", err, sent.req != nil)
 			}
 		} else if err != nil {
@@ -298,7 +313,7 @@ func TestResponsesBackground(t *testing.T) {
 	for _, status := range []string{"queued", "in_progress"} {
 		p, _ := testProvider(t, Config{API: APIResponses}, `{"id":"resp_1","status":"`+status+`","output":[],"error":null}`)
 		_, err := p.Chat(context.Background(), &litellm.Request{Model: "m"})
-		if !litellm.IsProviderError(err) || !strings.Contains(err.Error(), status) {
+		if litellm.ErrorTypeOf(err) != litellm.ErrorTypeProvider || !strings.Contains(err.Error(), status) {
 			t.Fatalf("%s response: %v", status, err)
 		}
 	}
@@ -326,7 +341,7 @@ func TestResponsesToolResultCache(t *testing.T) {
 			test.result.ToolUseID = "call_1"
 			req := &litellm.Request{Model: "m", Messages: []litellm.Message{{Role: litellm.RoleTool, Blocks: []litellm.Block{test.result}}}}
 			for _, stream := range []bool{false, true} {
-				body, err := buildResponsesRequest(req, stream)
+				body, err := buildResponsesRequest(req, "openai", stream)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -341,14 +356,5 @@ func TestResponsesToolResultCache(t *testing.T) {
 				assertJSON(t, parsed.Input[0].Output, test.output)
 			}
 		})
-	}
-	for _, result := range []litellm.ToolResultBlock{
-		{ToolUseID: "c", Cache: &litellm.CacheControl{TTL: litellm.CacheTTL5m}},
-		{ToolUseID: "c", Content: []litellm.Block{litellm.TextBlock{Text: "x", Cache: &litellm.CacheControl{TTL: litellm.CacheTTL5m}}}},
-	} {
-		_, err := appendToolResults(nil, []litellm.Block{result})
-		if err == nil || !strings.Contains(err.Error(), "prompt_cache_options") {
-			t.Fatalf("tool result TTL: %v", err)
-		}
 	}
 }

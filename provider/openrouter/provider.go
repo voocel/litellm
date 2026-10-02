@@ -18,7 +18,7 @@ type (
 // Keys accepted in Request.ProviderOptions, sent as native request fields.
 const (
 	// ProviderOptionCacheControl is the top-level cache_control object that
-	// enables automatic prompt caching, e.g. {"type": "ephemeral", "ttl": "1h"}.
+	// enables automatic prompt caching, e.g. {"type": "ephemeral"}.
 	ProviderOptionCacheControl = "cache_control"
 	ProviderOptionSessionID    = "session_id"
 	// ProviderOptionRouting is OpenRouter's provider routing object.
@@ -36,14 +36,14 @@ func New(cfg Config) (*Provider, error) {
 		APIKeyRequired:  true,
 		Thinking:        mapThinking,
 		Options:         []string{ProviderOptionCacheControl, ProviderOptionSessionID, ProviderOptionRouting},
-		Cache:           mapCache,
+		Cache:           map[string]any{"cache_control": map[string]any{"type": "ephemeral"}},
 		ReasoningFields: []string{"reasoning_details", "reasoning", "reasoning_content"},
 	})
 }
 
 // mapThinking fills OpenRouter's unified reasoning object.
 func mapThinking(thinking *litellm.Thinking) (map[string]any, error) {
-	if thinking.Mode == litellm.ThinkingDisabled {
+	if thinking.Disabled {
 		return map[string]any{"reasoning": map[string]any{"effort": "none"}}, nil
 	}
 	if thinking.Effort != "" && thinking.BudgetTokens != nil {
@@ -60,12 +60,4 @@ func mapThinking(thinking *litellm.Thinking) (map[string]any, error) {
 		reasoning["enabled"] = true
 	}
 	return map[string]any{"reasoning": reasoning}, nil
-}
-
-func mapCache(cache *litellm.CacheControl) (map[string]any, error) {
-	control := map[string]any{"type": "ephemeral"}
-	if cache.TTL != "" {
-		control["ttl"] = cache.TTL
-	}
-	return map[string]any{"cache_control": control}, nil
 }

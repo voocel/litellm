@@ -31,6 +31,7 @@ type toolState struct {
 type stream struct {
 	resp      *http.Response
 	sse       *wire.SSEReader
+	name      string // the provider's
 	spec      Spec
 	pending   []litellm.Event
 	done      bool
@@ -47,10 +48,11 @@ type stream struct {
 	annotations []json.RawMessage
 }
 
-func newStream(resp *http.Response, req *litellm.Request, spec Spec) *stream {
+func newStream(resp *http.Response, req *litellm.Request, name string, spec Spec) *stream {
 	return &stream{
 		resp:      resp,
-		sse:       wire.NewSSEReader(resp.Body, spec.Name),
+		sse:       wire.NewSSEReader(resp.Body, name),
+		name:      name,
 		spec:      spec,
 		requested: req.Model,
 		model:     req.Model,
@@ -71,9 +73,10 @@ func (s *stream) Next() (event litellm.Event, err error) {
 		frame, err := s.sse.Next()
 		if errors.Is(err, io.EOF) {
 			// Some vendors close the stream after the finish chunk without
-			// [DONE]; only an EOF before any finish reason is a truncation.
+			// [DONE]; only an EOF before any finish reason is a truncation,
+			// which the Client reports as a retryable network error.
 			if s.finishRaw == "" {
-				return nil, litellm.NewError(s.spec.Name, litellm.ErrorTypeProvider, "stream ended before a finish reason", nil)
+				return nil, io.EOF
 			}
 			s.end()
 			break
@@ -87,9 +90,9 @@ func (s *stream) Next() (event litellm.Event, err error) {
 		}
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(frame.Data), &chunk); err != nil {
-			return nil, litellm.NewError(s.spec.Name, litellm.ErrorTypeProvider, "parse stream chunk", err)
+			return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "parse stream chunk", err)
 		}
-		if err := wire.ErrorField(s.spec.Name, chunk.Error); err != nil {
+		if err := wire.ErrorField(s.name, chunk.Error); err != nil {
 			return nil, err
 		}
 		s.pending = s.events(s.pending, chunk)
@@ -106,7 +109,7 @@ func (s *stream) end() {
 	if s.refused {
 		finish = litellm.FinishReasonSafety
 	}
-	s.pending = append(s.pending, litellm.DoneEvent{FinishReason: finish, FinishReasonRaw: s.finishRaw, Provider: s.spec.Name, Model: s.model})
+	s.pending = append(s.pending, litellm.DoneEvent{FinishReason: finish, FinishReasonRaw: s.finishRaw, Provider: s.name, Model: s.model})
 	s.done = true
 }
 
@@ -121,7 +124,7 @@ func (s *stream) events(events []litellm.Event, chunk streamChunk) []litellm.Eve
 		s.model = chunk.Model
 	}
 	if chunk.Usage != nil {
-		events = append(events, litellm.UsageEvent{Usage: s.spec.usage(*chunk.Usage)})
+		events = append(events, litellm.UsageEvent{Usage: chunk.Usage.convert()})
 	}
 	for _, choice := range chunk.Choices {
 		events = s.reasoning(events, choice.Delta.Fields)
@@ -231,7 +234,7 @@ func (s *stream) closeAll(events []litellm.Event) []litellm.Event {
 		case reasoningKind:
 			if len(s.details) > 0 {
 				details, _ := json.Marshal(s.details)
-				return litellm.ReasoningBlock{State: wire.NewState(s.spec.Name, s.requested, json.RawMessage(details))}
+				return litellm.ReasoningBlock{State: wire.NewState(s.name, s.requested, json.RawMessage(details))}
 			}
 		}
 		return nil

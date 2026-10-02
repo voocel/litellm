@@ -91,7 +91,7 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) ([]byte, erro
 }
 
 func (p *Provider) convertThinking(thinking *litellm.Thinking) (map[string]any, error) {
-	if thinking.Mode == litellm.ThinkingDisabled && p.spec.ThinkingAlwaysOn {
+	if thinking.Disabled && p.spec.ThinkingAlwaysOn {
 		return nil, errors.New("thinking cannot be disabled")
 	}
 	if p.spec.Thinking != nil {
@@ -111,13 +111,21 @@ func isOne(value any) bool {
 
 func (p *Provider) convertMessages(messages []litellm.Message) ([]map[string]any, error) {
 	out := make([]map[string]any, 0, len(messages))
+	// Tool messages carry text only: the images of a turn's results follow
+	// its tool messages in a user message.
+	var images []map[string]any
 	for i, msg := range messages {
 		if msg.Role == litellm.RoleTool {
-			results, err := p.convertToolResults(msg.Blocks)
+			results, parts, err := p.convertToolResults(msg.Blocks)
 			if err != nil {
 				return nil, fmt.Errorf("messages[%d]: %w", i, err)
 			}
 			out = append(out, results...)
+			images = append(images, parts...)
+			if len(images) > 0 && (i+1 == len(messages) || messages[i+1].Role != litellm.RoleTool) {
+				out = append(out, map[string]any{"role": "user", "content": images})
+				images = nil
+			}
 			continue
 		}
 		converted, err := p.convertMessage(msg)
@@ -142,28 +150,12 @@ func (p *Provider) convertMessage(msg litellm.Message) (map[string]any, error) {
 			if b.Text == "" {
 				continue
 			}
-			part, err := p.withCache(map[string]any{"type": "text", "text": b.Text}, b.Cache)
-			if err != nil {
-				return nil, err
-			}
-			parts = append(parts, part)
+			parts = append(parts, p.withCache(map[string]any{"type": "text", "text": b.Text}, b.Cache))
 		case litellm.ImageBlock:
 			if slices.Contains(p.spec.StringContentRoles, msg.Role) {
 				return nil, fmt.Errorf("%s messages do not support images", msg.Role)
 			}
-			if b.FileURI != "" && p.spec.ImageFileID {
-				parts = append(parts, map[string]any{"type": "file", "file_id": b.FileURI})
-				continue
-			}
-			url, err := ImageURL(b)
-			if err != nil {
-				return nil, err
-			}
-			image := map[string]any{"url": url}
-			if b.Detail != "" {
-				image["detail"] = b.Detail
-			}
-			part, err := p.withCache(map[string]any{"type": "image_url", "image_url": image}, b.Cache)
+			part, err := p.imagePart(b)
 			if err != nil {
 				return nil, err
 			}
@@ -172,7 +164,7 @@ func (p *Provider) convertMessage(msg litellm.Message) (map[string]any, error) {
 			toolCalls = append(toolCalls, map[string]any{
 				"id":       b.ID,
 				"type":     "function",
-				"function": map[string]any{"name": b.Name, "arguments": string(b.Arguments)},
+				"function": map[string]any{"name": b.Name, "arguments": b.Arguments},
 			})
 		case litellm.ReasoningBlock:
 			p.putReasoning(out, b)
@@ -198,40 +190,72 @@ func (p *Provider) convertMessage(msg litellm.Message) (map[string]any, error) {
 	return out, nil
 }
 
-func (p *Provider) convertToolResults(blocks []litellm.Block) ([]map[string]any, error) {
+// convertToolResults converts tool results to tool messages, and returns
+// the user message parts of their images.
+func (p *Provider) convertToolResults(blocks []litellm.Block) ([]map[string]any, []map[string]any, error) {
 	out := make([]map[string]any, 0, len(blocks))
+	var images []map[string]any
 	for _, block := range blocks {
 		result, ok := block.(litellm.ToolResultBlock)
 		if !ok {
-			return nil, fmt.Errorf("tool role only supports ToolResultBlock, got %T", block)
+			return nil, nil, fmt.Errorf("tool role only supports ToolResultBlock, got %T", block)
 		}
-		text, err := toolResultText(result.Content)
-		if err != nil {
-			return nil, err
+		var texts []string
+		var parts []map[string]any
+		for _, content := range result.Content {
+			switch c := content.(type) {
+			case litellm.TextBlock:
+				texts = append(texts, c.Text)
+			case litellm.ToolReferenceBlock:
+				texts = append(texts, wire.ToolReferenceText(c))
+			case litellm.ImageBlock:
+				part, err := p.imagePart(c)
+				if err != nil {
+					return nil, nil, err
+				}
+				parts = append(parts, part)
+			default:
+				return nil, nil, fmt.Errorf("tool results do not support %T", content)
+			}
+		}
+		text := strings.Join(texts, "\n")
+		if len(parts) > 0 {
+			if text == "" {
+				text = "The result is the image in the next message."
+			}
+			images = append(images, map[string]any{"type": "text", "text": "The image of tool call " + result.ToolUseID + ":"})
+			images = append(images, parts...)
 		}
 		var content any = text
 		if result.Cache != nil && p.spec.Cache != nil {
-			part, err := p.withCache(map[string]any{"type": "text", "text": text}, result.Cache)
-			if err != nil {
-				return nil, err
-			}
-			content = []map[string]any{part}
+			content = []map[string]any{p.withCache(map[string]any{"type": "text", "text": text}, result.Cache)}
 		}
 		out = append(out, map[string]any{"role": "tool", "tool_call_id": result.ToolUseID, "content": content})
 	}
-	return out, nil
+	return out, images, nil
 }
 
-func (p *Provider) withCache(part map[string]any, cache *litellm.CacheControl) (map[string]any, error) {
-	if cache == nil || p.spec.Cache == nil {
-		return part, nil
+// imagePart is the content part of an image.
+func (p *Provider) imagePart(b litellm.ImageBlock) (map[string]any, error) {
+	if b.FileURI != "" && p.spec.ImageFileID {
+		return map[string]any{"type": "file", "file_id": b.FileURI}, nil
 	}
-	fields, err := p.spec.Cache(cache)
+	url, err := ImageURL(b)
 	if err != nil {
 		return nil, err
 	}
-	maps.Copy(part, fields)
-	return part, nil
+	image := map[string]any{"url": url}
+	if b.Detail != "" {
+		image["detail"] = b.Detail
+	}
+	return p.withCache(map[string]any{"type": "image_url", "image_url": image}, b.Cache), nil
+}
+
+func (p *Provider) withCache(part map[string]any, cache *litellm.CacheControl) map[string]any {
+	if cache != nil {
+		maps.Copy(part, p.spec.Cache)
+	}
+	return part
 }
 
 // putReasoning replays a ReasoningBlock. reasoning_details this provider
@@ -246,7 +270,7 @@ func (p *Provider) putReasoning(message map[string]any, block litellm.ReasoningB
 			break
 		}
 	}
-	if items, ok := wire.ReadState[[]any](block.State, p.spec.Name); ok && items != nil && slices.Contains(p.spec.ReasoningFields, "reasoning_details") {
+	if items, ok := wire.ReadState[[]any](block.State, p.Name()); ok && items != nil && slices.Contains(p.spec.ReasoningFields, "reasoning_details") {
 		current, _ := message["reasoning_details"].([]any)
 		message["reasoning_details"] = append(current, items...)
 		if field != "" {
@@ -282,21 +306,6 @@ func ImageURL(block litellm.ImageBlock) (string, error) {
 	}
 }
 
-func toolResultText(blocks []litellm.Block) (string, error) {
-	var out strings.Builder
-	for _, block := range blocks {
-		text, ok := block.(litellm.TextBlock)
-		if !ok {
-			return "", fmt.Errorf("tool results only support text content, got %T", block)
-		}
-		if out.Len() > 0 {
-			out.WriteString("\n")
-		}
-		out.WriteString(text.Text)
-	}
-	return out.String(), nil
-}
-
 func convertTools(tools []litellm.Tool) ([]any, error) {
 	out := make([]any, 0, len(tools))
 	for _, tool := range tools {
@@ -307,8 +316,8 @@ func convertTools(tools []litellm.Tool) ([]any, error) {
 		if len(tool.Parameters) > 0 {
 			fn["parameters"] = json.RawMessage(tool.Parameters)
 		}
-		if strict, ok := tool.Strict.Value(); ok {
-			fn["strict"] = strict
+		if tool.Strict != nil {
+			fn["strict"] = *tool.Strict
 		}
 		out = append(out, map[string]any{"type": "function", "function": fn})
 	}
@@ -329,8 +338,8 @@ func convertResponseFormat(format *litellm.ResponseFormat) (any, error) {
 		if len(format.JSONSchema.Schema) > 0 {
 			schema["schema"] = json.RawMessage(format.JSONSchema.Schema)
 		}
-		if strict, ok := format.JSONSchema.Strict.Value(); ok {
-			schema["strict"] = strict
+		if format.JSONSchema.Strict != nil {
+			schema["strict"] = *format.JSONSchema.Strict
 		}
 		return map[string]any{"type": "json_schema", "json_schema": schema}, nil
 	default:

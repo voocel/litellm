@@ -15,7 +15,6 @@ type (
 
 // Keys accepted in Request.ProviderOptions, sent as native request fields.
 const (
-	ProviderOptionAudio            = "audio"
 	ProviderOptionFrequencyPenalty = "frequency_penalty"
 	ProviderOptionPresencePenalty  = "presence_penalty"
 )
@@ -30,7 +29,7 @@ func New(cfg Config) (*Provider, error) {
 		APIKeyRequired:    true,
 		MaxTokensField:    "max_completion_tokens",
 		Thinking:          openaicompat.ThinkingType("enabled", false),
-		Options:           []string{ProviderOptionAudio, ProviderOptionFrequencyPenalty, ProviderOptionPresencePenalty},
+		Options:           []string{ProviderOptionFrequencyPenalty, ProviderOptionPresencePenalty},
 		ReasoningFields:   []string{"reasoning_content"},
 		SchemaFallback:    litellm.ResponseFormatJSONObject,
 		OmitStreamOptions: true,

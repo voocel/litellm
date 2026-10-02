@@ -15,7 +15,7 @@ func (p *capabilityProvider) Capabilities() Capabilities { return p.caps }
 func TestClientCapabilities(t *testing.T) {
 	provider := &capabilityProvider{
 		testProvider: testProvider{name: "test"},
-		caps:         Capabilities{Thinking: true, ProviderOptions: []string{"a", "b"}},
+		caps:         Capabilities{MaxTokensRequired: true, ProviderOptions: []string{"a", "b"}},
 	}
 	client, err := New(provider)
 	if err != nil {

@@ -69,7 +69,7 @@ func TestUnsupportedRequests(t *testing.T) {
 			_, chatErr := p.Chat(context.Background(), &tt.req)
 			_, streamErr := p.Stream(context.Background(), &tt.req)
 			for _, err := range []error{chatErr, streamErr} {
-				if !litellm.IsValidationError(err) || !strings.Contains(err.Error(), tt.want) {
+				if litellm.ErrorTypeOf(err) != litellm.ErrorTypeValidation || !strings.Contains(err.Error(), tt.want) {
 					t.Fatalf("error = %v, want validation error containing %q", err, tt.want)
 				}
 			}
@@ -101,7 +101,7 @@ func TestReasoningToolRoundTrip(t *testing.T) {
 			if resp.Reasoning() != "先查日期。\n再查天气。" {
 				t.Fatalf("reasoning = %q", resp.Reasoning())
 			}
-			if resp.Usage.TotalTokens == nil || *resp.Usage.TotalTokens != 30 || resp.Usage.CacheReadTokens == nil || *resp.Usage.CacheReadTokens != 4 {
+			if resp.Usage.CacheReadTokens != 4 {
 				t.Fatalf("usage = %+v", resp.Usage)
 			}
 			req := &litellm.Request{Model: "deepseek-flash", Tools: []litellm.Tool{{Name: "weather"}}, Messages: []litellm.Message{
@@ -136,7 +136,7 @@ func TestStrictBetaEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := compattest.Request()
-	req.Tools = []litellm.Tool{{Name: "weather", Strict: litellm.StrictEnabled, Parameters: litellm.Schema(`{"type":"object","properties":{},"additionalProperties":false}`)}}
+	req.Tools = []litellm.Tool{{Name: "weather", Strict: new(true), Parameters: litellm.Schema(`{"type":"object","properties":{},"additionalProperties":false}`)}}
 	if _, err := p.Chat(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}

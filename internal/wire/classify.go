@@ -10,7 +10,8 @@ import (
 )
 
 // HTTPError classifies a non-2xx response from its status, headers and body.
-// header may be nil; a Retry-After value populates RetryAfter.
+// header may be nil. RetryAfter is the Retry-After header's wait or, without
+// one, the retryDelay a Google API error body suggests, as Gemini sends.
 func HTTPError(provider string, statusCode int, header http.Header, body string) *litellm.Error {
 	code, message := parseHTTPErrorMessage(body)
 	errorType := classifyHTTPError(statusCode)
@@ -21,7 +22,35 @@ func HTTPError(provider string, statusCode int, header http.Header, body string)
 	err.Code, err.StatusCode = code, statusCode
 	err.Temporary = isTemporaryHTTPError(statusCode, errorType)
 	err.RetryAfter = ParseRetryAfter(header.Get("Retry-After"), time.Now())
+	if err.RetryAfter == 0 {
+		err.RetryAfter = googleRetryDelay(body)
+	}
 	return err
+}
+
+// googleRetryDelay returns the wait in the google.rpc.RetryInfo detail of a
+// Google API error body, or zero.
+func googleRetryDelay(body string) time.Duration {
+	var payload struct {
+		Error struct {
+			Details []struct {
+				Type       string `json:"@type"`
+				RetryDelay string `json:"retryDelay"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(body), &payload) != nil {
+		return 0
+	}
+	for _, d := range payload.Error.Details {
+		if d.Type != "type.googleapis.com/google.rpc.RetryInfo" {
+			continue
+		}
+		if delay, err := time.ParseDuration(d.RetryDelay); err == nil && delay > 0 {
+			return delay
+		}
+	}
+	return 0
 }
 
 func parseHTTPErrorMessage(body string) (string, string) {
@@ -93,7 +122,18 @@ func StreamError(provider, code, message string) *litellm.Error {
 	}
 	err := litellm.NewError(provider, errorType, message, nil)
 	err.Code = code
+	// A server fault reported mid-stream is as transient as its HTTP 5xx.
+	err.Temporary = err.Temporary || streamServerFaults[strings.ToLower(code)]
 	return err
+}
+
+// streamServerFaults are the in-stream codes of server faults, which an HTTP
+// response would report with a retryable 5xx status.
+var streamServerFaults = map[string]bool{
+	"api_error":                 true,
+	"internalserverexception":   true,
+	"modelstreamerrorexception": true,
+	"server_error":              true,
 }
 
 // streamErrorTypes maps documented in-stream codes: Anthropic error types,

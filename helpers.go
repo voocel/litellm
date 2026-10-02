@@ -62,7 +62,7 @@ func NewResponseFormatJSONObject() *ResponseFormat {
 
 // NewResponseFormatJSONSchema requests output matching schema, converted with
 // SchemaFrom.
-func NewResponseFormatJSONSchema(name, description string, schema any, strict StrictMode) (*ResponseFormat, error) {
+func NewResponseFormatJSONSchema(name, description string, schema any) (*ResponseFormat, error) {
 	s, err := SchemaFrom(schema)
 	if err != nil {
 		return nil, err
@@ -73,7 +73,6 @@ func NewResponseFormatJSONSchema(name, description string, schema any, strict St
 			Name:        name,
 			Description: description,
 			Schema:      s,
-			Strict:      strict,
 		},
 	}, nil
 }

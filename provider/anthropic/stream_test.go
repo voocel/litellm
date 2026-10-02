@@ -32,10 +32,10 @@ func TestStreamFixtureEvents(t *testing.T) {
 		t.Fatalf("stream = %v", body["stream"])
 	}
 	want := []litellm.Event{
-		litellm.UsageEvent{Usage: litellm.Usage{InputTokens: new(7), OutputTokens: new(1), TotalTokens: new(8), CacheReadTokens: new(2)}},
-		litellm.BlockStart{Index: 0, Block: litellm.ReasoningBlock{State: reasoningState("claude", "thinking", "", "")}},
+		litellm.UsageEvent{Usage: litellm.Usage{InputTokens: 7, OutputTokens: 1, CacheReadTokens: 2}},
+		litellm.BlockStart{Index: 0, Block: litellm.ReasoningBlock{State: reasoningState("anthropic", "claude", "thinking", "", "")}},
 		litellm.ReasoningDelta{Index: 0, Text: "think"},
-		litellm.BlockEnd{Index: 0, Block: litellm.ReasoningBlock{State: reasoningState("claude", "thinking", "sig-thinking", "")}},
+		litellm.BlockEnd{Index: 0, Block: litellm.ReasoningBlock{State: reasoningState("anthropic", "claude", "thinking", "sig-thinking", "")}},
 		litellm.BlockStart{Index: 1, Block: litellm.TextBlock{}},
 		litellm.TextDelta{Index: 1, Text: "hello"},
 		litellm.BlockEnd{Index: 1},
@@ -43,7 +43,7 @@ func TestStreamFixtureEvents(t *testing.T) {
 		litellm.ToolUseDelta{Index: 2, Arguments: `{"q":`},
 		litellm.ToolUseDelta{Index: 2, Arguments: `"x"}`},
 		litellm.BlockEnd{Index: 2},
-		litellm.UsageEvent{Usage: litellm.Usage{InputTokens: new(7), OutputTokens: new(7), TotalTokens: new(14), CacheReadTokens: new(2)}},
+		litellm.UsageEvent{Usage: litellm.Usage{InputTokens: 7, OutputTokens: 7, CacheReadTokens: 2}},
 		litellm.DoneEvent{FinishReason: litellm.FinishReasonToolCall, FinishReasonRaw: "tool_use", Provider: "anthropic", Model: "claude-sonnet"},
 	}
 	if got, err := drain(stream); err != nil || !reflect.DeepEqual(got, want) {
@@ -86,11 +86,11 @@ func TestStreamEvents(t *testing.T) {
 				`{"type":"message_stop"}`,
 			},
 			want: []litellm.Event{
-				litellm.WarningEvent{Warning: unsupportedBlock("server_tool_use")},
+				litellm.WarningEvent{Warning: unsupportedBlock("anthropic", "server_tool_use")},
 				litellm.ProviderEvent{Name: "content_block_start", Raw: json.RawMessage(serverStart)},
 				litellm.ProviderEvent{Name: "content_block_delta", Raw: json.RawMessage(serverDelta)},
 				litellm.ProviderEvent{Name: "content_block_stop", Raw: json.RawMessage(serverStop)},
-				litellm.BlockStart{Index: 0, Block: litellm.ReasoningBlock{State: reasoningState("m", "redacted_thinking", "", "opaque")}},
+				litellm.BlockStart{Index: 0, Block: litellm.ReasoningBlock{State: reasoningState("anthropic", "m", "redacted_thinking", "", "opaque")}},
 				litellm.BlockEnd{Index: 0},
 				done,
 			},
@@ -140,13 +140,13 @@ func TestStreamEvents(t *testing.T) {
 			want: []litellm.Event{
 				litellm.BlockStart{Index: 0, Block: litellm.ReasoningBlock{}},
 				litellm.ReasoningDelta{Index: 0, Text: "t"},
-				litellm.BlockEnd{Index: 0, Block: litellm.ReasoningBlock{State: reasoningState("m", "thinking", "sig", "")}},
+				litellm.BlockEnd{Index: 0, Block: litellm.ReasoningBlock{State: reasoningState("anthropic", "m", "thinking", "sig", "")}},
 				done,
 			},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := drain(newStream(sseResponse(test.lines...), "m"))
+			got, err := drain(newStream(sseResponse(test.lines...), "anthropic", "m"))
 			if err != nil || !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("events = %#v, err = %v\nwant %#v", got, err, test.want)
 			}
@@ -174,10 +174,10 @@ func TestStreamErrors(t *testing.T) {
 			want:     "anthropic: unknown stream error",
 		},
 		{
-			name:     "EOF before message_stop",
-			lines:    []string{`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"partial"}}`},
+			name:     "server fault",
+			lines:    []string{`{"type":"error","error":{"type":"api_error","message":"Internal server error"}}`},
 			wantType: litellm.ErrorTypeProvider,
-			want:     "anthropic: stream ended before message_stop",
+			want:     "anthropic: api_error: stream error: Internal server error",
 		},
 		{
 			name:     "malformed event",
@@ -187,7 +187,7 @@ func TestStreamErrors(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			stream := newStream(sseResponse(test.lines...), "m")
+			stream := newStream(sseResponse(test.lines...), "anthropic", "m")
 			_, err := drain(stream)
 			var e *litellm.Error
 			if !errors.As(err, &e) || e.Type != test.wantType || err.Error() != test.want {
@@ -195,6 +195,31 @@ func TestStreamErrors(t *testing.T) {
 			}
 			if _, err := stream.Next(); err != io.EOF {
 				t.Fatalf("Next after failure = %v, want io.EOF", err)
+			}
+		})
+	}
+}
+
+// TestStreamTruncationIsRetryable checks that a stream cut off before
+// message_stop ends in io.EOF, which the Client reports as a temporary network
+// error, and that in-stream server faults are temporary too.
+func TestStreamTruncationIsRetryable(t *testing.T) {
+	for name, lines := range map[string][]string{
+		"truncated":    {`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"partial"}}`},
+		"server fault": {`{"type":"error","error":{"type":"api_error","message":"Internal server error"}}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client, err := litellm.New(newTestProvider(t, func(*http.Request) (*http.Response, error) { return sseResponse(lines...), nil }))
+			if err != nil {
+				t.Fatal(err)
+			}
+			stream, err := client.Stream(t.Context(), litellm.Request{Model: "claude", MaxTokens: new(64), Messages: []litellm.Message{litellm.UserText("hi")}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stream.Close()
+			if _, err := litellm.Collect(stream); !litellm.IsTemporaryError(err) {
+				t.Fatalf("err = %v, want a temporary error", err)
 			}
 		})
 	}
@@ -214,7 +239,7 @@ func TestStreamMatchesCompleteResponse(t *testing.T) {
 			{"type":"tool_use","id":"toolu_1","name":"lookup","input":{"q":"x"}}]}`), &complete); err != nil {
 		t.Fatal(err)
 	}
-	want := convertResponse(&complete, "claude")
+	want := convertResponse(&complete, "anthropic", "claude")
 	got, err := litellm.Collect(newStream(sseResponse(
 		`{"type":"message_start","message":{"model":"claude","usage":{"input_tokens":2,"cache_creation_input_tokens":4,"output_tokens":1}}}`,
 		`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"hel"}}`,
@@ -235,7 +260,7 @@ func TestStreamMatchesCompleteResponse(t *testing.T) {
 		`{"type":"content_block_stop","index":5}`,
 		`{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":3}}`,
 		`{"type":"message_stop"}`,
-	), "claude"))
+	), "anthropic", "claude"))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -249,7 +274,7 @@ func TestStreamMergesUsage(t *testing.T) {
 	s := &stream{}
 	s.mergeUsage(&usage{InputTokens: new(5), OutputTokens: new(2), CacheReadInputTokens: new(3), CacheCreationInputTokens: new(4)})
 	got := s.mergeUsage(&usage{OutputTokens: new(0)})
-	want := litellm.UsageEvent{Usage: litellm.Usage{InputTokens: new(12), OutputTokens: new(0), TotalTokens: new(12), CacheReadTokens: new(3), CacheWriteTokens: new(4)}}
+	want := litellm.UsageEvent{Usage: litellm.Usage{InputTokens: 12, OutputTokens: 0, CacheReadTokens: 3, CacheWriteTokens: 4}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("usage = %#v, want %#v", got, want)
 	}

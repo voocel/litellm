@@ -44,9 +44,14 @@ type functionCall struct {
 }
 
 type functionResponse struct {
-	ID       string          `json:"id,omitempty"`
-	Name     string          `json:"name"`
-	Response json.RawMessage `json:"response"`
+	ID       string                 `json:"id,omitempty"`
+	Name     string                 `json:"name"`
+	Response json.RawMessage        `json:"response"`
+	Parts    []functionResponsePart `json:"parts,omitempty"`
+}
+
+type functionResponsePart struct {
+	InlineData *inlineData `json:"inlineData"`
 }
 
 type generationConfig struct {
@@ -112,23 +117,9 @@ type usageMetadata struct {
 	PromptTokenCount        int `json:"promptTokenCount"`
 	CandidatesTokenCount    int `json:"candidatesTokenCount"`
 	ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
-	TotalTokenCount         int `json:"totalTokenCount"`
 	CachedContentTokenCount int `json:"cachedContentTokenCount"`
 }
 
 type promptFeedback struct {
 	BlockReason string `json:"blockReason"`
-}
-
-type modelList struct {
-	Models        []modelInfo `json:"models"`
-	NextPageToken string      `json:"nextPageToken,omitempty"`
-}
-
-type modelInfo struct {
-	Name             string `json:"name"`
-	DisplayName      string `json:"displayName,omitempty"`
-	Description      string `json:"description,omitempty"`
-	InputTokenLimit  int    `json:"inputTokenLimit,omitempty"`
-	OutputTokenLimit int    `json:"outputTokenLimit,omitempty"`
 }

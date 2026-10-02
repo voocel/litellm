@@ -27,10 +27,10 @@ type Block interface {
 // Annotation is a citation attached to text. Extra keeps the vendor entry
 // verbatim.
 type Annotation struct {
-	Type  string
-	Text  string
-	URL   string
-	Extra json.RawMessage
+	Type  string          `json:"type"`
+	Text  string          `json:"text,omitempty"`
+	URL   string          `json:"url,omitempty"`
+	Extra json.RawMessage `json:"extra,omitempty"`
 }
 
 // ProviderState is data a provider attaches to a block it produced so the
@@ -46,67 +46,67 @@ type Annotation struct {
 // the caller (nil State) count as foreign.
 type ProviderState struct {
 	// Provider is the Name of the provider that produced the block.
-	Provider string
+	Provider string `json:"provider"`
 	// Model is the requested model.
-	Model string
+	Model string `json:"model,omitempty"`
 	// Data holds the vendor's native fields as JSON.
-	Data json.RawMessage
+	Data json.RawMessage `json:"data,omitempty"`
 }
 
 // TextBlock is plain text. Annotations and Logprobs are response metadata.
 type TextBlock struct {
-	Text        string
-	Annotations []Annotation
-	Logprobs    json.RawMessage
-	State       *ProviderState
-	Cache       *CacheControl
+	Text        string          `json:"text"`
+	Annotations []Annotation    `json:"annotations,omitempty"`
+	Logprobs    json.RawMessage `json:"logprobs,omitempty"`
+	State       *ProviderState  `json:"state,omitempty"`
+	Cache       *CacheControl   `json:"cache,omitempty"`
 }
 
 // ImageBlock is an image. Set one source: URL, Data with MIME, or FileURI, a
 // vendor file reference. Detail is sent where the wire format has it.
 type ImageBlock struct {
-	URL     string
-	Data    []byte
-	MIME    string
-	FileURI string
-	Detail  string
-	Cache   *CacheControl
+	URL     string        `json:"url,omitempty"`
+	Data    []byte        `json:"data,omitempty"`
+	MIME    string        `json:"mime,omitempty"`
+	FileURI string        `json:"file_uri,omitempty"`
+	Detail  string        `json:"detail,omitempty"`
+	Cache   *CacheControl `json:"cache,omitempty"`
 }
 
 // ReasoningBlock is model reasoning. Summary marks Text as a summary rather
 // than the full reasoning. Text is empty when the vendor returns the reasoning
 // encrypted or redacted; State then carries it.
 type ReasoningBlock struct {
-	Text    string
-	Summary bool
-	State   *ProviderState
-	Cache   *CacheControl
+	Text    string         `json:"text"`
+	Summary bool           `json:"summary,omitempty"`
+	State   *ProviderState `json:"state,omitempty"`
 }
 
-// ToolUseBlock is a tool call from the assistant. Arguments is the JSON the
-// model produced.
+// ToolUseBlock is a tool call from the assistant. Arguments is the text the
+// model produced, which is meant to be a JSON object but may not be one, as
+// when the response was cut off at the output limit.
 type ToolUseBlock struct {
-	ID        string
-	Name      string
-	Arguments json.RawMessage
-	State     *ProviderState
-	Cache     *CacheControl
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Arguments string         `json:"arguments,omitempty"`
+	State     *ProviderState `json:"state,omitempty"`
+	Cache     *CacheControl  `json:"cache,omitempty"`
 }
 
 // ToolResultBlock answers the ToolUseBlock with ID ToolUseID. Content holds
 // TextBlock, ImageBlock or ToolReferenceBlock values.
 type ToolResultBlock struct {
-	ToolUseID string
-	Content   []Block
-	IsError   bool
-	Cache     *CacheControl
+	ToolUseID string        `json:"tool_use_id"`
+	Content   []Block       `json:"content,omitempty"`
+	IsError   bool          `json:"is_error,omitempty"`
+	Cache     *CacheControl `json:"cache,omitempty"`
 }
 
 // ToolReferenceBlock names a tool inside tool result content, as returned by a
 // tool search tool.
 type ToolReferenceBlock struct {
-	ToolName string
-	Cache    *CacheControl
+	ToolName string        `json:"tool_name"`
+	Cache    *CacheControl `json:"cache,omitempty"`
 }
 
 func (TextBlock) isBlock()          {}
@@ -118,22 +118,13 @@ func (ToolReferenceBlock) isBlock() {}
 
 // Message is one conversation turn.
 type Message struct {
-	Role   Role
-	Blocks []Block
+	Role   Role    `json:"role"`
+	Blocks []Block `json:"blocks"`
 }
 
 // CacheControl marks a cache breakpoint: the prompt prefix up to and including
-// this block may be cached. TTL is passed to the vendor as is; empty selects
-// the vendor default.
-type CacheControl struct {
-	TTL string
-}
-
-// Common CacheControl TTL values.
-const (
-	CacheTTL5m = "5m"
-	CacheTTL1h = "1h"
-)
+// this block may be cached, for the vendor's default time.
+type CacheControl struct{}
 
 // Schema is a JSON Schema document.
 type Schema json.RawMessage
@@ -175,27 +166,14 @@ func SchemaFrom(v any) (Schema, error) {
 	}
 }
 
-// StrictMode controls strict schema adherence. StrictDefault leaves the wire
-// flag unset.
-type StrictMode int
-
-const (
-	StrictDefault StrictMode = iota
-	StrictEnabled
-	StrictDisabled
-)
-
-// Value returns the wire strict flag and whether the mode sets one.
-func (m StrictMode) Value() (strict, set bool) {
-	return m == StrictEnabled, m != StrictDefault
-}
-
-// Tool declares a function the model may call.
+// Tool declares a function the model may call. Strict, when set, asks the
+// vendor to enforce, or not, that calls fit Parameters; nil leaves its
+// default.
 type Tool struct {
-	Name        string
-	Description string
-	Parameters  Schema
-	Strict      StrictMode
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Parameters  Schema `json:"parameters,omitempty"`
+	Strict      *bool  `json:"strict,omitempty"`
 }
 
 // NewTool builds a Tool, converting parameters with SchemaFrom.
@@ -210,8 +188,8 @@ func NewTool(name, description string, parameters any) (Tool, error) {
 // ToolChoice selects a policy, or a named tool when Name is set. A nil choice
 // leaves selection to the provider. Mode and Name are mutually exclusive.
 type ToolChoice struct {
-	Mode ToolChoiceMode
-	Name string
+	Mode ToolChoiceMode `json:"mode,omitempty"`
+	Name string         `json:"name,omitempty"`
 }
 
 // ToolChoiceMode is a tool selection policy.
@@ -248,10 +226,10 @@ func (c *ToolChoice) validate() error {
 // ResponseFormat constrains the output format. JSONSchema is used with
 // ResponseFormatJSONSchema. Providers without native schema support may use a
 // prompt instead and report a Warning; this does not enforce schema adherence,
-// including when StrictEnabled is set. See providers.md for the mapping.
+// including when Strict is set. See providers.md for the mapping.
 type ResponseFormat struct {
-	Type       ResponseFormatType
-	JSONSchema *JSONSchema
+	Type       ResponseFormatType `json:"type"`
+	JSONSchema *JSONSchema        `json:"json_schema,omitempty"`
 }
 
 // ResponseFormatType selects the output format.
@@ -263,23 +241,24 @@ const (
 	ResponseFormatJSONSchema ResponseFormatType = "json_schema"
 )
 
-// JSONSchema is a named schema for structured output.
+// JSONSchema is a named schema for structured output. Strict is as in Tool.
 type JSONSchema struct {
-	Name        string
-	Description string
-	Schema      Schema
-	Strict      StrictMode
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Schema      Schema `json:"schema,omitempty"`
+	Strict      *bool  `json:"strict,omitempty"`
 }
 
-// Thinking configures model reasoning. Effort and BudgetTokens are sent as
-// given; which values a model accepts is the vendor's decision. IncludeOutput
-// is a hint to return reasoning where the vendor makes it optional; providers
-// without such a switch ignore it.
+// Thinking configures model reasoning; a nil *Thinking leaves it to the
+// vendor default. Disabled turns reasoning off and allows no other field.
+// Effort and BudgetTokens are sent as given; which values a model accepts is
+// the vendor's decision. IncludeOutput is a hint to return reasoning where
+// the vendor makes it optional; providers without such a switch ignore it.
 type Thinking struct {
-	Mode          ThinkingMode
-	Effort        string
-	BudgetTokens  *int
-	IncludeOutput bool
+	Disabled      bool   `json:"disabled,omitempty"`
+	Effort        string `json:"effort,omitempty"`
+	BudgetTokens  *int   `json:"budget_tokens,omitempty"`
+	IncludeOutput bool   `json:"include_output,omitempty"`
 }
 
 func (t *Thinking) hasOptions() bool {
@@ -295,29 +274,14 @@ func (t *Thinking) validate() error {
 	if !utf8.ValidString(t.Effort) {
 		return NewError("", ErrorTypeValidation, "thinking effort must be valid UTF-8", nil)
 	}
-	switch t.Mode {
-	case ThinkingEnabled:
-	case ThinkingDisabled:
-		if t.hasOptions() {
-			return NewError("", ErrorTypeValidation, "thinking options cannot be set when thinking is disabled", nil)
-		}
-	default:
-		return NewError("", ErrorTypeValidation, fmt.Sprintf("unknown thinking mode %d", t.Mode), nil)
+	if t.Disabled && t.hasOptions() {
+		return NewError("", ErrorTypeValidation, "thinking options cannot be set when thinking is disabled", nil)
 	}
 	if t.BudgetTokens != nil && *t.BudgetTokens <= 0 {
 		return NewError("", ErrorTypeValidation, "thinking budget_tokens must be positive", nil)
 	}
 	return nil
 }
-
-// ThinkingMode is ThinkingEnabled by default; a nil *Thinking leaves thinking
-// to the vendor default.
-type ThinkingMode int
-
-const (
-	ThinkingEnabled ThinkingMode = iota
-	ThinkingDisabled
-)
 
 // ProviderOptions contains JSON values owned by the request. Use NewProviderOptions
 // or Set to encode Go values; the client copies each value before observation or execution.
@@ -326,21 +290,21 @@ type ProviderOptions map[string]json.RawMessage
 // Request is a provider-neutral chat request. Nil pointers and empty fields
 // are omitted from the wire, leaving the vendor default.
 type Request struct {
-	Model    string
-	Messages []Message
+	Model    string    `json:"model"`
+	Messages []Message `json:"messages"`
 
-	MaxTokens   *int
-	Temperature *float64
-	TopP        *float64
-	Stop        []string
+	MaxTokens   *int     `json:"max_tokens,omitempty"`
+	Temperature *float64 `json:"temperature,omitempty"`
+	TopP        *float64 `json:"top_p,omitempty"`
+	Stop        []string `json:"stop,omitempty"`
 
-	Tools      []Tool
-	ToolChoice *ToolChoice
+	Tools      []Tool      `json:"tools,omitempty"`
+	ToolChoice *ToolChoice `json:"tool_choice,omitempty"`
 
-	ResponseFormat *ResponseFormat
-	Thinking       *Thinking
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
+	Thinking       *Thinking       `json:"thinking,omitempty"`
 
-	ProviderOptions ProviderOptions
+	ProviderOptions ProviderOptions `json:"provider_options,omitempty"`
 }
 
 func cloneBytes(b []byte) []byte {
@@ -406,27 +370,18 @@ func cloneBlock(block Block) Block {
 			b.Annotations[i].Extra = cloneBytes(b.Annotations[i].Extra)
 		}
 		b.State = cloneState(b.State)
-		b.Cache = cloneCacheControl(b.Cache)
 		return b
 	case ImageBlock:
 		b.Data = cloneBytes(b.Data)
-		b.Cache = cloneCacheControl(b.Cache)
 		return b
 	case ReasoningBlock:
 		b.State = cloneState(b.State)
-		b.Cache = cloneCacheControl(b.Cache)
 		return b
 	case ToolUseBlock:
-		b.Arguments = cloneBytes(b.Arguments)
 		b.State = cloneState(b.State)
-		b.Cache = cloneCacheControl(b.Cache)
 		return b
 	case ToolResultBlock:
 		b.Content = cloneBlocks(b.Content)
-		b.Cache = cloneCacheControl(b.Cache)
-		return b
-	case ToolReferenceBlock:
-		b.Cache = cloneCacheControl(b.Cache)
 		return b
 	default:
 		return block
@@ -441,6 +396,7 @@ func cloneTools(tools []Tool) []Tool {
 	for i, tool := range tools {
 		out[i] = tool
 		out[i].Parameters = Schema(cloneBytes(tool.Parameters))
+		out[i].Strict = clonePtr(tool.Strict)
 	}
 	return out
 }
@@ -460,6 +416,7 @@ func cloneResponseFormat(format *ResponseFormat) *ResponseFormat {
 	if format.JSONSchema != nil {
 		schema := *format.JSONSchema
 		schema.Schema = Schema(cloneBytes(format.JSONSchema.Schema))
+		schema.Strict = clonePtr(format.JSONSchema.Strict)
 		out.JSONSchema = &schema
 	}
 	return &out
@@ -480,14 +437,6 @@ func cloneState(state *ProviderState) *ProviderState {
 	}
 	out := *state
 	out.Data = cloneBytes(state.Data)
-	return &out
-}
-
-func cloneCacheControl(cache *CacheControl) *CacheControl {
-	if cache == nil {
-		return nil
-	}
-	out := *cache
 	return &out
 }
 
