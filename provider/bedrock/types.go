@@ -27,6 +27,7 @@ type content struct {
 
 type cachePoint struct {
 	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
 }
 
 type reasoningContent struct {
@@ -118,6 +119,13 @@ type usage struct {
 	OutputTokens          int `json:"outputTokens"`
 	CacheReadInputTokens  int `json:"cacheReadInputTokens"`
 	CacheWriteInputTokens int `json:"cacheWriteInputTokens"`
+	// CacheDetails splits the writes by how long they are cached.
+	CacheDetails []cacheDetail `json:"cacheDetails"`
+}
+
+type cacheDetail struct {
+	TTL         string `json:"ttl"`
+	InputTokens int    `json:"inputTokens"`
 }
 
 type response struct {

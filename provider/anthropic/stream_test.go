@@ -272,9 +272,10 @@ func TestStreamMatchesCompleteResponse(t *testing.T) {
 // Usage snapshots merge field by field; an explicit zero overwrites.
 func TestStreamMergesUsage(t *testing.T) {
 	s := &stream{}
-	s.mergeUsage(&usage{InputTokens: new(5), OutputTokens: new(2), CacheReadInputTokens: new(3), CacheCreationInputTokens: new(4)})
+	s.mergeUsage(&usage{InputTokens: new(5), OutputTokens: new(2), CacheReadInputTokens: new(3), CacheCreationInputTokens: new(4),
+		CacheCreation: &cacheCreation{Ephemeral1hInputTokens: 1}})
 	got := s.mergeUsage(&usage{OutputTokens: new(0)})
-	want := litellm.UsageEvent{Usage: litellm.Usage{InputTokens: 12, OutputTokens: 0, CacheReadTokens: 3, CacheWriteTokens: 4}}
+	want := litellm.UsageEvent{Usage: litellm.Usage{InputTokens: 12, OutputTokens: 0, CacheReadTokens: 3, CacheWriteTokens: 4, CacheWrite1hTokens: 1}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("usage = %#v, want %#v", got, want)
 	}

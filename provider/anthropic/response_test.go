@@ -25,7 +25,8 @@ func TestConvertResponse(t *testing.T) {
 		{
 			name: "blocks usage and warnings",
 			raw: `{"model":"claude-x","stop_reason":"tool_use",
-				"usage":{"input_tokens":5,"output_tokens":9,"cache_read_input_tokens":2,"cache_creation_input_tokens":3},
+				"usage":{"input_tokens":5,"output_tokens":9,"cache_read_input_tokens":2,"cache_creation_input_tokens":3,
+					"cache_creation":{"ephemeral_5m_input_tokens":1,"ephemeral_1h_input_tokens":2}},
 				"content":[
 					{"type":"thinking","thinking":"need lookup","signature":"sig"},
 					{"type":"redacted_thinking","data":"opaque"},
@@ -43,7 +44,7 @@ func TestConvertResponse(t *testing.T) {
 					litellm.TextBlock{Text: "calling"},
 					litellm.ToolUseBlock{ID: "toolu_1", Name: "lookup", Arguments: `{"q":"x"}`},
 				},
-				Usage:           litellm.Usage{InputTokens: 10, OutputTokens: 9, CacheReadTokens: 2, CacheWriteTokens: 3},
+				Usage:           litellm.Usage{InputTokens: 10, OutputTokens: 9, CacheReadTokens: 2, CacheWriteTokens: 3, CacheWrite1hTokens: 2},
 				Model:           "claude-x",
 				Provider:        "anthropic",
 				FinishReason:    litellm.FinishReasonToolCall,

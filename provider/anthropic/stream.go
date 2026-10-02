@@ -194,5 +194,8 @@ func (s *stream) mergeUsage(u *usage) litellm.Event {
 	if u.CacheCreationInputTokens != nil {
 		s.usage.CacheCreationInputTokens = u.CacheCreationInputTokens
 	}
+	if u.CacheCreation != nil {
+		s.usage.CacheCreation = u.CacheCreation
+	}
 	return litellm.UsageEvent{Usage: convertUsage(s.usage)}
 }

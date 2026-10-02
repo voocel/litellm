@@ -257,8 +257,9 @@ func TestCostUnreportedCacheAndInvalidUsage(t *testing.T) {
 			t.Fatalf("expected error for %+v", usage)
 		}
 	}
-	if cost, err := price.Cost(litellm.Usage{}); err != nil || cost.Total != 0 {
-		t.Fatalf("zero usage: %+v %v", cost, err)
+	// Every call has input tokens: usage without any was not reported.
+	if _, err := price.Cost(litellm.Usage{OutputTokens: 3}); err == nil {
+		t.Fatal("priced usage the vendor did not report")
 	}
 	// A vendor that reports no cache counts, such as MiniMax, is priced as
 	// uncached input.
@@ -268,6 +269,35 @@ func TestCostUnreportedCacheAndInvalidUsage(t *testing.T) {
 	price = Pricing{InputCostPerToken: 1, OutputCostPerToken: 2}
 	if cost, err := price.Cost(litellm.Usage{InputTokens: 10, OutputTokens: 2}); err != nil || cost.Total != 14 {
 		t.Fatalf("equal cache rates: %+v %v", cost, err)
+	}
+}
+
+// Writes cached for an hour are priced at their own rate, and only at it.
+func TestCostOfHourLongCacheWrites(t *testing.T) {
+	price := Pricing{InputCostPerToken: 1, OutputCostPerToken: 2, CacheWriteCostPerToken: new(1.25), CacheWrite1hCostPerToken: new(2.0)}
+	usage := litellm.Usage{InputTokens: 10, OutputTokens: 1, CacheWriteTokens: 8, CacheWrite1hTokens: 4}
+	if cost, err := price.Cost(usage); err != nil || cost.CacheWrite != 4*1.25+4*2 || cost.Total != 2+2+13 {
+		t.Fatalf("cost = %+v, %v", cost, err)
+	}
+	price.CacheWrite1hCostPerToken = nil
+	if _, err := price.Cost(usage); err == nil {
+		t.Fatal("priced hour-long writes without their rate")
+	}
+	if _, err := price.Cost(litellm.Usage{InputTokens: 10, CacheWriteTokens: 2, CacheWrite1hTokens: 3}); err == nil {
+		t.Fatal("accepted more hour-long writes than writes")
+	}
+
+	var c Catalog
+	if err := c.LoadFromReader(strings.NewReader(`{"m":{"mode":"chat","input_cost_per_token":1,"output_cost_per_token":2,"cache_creation_input_token_cost_above_1hr":2}}`)); err != nil {
+		t.Fatal(err)
+	}
+	model, _ := c.Get("m")
+	if rate := model.Pricing.CacheWrite1hCostPerToken; rate == nil || *rate != 2 {
+		t.Fatalf("hour-long write rate = %v", rate)
+	}
+	*model.Pricing.CacheWrite1hCostPerToken = 9
+	if again, _ := c.Get("m"); *again.Pricing.CacheWrite1hCostPerToken != 2 {
+		t.Fatal("Get exposed the catalog's hour-long write rate")
 	}
 }
 

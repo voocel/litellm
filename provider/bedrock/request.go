@@ -122,7 +122,7 @@ func convertMessages(out *request, messages []litellm.Message, provider string) 
 				}
 				out.System = append(out.System, content{Text: text.Text})
 				if text.Cache != nil {
-					out.System = append(out.System, content{CachePoint: defaultCachePoint})
+					out.System = append(out.System, content{CachePoint: convertCache(text.Cache)})
 				}
 			}
 			continue
@@ -214,13 +214,15 @@ func convertBlocks(blocks []litellm.Block, provider string) ([]content, error) {
 		}
 		out = append(out, c)
 		if cache != nil {
-			out = append(out, content{CachePoint: defaultCachePoint})
+			out = append(out, content{CachePoint: convertCache(cache)})
 		}
 	}
 	return out, nil
 }
 
-var defaultCachePoint = &cachePoint{Type: "default"}
+func convertCache(cache *litellm.CacheControl) *cachePoint {
+	return &cachePoint{Type: "default", TTL: cache.TTL}
+}
 
 // convertImage sends bytes; Converse takes a data URL's payload but not
 // remote URLs.

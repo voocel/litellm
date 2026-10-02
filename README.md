@@ -110,6 +110,8 @@ resp, err := litellm.Handle(stream, func(event litellm.Event) error {
 
 `Client.Stream` aggregates as events are read, so `Handle` and `Collect` return the complete response even after some events were read with `Next`. A stream is consumed by one goroutine.
 
+A deadline on `ctx` bounds the whole call, which for a model that thinks at length must be long. To also end a stream over a connection that hung, `litellm.WithStreamIdleTimeout(d)` fails it, with a temporary network error, once it waits `d` for data. Any data counts, vendor pings and gateway heartbeats included, so set `d` above the longest silence of a healthy stream, as a vendor may be silent while the model thinks.
+
 ## Tools
 
 ```go
@@ -178,10 +180,10 @@ Which values a model accepts is the vendor's decision. [providers.md](providers.
 
 ## Prompt Caching
 
-Mark a cache breakpoint on a block; the prompt prefix up to and including it may be cached for the vendor's default time, five minutes on Anthropic and Bedrock. Breakpoints are hints: providers without a slot drop them.
+Mark a cache breakpoint on a block; the prompt prefix up to and including it may be cached. `TTL` sets how long, passed as is, such as `"1h"`; empty is the vendor's default, five minutes on Anthropic and Bedrock. Breakpoints are hints: providers without a slot drop them, and those that cannot send a TTL use the default ([providers.md](providers.md#cache-breakpoints)).
 
 ```go
-litellm.User(litellm.TextBlock{Text: longDocument, Cache: &litellm.CacheControl{}})
+litellm.User(litellm.TextBlock{Text: longDocument, Cache: &litellm.CacheControl{TTL: "1h"}})
 ```
 
 ## Provider Options
@@ -213,7 +215,7 @@ resp, err := client.Chat(ctx, litellm.Request{
 | `provider/bedrock` | Amazon Bedrock Converse (SigV4) |
 | `provider/deepseek`, `glm`, `grok`, `mimo`, `minimax`, `ollama`, `openrouter`, `qwen` | each vendor's Chat Completions dialect |
 | `provider/compat` | any other OpenAI-compatible endpoint (vLLM, LM Studio, gateways) |
-| `provider/gateway` | a litellm [gateway](#gateway) |
+| `gateway` | a litellm [gateway](#gateway) |
 
 ```go
 anthropic.New(anthropic.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
@@ -261,7 +263,7 @@ options, err := litellm.NewProviderOptions(map[string]any{
 
 ## Gateway
 
-`provider/gateway` runs calls on a gateway that holds the vendor keys, such as for an agent in a sandbox that must never see one. The client is an ordinary provider; the gateway serves `gateway.Server`, whose `Route` picks the Client for each call and may rewrite the request:
+Package `gateway` runs calls on a gateway that holds the vendor keys, such as for an agent in a sandbox that must never see one. The client is an ordinary provider, which `provider.New("gateway", …)` also builds; the gateway serves `gateway.Server`, whose `Route` picks the Client for each call and may rewrite the request:
 
 ```go
 // gateway
@@ -346,7 +348,7 @@ observer := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
 
 ## Usage And Model Catalog
 
-Token counts are plain ints; a count the vendor does not report is zero. Input includes cache reads and writes; output includes reasoning; detail counts are subsets. `Pricing.Cost` prices the input not read from or written to the cache at the input rate, so a vendor that reports no cache counts is priced as uncached input.
+Token counts are plain ints; a count the vendor does not report is zero. Input includes cache reads and writes; output includes reasoning; detail counts are subsets, such as `CacheWrite1hTokens`, the writes cached for an hour. `Pricing.Cost` prices the input not read from or written to the cache at the input rate, so a vendor that reports no cache counts is priced as uncached input. Hour-long writes are priced at `CacheWrite1hCostPerToken`, and are an error without it. So is usage without input tokens: every call has some, so the vendor reported none, and its cost is unknown rather than zero.
 
 The catalog holds model facts (context window, output limit, reasoning support and prices) from LiteLLM's model list, and never loads remote data implicitly:
 

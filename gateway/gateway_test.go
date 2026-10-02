@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/gateway"
 	"github.com/voocel/litellm/litellmtest"
-	"github.com/voocel/litellm/provider/gateway"
 )
 
 // serve runs a Server that routes "smart" to upstream as "vendor-model",

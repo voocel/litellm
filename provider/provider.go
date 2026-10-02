@@ -11,11 +11,11 @@ import (
 	"slices"
 
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/gateway"
 	"github.com/voocel/litellm/provider/anthropic"
 	"github.com/voocel/litellm/provider/bedrock"
 	"github.com/voocel/litellm/provider/compat"
 	"github.com/voocel/litellm/provider/deepseek"
-	"github.com/voocel/litellm/provider/gateway"
 	"github.com/voocel/litellm/provider/gemini"
 	"github.com/voocel/litellm/provider/glm"
 	"github.com/voocel/litellm/provider/grok"

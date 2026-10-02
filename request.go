@@ -123,8 +123,13 @@ type Message struct {
 }
 
 // CacheControl marks a cache breakpoint: the prompt prefix up to and including
-// this block may be cached, for the vendor's default time.
-type CacheControl struct{}
+// this block may be cached. TTL is how long, passed as is, such as "1h";
+// empty is the vendor's default, five minutes on Anthropic and Bedrock. Like
+// the breakpoint, a TTL is a hint: adapters that cannot send it use the
+// default.
+type CacheControl struct {
+	TTL string `json:"ttl,omitempty"`
+}
 
 // Schema is a JSON Schema document.
 type Schema json.RawMessage

@@ -128,12 +128,12 @@ Anthropic requires tool call ids matching `[a-zA-Z0-9_-]+`, and Bedrock Converse
 | Provider | Encoding |
 | --- | --- |
 | OpenAI Chat and Responses | content part `prompt_cache_breakpoint: {"mode": "explicit"}`; the `prompt_cache_retention` option sets the lifetime for the whole request |
-| Anthropic | `cache_control: {"type": "ephemeral"}` |
+| Anthropic | `cache_control: {"type": "ephemeral", "ttl": TTL}` |
 | OpenRouter | `cache_control: {"type": "ephemeral"}` on the content part |
-| Bedrock | a `cachePoint: {"type": "default"}` block after the marked block |
+| Bedrock | a `cachePoint: {"type": "default", "ttl": TTL}` block after the marked block |
 | others | dropped; Gemini uses the `cachedContent` option |
 
-Breakpoints use the vendor's default lifetime, five minutes on Anthropic and Bedrock. Longer lifetimes are priced differently, and usage does not tell them apart. Thinking blocks cannot carry a breakpoint ([Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)), so `ReasoningBlock` has none.
+`TTL` is sent where the table shows it; elsewhere the breakpoint keeps the vendor's default lifetime. OpenRouter accepts a TTL too, but its usage does not tell hour-long writes, which cost more, from five-minute ones, so they could not be priced; it is not sent. Thinking blocks cannot carry a breakpoint ([Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)), so `ReasoningBlock` has none.
 
 OpenAI Responses sends cached tool results as `input_text` content parts. A
 breakpoint on `ToolResultBlock` marks the last part; breakpoints on individual
@@ -148,7 +148,7 @@ reports no cache counts, such as MiniMax, is priced as uncached input.
 
 | Provider | Cache reads | Cache writes |
 | --- | --- | --- |
-| Anthropic, Bedrock | reported | reported |
+| Anthropic, Bedrock | reported | reported, hour-long writes split out from `cache_creation` and `cacheDetails` |
 | OpenAI Chat and Responses | `cached_tokens` | `cache_write_tokens` when sent |
 | Gemini | `cachedContentTokenCount` | not reported |
 | DeepSeek, GLM, Qwen | reported | 0: caching carries no write charge; Qwen breakpoints are dropped, leaving implicit caching |

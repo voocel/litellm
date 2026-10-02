@@ -4,8 +4,9 @@ Package litellm provides a small, explicit multi-provider LLM SDK core.
 The root package owns the provider-agnostic domain model: Request, Response,
 Message, Block, Stream, Event, structured errors, warnings, and observers.
 Concrete providers live in the subpackages of package provider, which builds
-them by name; provider/compat connects any OpenAI-compatible endpoint. catalog
-and retry are optional utilities.
+them by name; provider/compat connects any OpenAI-compatible endpoint. catalog,
+retry and gateway are optional utilities; gateway carries calls over HTTP to a
+server that holds the vendor keys.
 
 # Quick Start
 
@@ -73,8 +74,9 @@ Collect only aggregates. Stream is for single-goroutine consumption.
 
 # Design
 
-The SDK is intentionally not a gateway, router, agent runtime, account system,
-or request scheduler. It binds one Client to one Provider and exposes explicit
+The SDK is intentionally not a router, agent runtime, account system, or
+request scheduler, and its gateway leaves authentication and metering to the
+application. It binds one Client to one Provider and exposes explicit
 configuration and structural validation. It maps structure only: it does not
 infer model features, validate vendor values locally, or rewrite user input;
 the vendor API is the authority. ProviderOptions carry native wire fields.

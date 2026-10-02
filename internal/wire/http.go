@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/internal/idle"
 )
 
 // MaxErrorBody bounds how much of a failed response is read into the error.
@@ -98,12 +99,24 @@ func ErrorField(provider string, raw json.RawMessage) error {
 	return StreamError(provider, cmp.Or(code, e.Metadata.ErrorType, e.Type), message)
 }
 
-// HTTPClient returns c, or http.DefaultClient when c is nil.
+// HTTPClient returns the client a provider sends with: c, or
+// http.DefaultClient when c is nil, watching the body of each response to a
+// request whose context carries an idle timeout.
 func HTTPClient(c litellm.HTTPClient) litellm.HTTPClient {
 	if c == nil {
-		return http.DefaultClient
+		c = http.DefaultClient
 	}
-	return c
+	return watcher{c}
+}
+
+type watcher struct{ client litellm.HTTPClient }
+
+func (w watcher) Do(req *http.Request) (*http.Response, error) {
+	resp, err := w.client.Do(req)
+	if timeout := idle.Timeout(req.Context()); err == nil && timeout > 0 {
+		resp.Body = idle.Watch(resp.Body, timeout)
+	}
+	return resp, err
 }
 
 // DefaultUserAgent identifies the SDK when a config sets no UserAgent.

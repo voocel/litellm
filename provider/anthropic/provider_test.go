@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/voocel/litellm"
 	"github.com/voocel/litellm/internal/testgolden"
@@ -63,6 +64,68 @@ func TestChatSendsHeaders(t *testing.T) {
 	resp, err := p.Chat(t.Context(), &litellm.Request{Model: "claude", MaxTokens: new(64), Messages: []litellm.Message{litellm.UserText("hi")}})
 	if err != nil || resp.Text() != "ok" {
 		t.Fatalf("Chat = %+v, %v", resp, err)
+	}
+}
+
+// A Client's stream fails once it waits its idle timeout for data, with a
+// temporary network error; the vendor's pings count as data.
+func TestStreamIdleTimeout(t *testing.T) {
+	events := func(w io.Writer, data ...string) {
+		for _, d := range data {
+			io.WriteString(w, "data: "+d+"\n\n")
+		}
+	}
+	const start = `{"type":"message_start","message":{"model":"claude","usage":{"input_tokens":1}}}`
+	stream := func(write func(w io.Writer)) error {
+		r, w := io.Pipe()
+		go func() {
+			write(w)
+			w.Close()
+		}()
+		p, err := New(Config{APIKey: "k", HTTPClient: doFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: r}, nil
+		})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, err := litellm.New(p, litellm.WithStreamIdleTimeout(100*time.Millisecond))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := client.Stream(t.Context(), litellm.Request{Model: "claude", MaxTokens: new(64), Messages: []litellm.Message{litellm.UserText("hi")}})
+		if err != nil {
+			return err
+		}
+		defer s.Close()
+		_, err = litellm.Collect(s)
+		return err
+	}
+
+	err := stream(func(w io.Writer) {
+		events(w, start)
+		for range 6 {
+			time.Sleep(40 * time.Millisecond)
+			events(w, `{"type":"ping"}`)
+		}
+		events(w,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`,
+			`{"type":"content_block_stop","index":0}`,
+			`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+			`{"type":"message_stop"}`)
+	})
+	if err != nil {
+		t.Fatalf("a stream kept alive by pings failed: %v", err)
+	}
+
+	hung := make(chan struct{})
+	defer close(hung)
+	err = stream(func(w io.Writer) {
+		events(w, start)
+		<-hung
+	})
+	if litellm.ErrorTypeOf(err) != litellm.ErrorTypeNetwork || !litellm.IsTemporaryError(err) || !strings.Contains(err.Error(), "no data for 100ms") {
+		t.Fatalf("hung stream: %v", err)
 	}
 }
 

@@ -17,7 +17,8 @@ func TestConvertResponse(t *testing.T) {
 			{"text":"hello"},
 			{"toolUse":{"toolUseId":"toolu_1","name":"lookup","input":{"q":"x"}}}]}},
 		"stopReason":"tool_use",
-		"usage":{"inputTokens":5,"outputTokens":7,"totalTokens":12,"cacheReadInputTokens":2,"cacheWriteInputTokens":3}
+		"usage":{"inputTokens":5,"outputTokens":7,"totalTokens":12,"cacheReadInputTokens":2,"cacheWriteInputTokens":3,
+			"cacheDetails":[{"ttl":"1h","inputTokens":2},{"ttl":"5m","inputTokens":1}]}
 	}`), &resp); err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +30,7 @@ func TestConvertResponse(t *testing.T) {
 			litellm.ToolUseBlock{ID: "toolu_1", Name: "lookup", Arguments: `{"q":"x"}`},
 		},
 		// Input counts cache reads and writes.
-		Usage:           litellm.Usage{InputTokens: 10, OutputTokens: 7, CacheReadTokens: 2, CacheWriteTokens: 3},
+		Usage:           litellm.Usage{InputTokens: 10, OutputTokens: 7, CacheReadTokens: 2, CacheWriteTokens: 3, CacheWrite1hTokens: 2},
 		Model:           "m",
 		Provider:        "bedrock",
 		FinishReason:    litellm.FinishReasonToolCall,

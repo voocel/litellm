@@ -44,12 +44,15 @@ type Model struct {
 }
 
 // Pricing holds per-token rates; LiteLLM's list is in USD. A nil cache rate
-// inherits the input rate; a non-nil zero means free cache usage.
+// inherits the input rate; a non-nil zero means free cache usage. Writes
+// cached for an hour are priced at CacheWrite1hCostPerToken alone, since
+// vendors charge more for them.
 type Pricing struct {
-	InputCostPerToken      float64  `json:"input_cost_per_token"`
-	OutputCostPerToken     float64  `json:"output_cost_per_token"`
-	CacheReadCostPerToken  *float64 `json:"cache_read_input_token_cost,omitempty"`
-	CacheWriteCostPerToken *float64 `json:"cache_creation_input_token_cost,omitempty"`
+	InputCostPerToken        float64  `json:"input_cost_per_token"`
+	OutputCostPerToken       float64  `json:"output_cost_per_token"`
+	CacheReadCostPerToken    *float64 `json:"cache_read_input_token_cost,omitempty"`
+	CacheWriteCostPerToken   *float64 `json:"cache_creation_input_token_cost,omitempty"`
+	CacheWrite1hCostPerToken *float64 `json:"cache_creation_input_token_cost_above_1hr,omitempty"`
 }
 
 // Cost is a cost breakdown in the currency of the rates.
@@ -161,6 +164,7 @@ func parse(reader io.Reader) (map[string]Model, error) {
 			Output          *float64 `json:"output_cost_per_token"`
 			CacheRead       *float64 `json:"cache_read_input_token_cost"`
 			CacheWrite      *float64 `json:"cache_creation_input_token_cost"`
+			CacheWrite1h    *float64 `json:"cache_creation_input_token_cost_above_1hr"`
 		}
 		if err := json.Unmarshal(data, &entry); err != nil {
 			return nil, fmt.Errorf("catalog: decode model %q: %w", name, err)
@@ -176,10 +180,11 @@ func parse(reader io.Reader) (map[string]Model, error) {
 		}
 		if entry.Input != nil && entry.Output != nil {
 			model.Pricing = &Pricing{
-				InputCostPerToken:      *entry.Input,
-				OutputCostPerToken:     *entry.Output,
-				CacheReadCostPerToken:  entry.CacheRead,
-				CacheWriteCostPerToken: entry.CacheWrite,
+				InputCostPerToken:        *entry.Input,
+				OutputCostPerToken:       *entry.Output,
+				CacheReadCostPerToken:    entry.CacheRead,
+				CacheWriteCostPerToken:   entry.CacheWrite,
+				CacheWrite1hCostPerToken: entry.CacheWrite1h,
 			}
 		}
 		if err := model.validate(name); err != nil {
@@ -192,10 +197,22 @@ func parse(reader io.Reader) (map[string]Model, error) {
 
 // Cost prices usage. Cache reads and writes are priced at their rates and
 // the rest of the input at the input rate; a cache count the vendor did not
-// report is zero, its tokens priced as input.
+// report is zero, its tokens priced as input. Usage without input tokens is
+// an error: every call has some, so the vendor reported none. So are writes
+// cached for an hour without their rate.
 func (p Pricing) Cost(usage litellm.Usage) (Cost, error) {
 	if err := p.validate(); err != nil {
 		return Cost{}, fmt.Errorf("catalog: %w", err)
+	}
+	in, out, cacheRead, cacheWrite, cacheWrite1h := usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens, usage.CacheWrite1hTokens
+	if in == 0 {
+		return Cost{}, fmt.Errorf("catalog: the usage reports no input tokens")
+	}
+	if in < 0 || out < 0 || cacheRead < 0 || cacheWrite1h < 0 || cacheWrite1h > cacheWrite || cacheRead+cacheWrite > in {
+		return Cost{}, fmt.Errorf("catalog: invalid token counts: cache reads and writes must fit within input tokens")
+	}
+	if cacheWrite1h > 0 && p.CacheWrite1hCostPerToken == nil {
+		return Cost{}, fmt.Errorf("catalog: no rate for cache writes kept an hour")
 	}
 	cacheReadRate, cacheWriteRate := p.InputCostPerToken, p.InputCostPerToken
 	if p.CacheReadCostPerToken != nil {
@@ -204,14 +221,13 @@ func (p Pricing) Cost(usage litellm.Usage) (Cost, error) {
 	if p.CacheWriteCostPerToken != nil {
 		cacheWriteRate = *p.CacheWriteCostPerToken
 	}
-	in, out, cacheRead, cacheWrite := usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens
-	if in < 0 || out < 0 || cacheRead < 0 || cacheWrite < 0 || cacheRead+cacheWrite > in {
-		return Cost{}, fmt.Errorf("catalog: invalid token counts: cache reads and writes must fit within input tokens")
-	}
 	inputCost := float64(in-cacheRead-cacheWrite) * p.InputCostPerToken
 	outputCost := float64(out) * p.OutputCostPerToken
 	cacheReadCost := float64(cacheRead) * cacheReadRate
-	cacheWriteCost := float64(cacheWrite) * cacheWriteRate
+	cacheWriteCost := float64(cacheWrite-cacheWrite1h) * cacheWriteRate
+	if cacheWrite1h > 0 {
+		cacheWriteCost += float64(cacheWrite1h) * *p.CacheWrite1hCostPerToken
+	}
 	return Cost{
 		Input:      inputCost,
 		Output:     outputCost,
@@ -244,6 +260,7 @@ func (p Pricing) validate() error {
 	}{
 		{"input", &p.InputCostPerToken}, {"output", &p.OutputCostPerToken},
 		{"cache read", p.CacheReadCostPerToken}, {"cache write", p.CacheWriteCostPerToken},
+		{"hour-long cache write", p.CacheWrite1hCostPerToken},
 	} {
 		if rate.value != nil && (*rate.value < 0 || math.IsNaN(*rate.value) || math.IsInf(*rate.value, 0)) {
 			return fmt.Errorf("%s cost per token must be finite and non-negative", rate.name)
@@ -263,6 +280,7 @@ func (m Model) clone() Model {
 	pricing := *m.Pricing
 	pricing.CacheReadCostPerToken = copyRate(pricing.CacheReadCostPerToken)
 	pricing.CacheWriteCostPerToken = copyRate(pricing.CacheWriteCostPerToken)
+	pricing.CacheWrite1hCostPerToken = copyRate(pricing.CacheWrite1hCostPerToken)
 	m.Pricing = &pricing
 	return m
 }

@@ -38,10 +38,16 @@ func convertReasoning(r *reasoningContent, provider, model string) litellm.Reaso
 // convertUsage reports input as the total: Bedrock counts cache reads and
 // writes separately from uncached input.
 func convertUsage(u usage) litellm.Usage {
-	return litellm.Usage{
+	out := litellm.Usage{
 		InputTokens:      u.InputTokens + u.CacheReadInputTokens + u.CacheWriteInputTokens,
 		OutputTokens:     u.OutputTokens,
 		CacheReadTokens:  u.CacheReadInputTokens,
 		CacheWriteTokens: u.CacheWriteInputTokens,
 	}
+	for _, detail := range u.CacheDetails {
+		if detail.TTL == "1h" {
+			out.CacheWrite1hTokens += detail.InputTokens
+		}
+	}
+	return out
 }

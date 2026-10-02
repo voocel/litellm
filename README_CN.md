@@ -110,6 +110,8 @@ resp, err := litellm.Handle(stream, func(event litellm.Event) error {
 
 `Client.Stream` 在读取时即完成聚合，因此即便先用 `Next` 读过部分事件，`Handle` / `Collect` 仍返回完整响应。流只能由一个 goroutine 消费。
 
+`ctx` 上的 deadline 限制整个调用，模型长时间思考时它必须设得很长。要让挂住的连接上的流也能结束，用 `litellm.WithStreamIdleTimeout(d)`：流等待数据达到 `d` 时以可重试的网络错误失败。任何数据都算，包括厂商的 ping 和网关心跳；厂商在模型思考期间可能完全静默，所以 `d` 要大于健康流的最长静默。
+
 ## 工具
 
 ```go
@@ -178,10 +180,10 @@ resp, err := client.Chat(ctx, litellm.Request{
 
 ## 提示缓存
 
-在块上标记缓存断点：截至并包含该块的提示前缀可按厂商默认时长缓存，Anthropic 与 Bedrock 为五分钟。断点只是提示，没有对应字段的 Provider 会丢弃。
+在块上标记缓存断点：截至并包含该块的提示前缀可被缓存。`TTL` 设定缓存时长，原样传递，例如 `"1h"`；留空为厂商默认，Anthropic 与 Bedrock 为五分钟。断点只是提示：没有对应字段的 Provider 会丢弃断点，发不出 TTL 的 Provider 使用默认时长（见 [providers.md](providers.md#cache-breakpoints)）。
 
 ```go
-litellm.User(litellm.TextBlock{Text: longDocument, Cache: &litellm.CacheControl{}})
+litellm.User(litellm.TextBlock{Text: longDocument, Cache: &litellm.CacheControl{TTL: "1h"}})
 ```
 
 ## Provider Options
@@ -213,7 +215,7 @@ resp, err := client.Chat(ctx, litellm.Request{
 | `provider/bedrock` | Amazon Bedrock Converse（SigV4） |
 | `provider/deepseek`、`glm`、`grok`、`mimo`、`minimax`、`ollama`、`openrouter`、`qwen` | 各厂商的 Chat Completions 方言 |
 | `provider/compat` | 其他任意 OpenAI 兼容端点（vLLM、LM Studio、网关） |
-| `provider/gateway` | litellm [网关](#网关) |
+| `gateway` | litellm [网关](#网关) |
 
 ```go
 anthropic.New(anthropic.Config{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
@@ -261,7 +263,7 @@ options, err := litellm.NewProviderOptions(map[string]any{
 
 ## 网关
 
-`provider/gateway` 让调用经由持有厂商 key 的网关完成，例如运行在沙盒里、不能接触 key 的 agent。客户端就是一个普通 Provider；网关端挂载 `gateway.Server`，由 `Route` 为每次调用选择 Client，并可改写请求：
+`gateway` 包让调用经由持有厂商 key 的网关完成，例如运行在沙盒里、不能接触 key 的 agent。客户端就是一个普通 Provider，也可以用 `provider.New("gateway", …)` 构建；网关端挂载 `gateway.Server`，由 `Route` 为每次调用选择 Client，并可改写请求：
 
 ```go
 // 网关
@@ -346,7 +348,7 @@ observer := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
 
 ## 用量与模型目录
 
-Token 计数为普通 int，厂商未报告的计数为零。输入含缓存读写，输出含推理，明细计数是子集。`Pricing.Cost` 把未读写缓存的输入按输入价计费，因此不报告缓存计数的厂商按未缓存输入计价。
+Token 计数为普通 int，厂商未报告的计数为零。输入含缓存读写，输出含推理，明细计数是子集，例如 `CacheWrite1hTokens` 是缓存一小时的写入。`Pricing.Cost` 把未读写缓存的输入按输入价计费，因此不报告缓存计数的厂商按未缓存输入计价。一小时写入按 `CacheWrite1hCostPerToken` 计价，缺少该费率时报错。没有输入 token 的用量同样报错：每次调用都有输入，没有就说明厂商没报告，费用是未知而不是零。
 
 模型目录来自 LiteLLM 的模型表，包含上下文窗口、输出上限、是否支持推理和价格，从不隐式加载远程数据：
 

@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
+
+	"github.com/voocel/litellm/internal/idle"
 )
 
 // Client runs requests through a Provider. It copies and validates each
@@ -13,6 +16,7 @@ type Client struct {
 	provider           Provider
 	observers          []Observer
 	captureRawResponse bool
+	streamIdleTimeout  time.Duration
 }
 
 // ClientOption configures a Client.
@@ -36,6 +40,21 @@ func New(provider Provider, opts ...ClientOption) (*Client, error) {
 func WithCaptureRawResponse(enabled bool) ClientOption {
 	return func(c *Client) error {
 		c.captureRawResponse = enabled
+		return nil
+	}
+}
+
+// WithStreamIdleTimeout fails a stream, with a temporary network error, once
+// it waits timeout for data from its connection, as when the connection hung.
+// Any data counts, vendor pings and gateway heartbeats included, so a healthy
+// stream fails only when silent for longer, as a vendor may be while the
+// model thinks. Zero disables the check.
+func WithStreamIdleTimeout(timeout time.Duration) ClientOption {
+	return func(c *Client) error {
+		if timeout < 0 {
+			return fmt.Errorf("stream idle timeout cannot be negative")
+		}
+		c.streamIdleTimeout = timeout
 		return nil
 	}
 }
@@ -97,6 +116,9 @@ func (c *Client) Chat(ctx context.Context, req Request) (*Response, error) {
 // Consume it with Next, Handle or Collect.
 func (c *Client) Stream(ctx context.Context, req Request) (Stream, error) {
 	streamCtx, cancel := context.WithCancel(ctx)
+	if c.streamIdleTimeout > 0 {
+		streamCtx = idle.WithTimeout(streamCtx, c.streamIdleTimeout)
+	}
 	streamCtx, call := c.startCall(streamCtx, req, true)
 	prepared, err := prepareRequest(req)
 	if err != nil {

@@ -22,6 +22,12 @@ type usage struct {
 	OutputTokens             *int `json:"output_tokens"`
 	CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     *int `json:"cache_read_input_tokens"`
+	// CacheCreation splits the writes by how long they are cached.
+	CacheCreation *cacheCreation `json:"cache_creation"`
+}
+
+type cacheCreation struct {
+	Ephemeral1hInputTokens int `json:"ephemeral_1h_input_tokens"`
 }
 
 func convertResponse(resp *response, provider, model string) *litellm.Response {
@@ -100,12 +106,16 @@ func unsupportedBlock(provider, blockType string) litellm.Warning {
 // writes separately from uncached input.
 func convertUsage(u usage) litellm.Usage {
 	read, write := count(u.CacheReadInputTokens), count(u.CacheCreationInputTokens)
-	return litellm.Usage{
+	out := litellm.Usage{
 		InputTokens:      count(u.InputTokens) + read + write,
 		OutputTokens:     count(u.OutputTokens),
 		CacheReadTokens:  read,
 		CacheWriteTokens: write,
 	}
+	if u.CacheCreation != nil {
+		out.CacheWrite1hTokens = u.CacheCreation.Ephemeral1hInputTokens
+	}
+	return out
 }
 
 // count reads an omitted count as zero.

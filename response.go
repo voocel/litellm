@@ -72,13 +72,15 @@ func (r *Response) Reasoning() string {
 
 // Usage holds the token counts a response reported; a count the vendor did
 // not report is zero. InputTokens includes cache reads and writes;
-// OutputTokens includes reasoning.
+// OutputTokens includes reasoning; CacheWriteTokens includes the writes
+// cached for an hour, CacheWrite1hTokens.
 type Usage struct {
-	InputTokens      int `json:"input_tokens,omitempty"`
-	OutputTokens     int `json:"output_tokens,omitempty"`
-	ReasoningTokens  int `json:"reasoning_tokens,omitempty"`
-	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	InputTokens        int `json:"input_tokens,omitempty"`
+	OutputTokens       int `json:"output_tokens,omitempty"`
+	ReasoningTokens    int `json:"reasoning_tokens,omitempty"`
+	CacheReadTokens    int `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens   int `json:"cache_write_tokens,omitempty"`
+	CacheWrite1hTokens int `json:"cache_write_1h_tokens,omitempty"`
 }
 
 // FinishReason is a normalized stop reason; FinishReasonRaw keeps the vendor

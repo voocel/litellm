@@ -64,6 +64,11 @@ func TestBuildRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "a cache TTL is sent",
+			req:  withMessages(litellm.User(litellm.TextBlock{Text: "doc", Cache: &litellm.CacheControl{TTL: "1h"}})),
+			want: map[string]string{"messages": `[{"role":"user","content":[{"type":"text","text":"doc","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]`},
+		},
+		{
 			name: "later system messages stay in place",
 			req:  withMessages(litellm.System("a"), litellm.UserText("hi"), litellm.System("b"), litellm.System("c")),
 			want: map[string]string{

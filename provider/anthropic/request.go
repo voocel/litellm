@@ -97,6 +97,7 @@ type imageSource struct {
 
 type cacheControl struct {
 	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
 }
 
 type tool struct {
@@ -307,7 +308,7 @@ func convertCache(cache *litellm.CacheControl) *cacheControl {
 	if cache == nil {
 		return nil
 	}
-	return &cacheControl{Type: "ephemeral"}
+	return &cacheControl{Type: "ephemeral", TTL: cache.TTL}
 }
 
 func convertImage(block litellm.ImageBlock) (*imageSource, error) {

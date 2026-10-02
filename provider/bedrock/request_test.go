@@ -165,6 +165,13 @@ func TestBuildRequest(t *testing.T) {
 			want: map[string]string{"messages": `[{"role":"user","content":[{"text":"doc"},{"cachePoint":{"type":"default"}},{"text":"question"}]}]`},
 		},
 		{
+			name: "cache points carry their TTL",
+			req: func(r *litellm.Request) {
+				r.Messages = []litellm.Message{litellm.User(litellm.TextBlock{Text: "doc", Cache: &litellm.CacheControl{TTL: "1h"}})}
+			},
+			want: map[string]string{"messages": `[{"role":"user","content":[{"text":"doc"},{"cachePoint":{"type":"default","ttl":"1h"}}]}]`},
+		},
+		{
 			name: "images are sent as bytes",
 			req: func(r *litellm.Request) {
 				r.Messages = []litellm.Message{litellm.User(
