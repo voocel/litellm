@@ -128,3 +128,24 @@ func TestChatErrors(t *testing.T) {
 		t.Fatalf("error body: %v", err)
 	}
 }
+
+// xAI counts reasoning apart from completion_tokens, as its total shows;
+// the others count it within.
+func TestUsageReasoning(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		output     int
+	}{
+		{"within", `{"prompt_tokens":10,"completion_tokens":30,"total_tokens":40,"completion_tokens_details":{"reasoning_tokens":20}}`, 30},
+		{"apart", `{"prompt_tokens":10,"completion_tokens":10,"total_tokens":40,"completion_tokens_details":{"reasoning_tokens":20}}`, 30},
+		{"no total", `{"prompt_tokens":10,"completion_tokens":30,"completion_tokens_details":{"reasoning_tokens":20}}`, 30},
+	} {
+		resp, err := compattest.Chat(t, plain, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":`+tc.body+`}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Usage.OutputTokens != tc.output || resp.Usage.ReasoningTokens != 20 {
+			t.Errorf("%s: usage = %+v, want %d output tokens", tc.name, resp.Usage, tc.output)
+		}
+	}
+}

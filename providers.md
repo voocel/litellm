@@ -145,6 +145,9 @@ text blocks mark those parts. Unmarked results remain strings.
 included. A count the vendor does not report is zero, and `catalog.Pricing.Cost`
 prices the input outside the cache counts at the input rate, so a vendor that
 reports no cache counts, such as MiniMax, is priced as uncached input.
+`Usage.OutputTokens` includes reasoning. xAI counts reasoning apart from
+`completion_tokens`, as its `total_tokens` shows; the Chat Completions adapter
+adds it whenever the total says so.
 
 | Provider | Cache reads | Cache writes |
 | --- | --- | --- |

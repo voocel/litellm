@@ -10,6 +10,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -18,7 +19,9 @@ import (
 	"maps"
 	"math"
 	"net/http"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,16 +46,42 @@ type Model struct {
 	Pricing *Pricing `json:"pricing,omitempty"`
 }
 
-// Pricing holds per-token rates; LiteLLM's list is in USD. A nil cache rate
-// inherits the input rate; a non-nil zero means free cache usage. Writes
-// cached for an hour are priced at CacheWrite1hCostPerToken alone, since
-// vendors charge more for them.
+// Pricing holds a model's rates; LiteLLM's list is in USD. Vendors that
+// charge more for long inputs price every token of such a call at a tier's
+// rates.
 type Pricing struct {
+	Rates
+	// Tiers, in increasing order of AboveInputTokens, replace Rates for a
+	// call whose input tokens exceed AboveInputTokens: the last such tier.
+	Tiers []Tier `json:"tiers,omitempty"`
+}
+
+// Rates are per-token rates. A nil cache rate inherits the input rate; a
+// non-nil zero means free cache usage. Writes cached for an hour are priced
+// at CacheWrite1hCostPerToken alone, since vendors charge more for them.
+type Rates struct {
 	InputCostPerToken        float64  `json:"input_cost_per_token"`
 	OutputCostPerToken       float64  `json:"output_cost_per_token"`
 	CacheReadCostPerToken    *float64 `json:"cache_read_input_token_cost,omitempty"`
 	CacheWriteCostPerToken   *float64 `json:"cache_creation_input_token_cost,omitempty"`
 	CacheWrite1hCostPerToken *float64 `json:"cache_creation_input_token_cost_above_1hr,omitempty"`
+}
+
+// rateNames are the list keys of Rates; a tier's keys add a suffix, as in
+// input_cost_per_token_above_200k_tokens.
+var rateNames = []string{
+	"input_cost_per_token",
+	"output_cost_per_token",
+	"cache_read_input_token_cost",
+	"cache_creation_input_token_cost",
+	"cache_creation_input_token_cost_above_1hr",
+}
+
+// Tier holds the rates of calls with more than AboveInputTokens input
+// tokens.
+type Tier struct {
+	AboveInputTokens int `json:"above_input_tokens"`
+	Rates
 }
 
 // Cost is a cost breakdown in the currency of the rates.
@@ -132,7 +161,11 @@ func (c *Catalog) LoadFromURL(ctx context.Context, url string) error {
 
 // LoadFromReader replaces the table with the chat and responses models of a
 // model list in LiteLLM's format. A model is priced when it has both input and
-// output rates. Invalid models fail the load without changing the table.
+// output rates. Its long-input rates, keys such as
+// input_cost_per_token_above_200k_tokens or a tiered_pricing table, become
+// Tiers; a rate a tier lacks is the model's, or in a tiered_pricing table the
+// tier's input rate, as LiteLLM prices them. Invalid models fail the load
+// without changing the table.
 func (c *Catalog) LoadFromReader(reader io.Reader) error {
 	models, err := parse(reader)
 	if err != nil {
@@ -154,18 +187,7 @@ func parse(reader io.Reader) (map[string]Model, error) {
 		if name == "sample_spec" { // documents the format with placeholder values
 			continue
 		}
-		var entry struct {
-			Mode            string   `json:"mode"`
-			Provider        string   `json:"litellm_provider"`
-			MaxInputTokens  int      `json:"max_input_tokens"`
-			MaxOutputTokens int      `json:"max_output_tokens"`
-			Reasoning       *bool    `json:"supports_reasoning"`
-			Input           *float64 `json:"input_cost_per_token"`
-			Output          *float64 `json:"output_cost_per_token"`
-			CacheRead       *float64 `json:"cache_read_input_token_cost"`
-			CacheWrite      *float64 `json:"cache_creation_input_token_cost"`
-			CacheWrite1h    *float64 `json:"cache_creation_input_token_cost_above_1hr"`
-		}
+		var entry listEntry
 		if err := json.Unmarshal(data, &entry); err != nil {
 			return nil, fmt.Errorf("catalog: decode model %q: %w", name, err)
 		}
@@ -178,14 +200,14 @@ func parse(reader io.Reader) (map[string]Model, error) {
 			MaxOutputTokens: entry.MaxOutputTokens,
 			Reasoning:       entry.Reasoning,
 		}
-		if entry.Input != nil && entry.Output != nil {
-			model.Pricing = &Pricing{
-				InputCostPerToken:        *entry.Input,
-				OutputCostPerToken:       *entry.Output,
-				CacheReadCostPerToken:    entry.CacheRead,
-				CacheWriteCostPerToken:   entry.CacheWrite,
-				CacheWrite1hCostPerToken: entry.CacheWrite1h,
-			}
+		var err error
+		if len(entry.Tiered) > 0 {
+			model.Pricing = entry.tieredPricing()
+		} else if entry.Input != nil && entry.Output != nil {
+			model.Pricing, err = flatPricing(data)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("catalog: decode model %q: %w", name, err)
 		}
 		if err := model.validate(name); err != nil {
 			return nil, err
@@ -195,11 +217,100 @@ func parse(reader io.Reader) (map[string]Model, error) {
 	return models, nil
 }
 
-// Cost prices usage. Cache reads and writes are priced at their rates and
-// the rest of the input at the input rate; a cache count the vendor did not
-// report is zero, its tokens priced as input. Usage without input tokens is
-// an error: every call has some, so the vendor reported none. So are writes
-// cached for an hour without their rate.
+type listEntry struct {
+	Mode            string     `json:"mode"`
+	Provider        string     `json:"litellm_provider"`
+	MaxInputTokens  int        `json:"max_input_tokens"`
+	MaxOutputTokens int        `json:"max_output_tokens"`
+	Reasoning       *bool      `json:"supports_reasoning"`
+	Input           *float64   `json:"input_cost_per_token"`
+	Output          *float64   `json:"output_cost_per_token"`
+	Tiered          []listTier `json:"tiered_pricing"`
+}
+
+// listTier prices calls whose input tokens are beyond Range's start and up
+// to its end.
+type listTier struct {
+	Range      []float64 `json:"range"`
+	Input      *float64  `json:"input_cost_per_token"`
+	Output     *float64  `json:"output_cost_per_token"`
+	CacheRead  *float64  `json:"cache_read_input_token_cost"`
+	CacheWrite *float64  `json:"cache_creation_input_token_cost"`
+}
+
+// flatPricing returns the rates of an entry and the tiers its keys with an
+// _above_<n>k_tokens suffix set, each starting from the entry's rates.
+func flatPricing(data json.RawMessage) (*Pricing, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	var pricing Pricing
+	if err := json.Unmarshal(data, &pricing.Rates); err != nil {
+		return nil, err
+	}
+	for key := range fields {
+		m := tierKey.FindStringSubmatch(key)
+		if m == nil {
+			continue
+		}
+		thousands, err := strconv.Atoi(m[1])
+		if err != nil {
+			return nil, err
+		}
+		suffix := strings.TrimPrefix(key, rateNames[0])
+		rates := make(map[string]json.RawMessage)
+		for _, name := range rateNames {
+			if raw, ok := fields[name+suffix]; ok {
+				rates[name] = raw
+			}
+		}
+		tier := Tier{AboveInputTokens: thousands * 1000, Rates: pricing.Rates.clone()}
+		sub, _ := json.Marshal(rates)
+		if err := json.Unmarshal(sub, &tier.Rates); err != nil {
+			return nil, err
+		}
+		pricing.Tiers = append(pricing.Tiers, tier)
+	}
+	slices.SortFunc(pricing.Tiers, func(a, b Tier) int { return cmp.Compare(a.AboveInputTokens, b.AboveInputTokens) })
+	return &pricing, nil
+}
+
+// tierKey is the input rate of a tier; rates for service tiers, batches
+// and the like have further suffixes.
+var tierKey = regexp.MustCompile(`^input_cost_per_token_above_(\d+)k_tokens$`)
+
+// tieredPricing returns the rates of a tiered_pricing table, whose lowest
+// range is the model's rates and each other one a tier beyond its start, or
+// nil when a tier lacks a range, an input or an output rate. A tier without
+// an output rate has the entry's.
+func (e listEntry) tieredPricing() *Pricing {
+	tiers := slices.Clone(e.Tiered)
+	for _, t := range tiers {
+		if len(t.Range) != 2 || t.Input == nil || cmp.Or(t.Output, e.Output) == nil {
+			return nil
+		}
+	}
+	slices.SortFunc(tiers, func(a, b listTier) int { return cmp.Compare(a.Range[0], b.Range[0]) })
+	var pricing Pricing
+	for i, t := range tiers {
+		output := cmp.Or(t.Output, e.Output)
+		rates := Rates{InputCostPerToken: *t.Input, OutputCostPerToken: *output, CacheReadCostPerToken: t.CacheRead, CacheWriteCostPerToken: t.CacheWrite}
+		if i == 0 {
+			pricing.Rates = rates
+		} else {
+			pricing.Tiers = append(pricing.Tiers, Tier{AboveInputTokens: int(t.Range[0]), Rates: rates})
+		}
+	}
+	return &pricing
+}
+
+// Cost prices usage at the rates of the last tier its input tokens are
+// above, or else at Rates. Cache reads and writes are priced at their rates
+// and the rest of the input at the input rate; a cache count the vendor did
+// not report is zero, its tokens priced as input. Usage without input tokens
+// is an error: every call has some, so the vendor reported none. So are
+// writes cached for an hour without their rate.
 func (p Pricing) Cost(usage litellm.Usage) (Cost, error) {
 	if err := p.validate(); err != nil {
 		return Cost{}, fmt.Errorf("catalog: %w", err)
@@ -211,22 +322,28 @@ func (p Pricing) Cost(usage litellm.Usage) (Cost, error) {
 	if in < 0 || out < 0 || cacheRead < 0 || cacheWrite1h < 0 || cacheWrite1h > cacheWrite || cacheRead+cacheWrite > in {
 		return Cost{}, fmt.Errorf("catalog: invalid token counts: cache reads and writes must fit within input tokens")
 	}
-	if cacheWrite1h > 0 && p.CacheWrite1hCostPerToken == nil {
+	r := p.Rates
+	for _, tier := range p.Tiers {
+		if in > tier.AboveInputTokens {
+			r = tier.Rates
+		}
+	}
+	if cacheWrite1h > 0 && r.CacheWrite1hCostPerToken == nil {
 		return Cost{}, fmt.Errorf("catalog: no rate for cache writes kept an hour")
 	}
-	cacheReadRate, cacheWriteRate := p.InputCostPerToken, p.InputCostPerToken
-	if p.CacheReadCostPerToken != nil {
-		cacheReadRate = *p.CacheReadCostPerToken
+	cacheReadRate, cacheWriteRate := r.InputCostPerToken, r.InputCostPerToken
+	if r.CacheReadCostPerToken != nil {
+		cacheReadRate = *r.CacheReadCostPerToken
 	}
-	if p.CacheWriteCostPerToken != nil {
-		cacheWriteRate = *p.CacheWriteCostPerToken
+	if r.CacheWriteCostPerToken != nil {
+		cacheWriteRate = *r.CacheWriteCostPerToken
 	}
-	inputCost := float64(in-cacheRead-cacheWrite) * p.InputCostPerToken
-	outputCost := float64(out) * p.OutputCostPerToken
+	inputCost := float64(in-cacheRead-cacheWrite) * r.InputCostPerToken
+	outputCost := float64(out) * r.OutputCostPerToken
 	cacheReadCost := float64(cacheRead) * cacheReadRate
 	cacheWriteCost := float64(cacheWrite-cacheWrite1h) * cacheWriteRate
 	if cacheWrite1h > 0 {
-		cacheWriteCost += float64(cacheWrite1h) * *p.CacheWrite1hCostPerToken
+		cacheWriteCost += float64(cacheWrite1h) * *r.CacheWrite1hCostPerToken
 	}
 	return Cost{
 		Input:      inputCost,
@@ -254,13 +371,28 @@ func (m Model) validate(name string) error {
 }
 
 func (p Pricing) validate() error {
+	if err := p.Rates.validate(); err != nil {
+		return err
+	}
+	for i, tier := range p.Tiers {
+		if tier.AboveInputTokens <= 0 || i > 0 && tier.AboveInputTokens <= p.Tiers[i-1].AboveInputTokens {
+			return fmt.Errorf("tiers must be above increasing, positive input token counts")
+		}
+		if err := tier.Rates.validate(); err != nil {
+			return fmt.Errorf("tier above %d input tokens: %w", tier.AboveInputTokens, err)
+		}
+	}
+	return nil
+}
+
+func (r Rates) validate() error {
 	for _, rate := range []struct {
 		name  string
 		value *float64
 	}{
-		{"input", &p.InputCostPerToken}, {"output", &p.OutputCostPerToken},
-		{"cache read", p.CacheReadCostPerToken}, {"cache write", p.CacheWriteCostPerToken},
-		{"hour-long cache write", p.CacheWrite1hCostPerToken},
+		{"input", &r.InputCostPerToken}, {"output", &r.OutputCostPerToken},
+		{"cache read", r.CacheReadCostPerToken}, {"cache write", r.CacheWriteCostPerToken},
+		{"hour-long cache write", r.CacheWrite1hCostPerToken},
 	} {
 		if rate.value != nil && (*rate.value < 0 || math.IsNaN(*rate.value) || math.IsInf(*rate.value, 0)) {
 			return fmt.Errorf("%s cost per token must be finite and non-negative", rate.name)
@@ -278,11 +410,20 @@ func (m Model) clone() Model {
 		return m
 	}
 	pricing := *m.Pricing
-	pricing.CacheReadCostPerToken = copyRate(pricing.CacheReadCostPerToken)
-	pricing.CacheWriteCostPerToken = copyRate(pricing.CacheWriteCostPerToken)
-	pricing.CacheWrite1hCostPerToken = copyRate(pricing.CacheWrite1hCostPerToken)
+	pricing.Rates = pricing.Rates.clone()
+	pricing.Tiers = slices.Clone(pricing.Tiers)
+	for i := range pricing.Tiers {
+		pricing.Tiers[i].Rates = pricing.Tiers[i].Rates.clone()
+	}
 	m.Pricing = &pricing
 	return m
+}
+
+func (r Rates) clone() Rates {
+	r.CacheReadCostPerToken = copyRate(r.CacheReadCostPerToken)
+	r.CacheWriteCostPerToken = copyRate(r.CacheWriteCostPerToken)
+	r.CacheWrite1hCostPerToken = copyRate(r.CacheWrite1hCostPerToken)
+	return r
 }
 
 func copyRate(rate *float64) *float64 {

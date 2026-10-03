@@ -111,14 +111,20 @@ func reasoningText(raw json.RawMessage) string {
 	return strings.Join(parts, "\n\n")
 }
 
+// convert maps usage. completion_tokens includes reasoning, except at xAI,
+// whose total shows it counted apart.
 func (u usage) convert() litellm.Usage {
-	return litellm.Usage{
+	out := litellm.Usage{
 		InputTokens:      u.PromptTokens,
 		OutputTokens:     u.CompletionTokens,
 		ReasoningTokens:  u.CompletionTokensDetails.ReasoningTokens,
 		CacheReadTokens:  cmp.Or(u.PromptTokensDetails.CachedTokens, u.PromptCacheHitTokens),
 		CacheWriteTokens: u.PromptTokensDetails.CacheWriteTokens,
 	}
+	if out.ReasoningTokens > 0 && u.TotalTokens == u.PromptTokens+u.CompletionTokens+out.ReasoningTokens {
+		out.OutputTokens += out.ReasoningTokens
+	}
+	return out
 }
 
 // contentBlocks converts message content, a string or an array of parts. It

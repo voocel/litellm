@@ -348,7 +348,7 @@ observer := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
 
 ## Usage And Model Catalog
 
-Token counts are plain ints; a count the vendor does not report is zero. Input includes cache reads and writes; output includes reasoning; detail counts are subsets, such as `CacheWrite1hTokens`, the writes cached for an hour. `Pricing.Cost` prices the input not read from or written to the cache at the input rate, so a vendor that reports no cache counts is priced as uncached input. Hour-long writes are priced at `CacheWrite1hCostPerToken`, and are an error without it. So is usage without input tokens: every call has some, so the vendor reported none, and its cost is unknown rather than zero.
+Token counts are plain ints; a count the vendor does not report is zero. Input includes cache reads and writes; output includes reasoning; detail counts are subsets, such as `CacheWrite1hTokens`, the writes cached for an hour. `Pricing.Cost` prices the input not read from or written to the cache at the input rate, so a vendor that reports no cache counts is priced as uncached input. Hour-long writes are priced at `CacheWrite1hCostPerToken`, and are an error without it. So is usage without input tokens: every call has some, so the vendor reported none, and its cost is unknown rather than zero. Vendors that charge more for long inputs price every token of such a call higher: `Pricing.Tiers`, loaded from the list's `*_above_<n>k_tokens` keys and `tiered_pricing` tables, hold those rates, and `Cost` uses the last tier the input tokens are above.
 
 The catalog holds model facts (context window, output limit, reasoning support and prices) from LiteLLM's model list, and never loads remote data implicitly:
 
@@ -364,7 +364,7 @@ if err := models.LoadFromURL(ctx, catalog.DefaultURL); err != nil {
 	return err
 }
 
-model, ok := models.Get("anthropic/claude-sonnet-4-5") // exact model-list key
+model, ok := models.Get("claude-sonnet-4-5") // exact model-list key
 if !ok {
 	return fmt.Errorf("model not found in catalog")
 }

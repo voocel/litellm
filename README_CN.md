@@ -348,7 +348,7 @@ observer := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
 
 ## 用量与模型目录
 
-Token 计数为普通 int，厂商未报告的计数为零。输入含缓存读写，输出含推理，明细计数是子集，例如 `CacheWrite1hTokens` 是缓存一小时的写入。`Pricing.Cost` 把未读写缓存的输入按输入价计费，因此不报告缓存计数的厂商按未缓存输入计价。一小时写入按 `CacheWrite1hCostPerToken` 计价，缺少该费率时报错。没有输入 token 的用量同样报错：每次调用都有输入，没有就说明厂商没报告，费用是未知而不是零。
+Token 计数为普通 int，厂商未报告的计数为零。输入含缓存读写，输出含推理，明细计数是子集，例如 `CacheWrite1hTokens` 是缓存一小时的写入。`Pricing.Cost` 把未读写缓存的输入按输入价计费，因此不报告缓存计数的厂商按未缓存输入计价。一小时写入按 `CacheWrite1hCostPerToken` 计价，缺少该费率时报错。没有输入 token 的用量同样报错：每次调用都有输入，没有就说明厂商没报告，费用是未知而不是零。对长输入加价的厂商，会把这类调用的全部 token 按更高费率计费：`Pricing.Tiers` 保存这些费率（从模型列表的 `*_above_<n>k_tokens` 键和 `tiered_pricing` 表加载），`Cost` 采用输入 token 数超过的最后一档。
 
 模型目录来自 LiteLLM 的模型表，包含上下文窗口、输出上限、是否支持推理和价格，从不隐式加载远程数据：
 
@@ -364,7 +364,7 @@ if err := models.LoadFromURL(ctx, catalog.DefaultURL); err != nil {
 	return err
 }
 
-model, ok := models.Get("anthropic/claude-sonnet-4-5") // 精确匹配模型表的键
+model, ok := models.Get("claude-sonnet-4-5") // 精确匹配模型表的键
 if !ok {
 	return fmt.Errorf("模型未收录")
 }
