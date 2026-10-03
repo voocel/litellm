@@ -148,6 +148,20 @@ type wireError struct {
 	RetryAfterMS int64             `json:"retry_after_ms,omitempty"`
 }
 
+// isErrorType reports whether t is a litellm.ErrorType, the type of every
+// error a Server sends, unlike the error bodies of proxies in front of it.
+func isErrorType(t litellm.ErrorType) bool {
+	switch t {
+	case litellm.ErrorTypeAuth, litellm.ErrorTypeRateLimit, litellm.ErrorTypeNetwork,
+		litellm.ErrorTypeValidation, litellm.ErrorTypeProvider, litellm.ErrorTypeTimeout,
+		litellm.ErrorTypeQuota, litellm.ErrorTypeModel, litellm.ErrorTypeInternal,
+		litellm.ErrorTypeContextOverflow, litellm.ErrorTypeOverloaded,
+		litellm.ErrorTypeContentFilter, litellm.ErrorTypeCanceled:
+		return true
+	}
+	return false
+}
+
 // heartbeat is the type of the line the Server sends while the upstream is
 // silent; the Provider skips it.
 const heartbeat = "heartbeat"

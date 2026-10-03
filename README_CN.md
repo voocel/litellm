@@ -301,7 +301,7 @@ case litellm.ErrorTypeCanceled:
 }
 ```
 
-`IsTemporaryError` 判断重新请求可能成功的失败：限流、过载、网络故障、在结束前中断的流，以及服务端故障（无论是 HTTP 5xx 还是流内报告）。消息格式为 `provider: code: message`。即使代理把状态码改写，上下文超限与内容过滤仍按厂商错误码和消息识别，且永不标记为临时错误。
+`IsTemporaryError` 判断重新请求可能成功的失败：限流、过载、网络故障、在结束前中断的流，以及服务端故障（无论是 HTTP 5xx 还是流内报告）。类型由 HTTP 状态码决定，厂商错误码填入 `Code`；消息格式为 `provider: code: message`。即使代理把状态码改写，上下文超限、内容过滤与额度耗尽仍按厂商错误码和消息识别，且永不标记为临时错误。`ErrorTypeTimeout` 只表示调用方自己的期限（context 的 deadline 或 HTTP 客户端的超时）；服务端超时是临时的 provider 错误。
 
 ## 重试
 
@@ -317,7 +317,7 @@ provider, err := openai.New(openai.Config{
 ```
 
 - 重试：完整的 408、429、500、502、503、504、529 响应，响应体表明额度耗尽、鉴权失败、内容过滤或上下文超限的除外。
-- 不重试（原样返回响应或错误）：网络失败、中断的流、请求体无法重发的请求；开启 `RespectRetryAfter`（`DefaultPolicy` 默认开启）时，`Retry-After` 超过 `MaxRetryAfter`（默认 60 秒）的响应。
+- 不重试（原样返回响应或错误）：网络失败、中断的流、请求体无法重发的请求，以及 `Retry-After` 超过 `MaxRetryAfter`（默认 60 秒）的响应。
 - Bedrock：重试沿用已签名的 SigV4 请求，签名五分钟内有效。
 
 ## Observer 与 OTel

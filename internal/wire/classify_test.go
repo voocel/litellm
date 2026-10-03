@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/voocel/litellm"
@@ -67,6 +68,60 @@ func TestHTTPErrorTemporary(t *testing.T) {
 	}
 }
 
+func TestHTTPErrorStatus(t *testing.T) {
+	for _, tc := range []struct {
+		status    int
+		want      litellm.ErrorType
+		temporary bool
+	}{
+		{401, litellm.ErrorTypeAuth, false},
+		{402, litellm.ErrorTypeQuota, false},
+		{404, litellm.ErrorTypeModel, false},
+		{408, litellm.ErrorTypeProvider, true},
+		{413, litellm.ErrorTypeValidation, false},
+		{422, litellm.ErrorTypeValidation, false},
+		{503, litellm.ErrorTypeOverloaded, true},
+		{504, litellm.ErrorTypeProvider, true},
+		{529, litellm.ErrorTypeOverloaded, true},
+	} {
+		if err := HTTPError("test", tc.status, nil, ""); err.Type != tc.want || err.Temporary != tc.temporary {
+			t.Errorf("%d: type = %q, temporary = %v; want %q, %v", tc.status, err.Type, err.Temporary, tc.want, tc.temporary)
+		}
+	}
+}
+
+// The code names the failure; the status still decides its type, since
+// OpenAI sends invalid_request_error with 401s and 404s too.
+func TestHTTPErrorCode(t *testing.T) {
+	aws := func(name string) http.Header { return http.Header{"X-Amzn-Errortype": {name}} }
+	for _, tc := range []struct {
+		name   string
+		status int
+		header http.Header
+		body   string
+		want   string
+		typ    litellm.ErrorType
+	}{
+		{"anthropic", 529, nil, `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_1"}`,
+			"test: overloaded_error: Overloaded (HTTP 529)", litellm.ErrorTypeOverloaded},
+		{"openai without a key", 401, nil, `{"error":{"message":"You didn't provide an API key.","type":"invalid_request_error","param":null,"code":null}}`,
+			"test: invalid_request_error: You didn't provide an API key. (HTTP 401)", litellm.ErrorTypeAuth},
+		{"bedrock", 403, aws("AccessDeniedException:http://internal.amazon.com/coral/com.amazon.bedrock/"), `{"Message":"Not authorized"}`,
+			"test: AccessDeniedException: Not authorized (HTTP 403)", litellm.ErrorTypeAuth},
+		{"bedrock quota", 400, aws("aws.bedrock#ServiceQuotaExceededException"), `{"message":"Too many tokens per day"}`,
+			"test: ServiceQuotaExceededException: Too many tokens per day (HTTP 400)", litellm.ErrorTypeQuota},
+		{"top-level code", 401, nil, `{"code":"InvalidApiKey","message":"Invalid API-key provided."}`,
+			"test: InvalidApiKey: Invalid API-key provided. (HTTP 401)", litellm.ErrorTypeAuth},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := HTTPError("test", tc.status, tc.header, tc.body)
+			if err.Error() != tc.want || err.Type != tc.typ {
+				t.Fatalf("got %q (%s), want %q (%s)", err.Error(), err.Type, tc.want, tc.typ)
+			}
+		})
+	}
+}
+
 func TestHTTPErrorClassifiesVendorRejections(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -124,6 +179,13 @@ func TestStreamErrorClassifiesVendorCodes(t *testing.T) {
 		{"server_error", "The server had an error", litellm.ErrorTypeProvider, true},
 		{"internalServerException", "Internal failure", litellm.ErrorTypeProvider, true},
 		{"modelStreamErrorException", "Model stream failed", litellm.ErrorTypeProvider, true},
+		{"timeout_error", "Request timeout", litellm.ErrorTypeProvider, true},
+		// Anthropic types stand in for the status they are sent with.
+		{"authentication_error", "invalid x-api-key", litellm.ErrorTypeAuth, false},
+		{"permission_error", "not allowed", litellm.ErrorTypeAuth, false},
+		{"billing_error", "credit balance too low", litellm.ErrorTypeQuota, false},
+		{"not_found_error", "model: nope", litellm.ErrorTypeModel, false},
+		{"request_too_large", "Request exceeds the maximum size", litellm.ErrorTypeValidation, false},
 	} {
 		err := StreamError("test", tc.code, tc.message)
 		if err.Type != tc.want || err.Temporary != tc.temporary || err.Code != tc.code {

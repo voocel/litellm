@@ -291,13 +291,11 @@ type recorder struct {
 
 // liveHTTP retries the temporary errors vendors shed load with.
 var liveHTTP = retry.NewHTTPClient(nil, &retry.Policy{
-	MaxAttempts:       5,
-	InitialDelay:      2 * time.Second,
-	MaxDelay:          20 * time.Second,
-	Multiplier:        2,
-	Jitter:            true,
-	RespectRetryAfter: true,
-	MaxRetryAfter:     time.Minute,
+	MaxAttempts:   5,
+	InitialDelay:  2 * time.Second,
+	MaxDelay:      20 * time.Second,
+	Multiplier:    2,
+	MaxRetryAfter: time.Minute,
 })
 
 func (r *recorder) Do(req *http.Request) (*http.Response, error) {

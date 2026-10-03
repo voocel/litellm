@@ -189,7 +189,7 @@ A tool reference sent as text reads `Tool <name> is now available.`; the tool mu
 
 ## Stream Endings
 
-A stream that ends before the vendor's terminal event (`message_stop`, a finish reason, `response.completed`, Bedrock `metadata`) returns `io.EOF` from the adapter, which the Client reports as a temporary network error: a fresh request may complete. A server fault reported inside a stream (`api_error`, `server_error`, `internalServerException`, `modelStreamErrorException`) is temporary, as its HTTP 5xx would be.
+A stream that ends before the vendor's terminal event (`message_stop`, a finish reason, `response.completed`, Bedrock `metadata`) returns `io.EOF` from the adapter, which the Client and `Collect` report as a temporary network error: a fresh request may complete. A server fault reported inside a stream (`api_error`, `timeout_error`, `server_error`, `internalServerException`, `modelStreamErrorException`) is temporary, as its HTTP 5xx would be; other in-stream codes, such as Anthropic's error types, are typed as their HTTP status would be.
 
 ## Provider Options
 

@@ -45,6 +45,7 @@ func TestTemporaryErrorClassification(t *testing.T) {
 		{"network_outcome_unknown", NewNetworkError("test", "read failed", errors.New("EOF")), true},
 		{"caller_canceled", NewNetworkError("test", "canceled", context.Canceled), false},
 		{"caller_deadline", NewNetworkError("test", "deadline", context.DeadlineExceeded), false},
+		{"timeout", NewError("test", ErrorTypeTimeout, "deadline", nil), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := IsTemporaryError(fmt.Errorf("call: %w", tc.err)); got != tc.temporary {

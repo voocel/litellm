@@ -121,7 +121,7 @@ func TestTransportWaitsAsGoogleBodySuggests(t *testing.T) {
 				return response(http.StatusOK, "ok"), nil
 			}
 			return google(tc.delay), nil
-		}), &Policy{MaxAttempts: 2, InitialDelay: time.Hour, MaxDelay: time.Hour, RespectRetryAfter: true})
+		}), &Policy{MaxAttempts: 2, InitialDelay: time.Hour, MaxDelay: time.Hour})
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://example.test", nil)
 		resp, err := transport.RoundTrip(req)
@@ -140,7 +140,7 @@ func TestTransportRetryAfterRespectsContext(t *testing.T) {
 		resp := response(http.StatusTooManyRequests, "slow down")
 		resp.Header.Set("Retry-After", "30")
 		return resp, nil
-	}), &Policy{MaxAttempts: 2, InitialDelay: time.Hour, RespectRetryAfter: true})
+	}), &Policy{MaxAttempts: 2, InitialDelay: time.Hour})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()

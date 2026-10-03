@@ -25,7 +25,7 @@ type Config struct {
 	Region string
 	// BaseURL overrides the bedrock-runtime endpoint.
 	BaseURL string
-	// Credentials is required and resolved for every request.
+	// Credentials is required and resolved for every call.
 	Credentials CredentialsProvider
 	HTTPClient  litellm.HTTPClient
 }
@@ -80,7 +80,7 @@ func New(cfg Config) (*Provider, error) {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = fmt.Sprintf("https://bedrock-runtime.%s.amazonaws.com", cfg.Region)
 	}
-	cfg.HTTPClient = &http.Client{Transport: newSigningTransport(cfg.Credentials, cfg.Region, clientTransport{client: wire.HTTPClient(cfg.HTTPClient)})}
+	cfg.HTTPClient = wire.HTTPClient(cfg.HTTPClient)
 	return &Provider{cfg: cfg}, nil
 }
 
@@ -138,15 +138,15 @@ func (p *Provider) post(ctx context.Context, req *litellm.Request, operation str
 		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeInternal, "create request", err)
 	}
 	httpReq.URL.RawPath = rawPath
+	credentials, err := p.cfg.Credentials.Credentials(ctx)
+	if err != nil {
+		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeAuth, fmt.Errorf("resolve credentials: %w", err))
+	}
+	if credentials.AccessKeyID == "" || credentials.SecretAccessKey == "" {
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeAuth, "credentials need an access key id and a secret access key", nil)
+	}
+	signRequest(httpReq, body, credentials, p.cfg.Region)
 	return wire.Do(p.cfg.HTTPClient, httpReq, p.Name(), "request")
-}
-
-type clientTransport struct {
-	client litellm.HTTPClient
-}
-
-func (t clientTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	return t.client.Do(req)
 }
 
 func runtimeEndpoint(baseURL, model, operation string) (string, string, error) {

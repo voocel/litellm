@@ -301,7 +301,7 @@ case litellm.ErrorTypeCanceled:
 }
 ```
 
-`IsTemporaryError` reports a failure that a fresh request may avoid: rate limits, overload, network failures, a stream cut off before its end, and server faults, whether an HTTP 5xx or reported inside a stream. Messages render as `provider: code: message`. Context overflow and content filtering are detected from vendor codes and messages even when a proxy rewrites the status; they are never marked temporary.
+`IsTemporaryError` reports a failure that a fresh request may avoid: rate limits, overload, network failures, a stream cut off before its end, and server faults, whether an HTTP 5xx or reported inside a stream. The HTTP status decides the type and the vendor's error code fills `Code`; messages render as `provider: code: message`. Context overflow, content filtering and exhausted quota are detected from vendor codes and messages even when a proxy rewrites the status; they are never marked temporary. `ErrorTypeTimeout` is the caller's own deadline, the context's or the HTTP client's; a server that timed out is a temporary provider error.
 
 ## Retry
 
@@ -317,7 +317,7 @@ provider, err := openai.New(openai.Config{
 ```
 
 - Retried: complete 408, 429, 500, 502, 503, 504 and 529 responses, unless the body shows exhausted quota, an auth failure, content filtering or context overflow.
-- Not retried, returning the original response or error: network failures, interrupted streams, requests whose body cannot be resent, and, with `RespectRetryAfter` (on in `DefaultPolicy`), a `Retry-After` beyond `MaxRetryAfter` (60s by default).
+- Not retried, returning the original response or error: network failures, interrupted streams, requests whose body cannot be resent, and a `Retry-After` beyond `MaxRetryAfter` (60s by default).
 - Bedrock: the retried request reuses its SigV4 signature, which stays valid for five minutes.
 
 ## Observers And OTel

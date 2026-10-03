@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -94,40 +95,50 @@ func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.St
 		defer resp.Body.Close()
 		return nil, refused(p.Name(), resp)
 	}
-	return &stream{name: p.Name(), body: resp.Body, dec: json.NewDecoder(resp.Body)}, nil
+	return &stream{name: p.Name(), body: resp.Body, lines: bufio.NewReader(resp.Body)}, nil
 }
 
 // refused is the error of a call the Server, or something in front of it,
-// refused. The Server explains itself in the body; anything else is judged
-// as any vendor's reply would be.
+// refused. The Server explains itself in the body with an error of a
+// litellm.ErrorType; anything else is judged as any vendor's reply would be.
 func refused(name string, resp *http.Response) error {
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, wire.MaxErrorBody))
 	var body errorBody
-	if json.Unmarshal(data, &body) == nil && body.Error != nil && body.Error.Type != "" {
+	if json.Unmarshal(data, &body) == nil && body.Error != nil && isErrorType(body.Error.Type) {
 		return body.Error.toError()
 	}
 	return wire.HTTPError(name, resp.StatusCode, resp.Header, string(data))
 }
 
 type stream struct {
-	name string
-	body io.ReadCloser
-	dec  *json.Decoder
-	done bool
+	name  string
+	body  io.ReadCloser
+	lines *bufio.Reader
+	done  bool
 }
 
+// Next returns the event of the next line. A read that fails is a network
+// error and a line that is not an event a bad reply. A reply that ends
+// before done, within a line or not, is cut short, as Collect reports it.
 func (s *stream) Next() (litellm.Event, error) {
 	if s.done {
 		return nil, io.EOF
 	}
 	var e event
 	for {
-		if err := s.dec.Decode(&e); err != nil {
+		line, err := s.lines.ReadBytes('\n')
+		if errors.Is(err, io.EOF) {
 			s.done = true
-			if errors.Is(err, io.EOF) {
-				return nil, io.EOF
-			}
+			return nil, io.EOF
+		}
+		if err != nil {
+			s.done = true
 			return nil, litellm.NewNetworkError(s.name, "read reply", err)
+		}
+		e = event{}
+		if err := json.Unmarshal(line, &e); err != nil {
+			s.done = true
+			return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "bad reply: "+err.Error(), nil)
 		}
 		if e.Type != heartbeat {
 			break

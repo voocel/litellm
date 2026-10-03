@@ -13,11 +13,14 @@ import (
 type ErrorType string
 
 const (
-	ErrorTypeAuth            ErrorType = "auth"
-	ErrorTypeRateLimit       ErrorType = "rate_limit"
-	ErrorTypeNetwork         ErrorType = "network"
-	ErrorTypeValidation      ErrorType = "validation"
-	ErrorTypeProvider        ErrorType = "provider"
+	ErrorTypeAuth       ErrorType = "auth"
+	ErrorTypeRateLimit  ErrorType = "rate_limit"
+	ErrorTypeNetwork    ErrorType = "network"
+	ErrorTypeValidation ErrorType = "validation"
+	ErrorTypeProvider   ErrorType = "provider"
+	// ErrorTypeTimeout is a call that ran out the time its caller gave it:
+	// the context's deadline or the HTTP client's timeout. A server that
+	// timed out is ErrorTypeProvider.
 	ErrorTypeTimeout         ErrorType = "timeout"
 	ErrorTypeQuota           ErrorType = "quota"
 	ErrorTypeModel           ErrorType = "model"
@@ -171,7 +174,7 @@ func isContextError(err error) bool {
 
 func isTemporaryByType(errorType ErrorType) bool {
 	switch errorType {
-	case ErrorTypeNetwork, ErrorTypeTimeout, ErrorTypeRateLimit, ErrorTypeOverloaded:
+	case ErrorTypeNetwork, ErrorTypeRateLimit, ErrorTypeOverloaded:
 		return true
 	default:
 		return false

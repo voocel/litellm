@@ -207,6 +207,8 @@ func validateImageUTF8(messageIndex int, block ImageBlock) error {
 	return nil
 }
 
+// validateResponse checks a reply: a tool call the vendor left without an id
+// or a name is a provider error.
 func validateResponse(resp *Response, provider, model string) error {
 	if resp == nil {
 		return NewError(provider, ErrorTypeInternal, "provider returned nil response without error", nil)
@@ -228,10 +230,10 @@ func validateResponse(resp *Response, provider, model string) error {
 	for _, block := range resp.Blocks {
 		if tool, ok := block.(ToolUseBlock); ok {
 			if tool.ID == "" {
-				return NewError(resolvedProvider, ErrorTypeValidation, "tool use missing id", nil)
+				return NewError(resolvedProvider, ErrorTypeProvider, "tool use missing id", nil)
 			}
 			if tool.Name == "" {
-				return NewError(resolvedProvider, ErrorTypeValidation, fmt.Sprintf("tool use %q missing name", tool.ID), nil)
+				return NewError(resolvedProvider, ErrorTypeProvider, fmt.Sprintf("tool use %q missing name", tool.ID), nil)
 			}
 		}
 	}

@@ -1,90 +1,18 @@
 package bedrock
 
 import (
-	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 )
 
-type signingTransport struct {
-	credentials CredentialsProvider
-	region      string
-	base        http.RoundTripper
-}
-
-// newSigningTransport signs each request with SigV4 for region before base
-// sends it.
-func newSigningTransport(credentials CredentialsProvider, region string, base http.RoundTripper) http.RoundTripper {
-	return &signingTransport{credentials: credentials, region: region, base: base}
-}
-
-func (t *signingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if t.credentials == nil {
-		return nil, fmt.Errorf("credentials provider is required")
-	}
-	payload, signedReq, err := replayableRequest(req)
-	if err != nil {
-		return nil, err
-	}
-	credentials, err := t.credentials.Credentials(req.Context())
-	if err != nil {
-		return nil, fmt.Errorf("resolve credentials: %w", err)
-	}
-	if credentials.AccessKeyID == "" {
-		return nil, fmt.Errorf("access key id is required")
-	}
-	if credentials.SecretAccessKey == "" {
-		return nil, fmt.Errorf("secret access key is required")
-	}
-	if err := signRequest(signedReq, payload, credentials, t.region); err != nil {
-		return nil, fmt.Errorf("sign request: %w", err)
-	}
-	return t.base.RoundTrip(signedReq)
-}
-
-func replayableRequest(req *http.Request) ([]byte, *http.Request, error) {
-	clone := req.Clone(req.Context())
-	if req.Body == nil {
-		return nil, clone, nil
-	}
-	defer req.Body.Close()
-	if req.GetBody != nil {
-		body, err := req.GetBody()
-		if err != nil {
-			return nil, nil, err
-		}
-		defer body.Close()
-		payload, err := io.ReadAll(body)
-		if err != nil {
-			return nil, nil, err
-		}
-		clone.Body = io.NopCloser(bytes.NewReader(payload))
-		clone.GetBody = func() (io.ReadCloser, error) {
-			return io.NopCloser(bytes.NewReader(payload)), nil
-		}
-		clone.ContentLength = int64(len(payload))
-		return payload, clone, nil
-	}
-	payload, err := io.ReadAll(req.Body)
-	if err != nil {
-		return nil, nil, err
-	}
-	clone.Body = io.NopCloser(bytes.NewReader(payload))
-	clone.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(payload)), nil
-	}
-	clone.ContentLength = int64(len(payload))
-	return payload, clone, nil
-}
-
-func signRequest(req *http.Request, payload []byte, credentials Credentials, region string) error {
+// signRequest signs req, whose body is payload, with SigV4 for region.
+func signRequest(req *http.Request, payload []byte, credentials Credentials, region string) {
 	now := time.Now().UTC()
 	amzDate := now.Format("20060102T150405Z")
 	dateStamp := now.Format("20060102")
@@ -145,7 +73,6 @@ func signRequest(req *http.Request, payload []byte, credentials Credentials, reg
 	signature := hmacSHA256Hex(signingKey, []byte(stringToSign))
 	req.Header.Set("Authorization", fmt.Sprintf("%s Credential=%s/%s, SignedHeaders=%s, Signature=%s",
 		algorithm, credentials.AccessKeyID, credentialScope, signedHeadersString, signature))
-	return nil
 }
 func sha256Hex(data []byte) string {
 	hash := sha256.Sum256(data)

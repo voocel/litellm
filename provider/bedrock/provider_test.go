@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"hash/crc32"
 	"io"
 	"net/http"
@@ -145,4 +146,65 @@ func eventStream(frames ...eventFrame) io.ReadCloser {
 		out.Write(msg)
 	}
 	return io.NopCloser(&out)
+}
+
+func TestCredentialsResolvedPerCall(t *testing.T) {
+	credentials := &countingCredentials{credentials: Credentials{AccessKeyID: "AKID", SecretAccessKey: "SECRET"}}
+	var signed int
+	client := doerFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.Contains(req.Header.Get("Authorization"), "AWS4-HMAC-SHA256 Credential=AKID/") {
+			signed++
+		}
+		return jsonResponse(http.StatusOK, `{"output":{"message":{"role":"assistant","content":[{"text":"ok"}]}},"stopReason":"end_turn"}`), nil
+	})
+	p, err := New(Config{Credentials: credentials, HTTPClient: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := p.Chat(context.Background(), &litellm.Request{Model: "m", Messages: []litellm.Message{litellm.UserText("hi")}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if signed != 2 || credentials.calls != 2 {
+		t.Fatalf("signed = %d, credential calls = %d, want 2 each", signed, credentials.calls)
+	}
+}
+
+// Credentials that cannot sign fail the call as an auth error, which no
+// retry clears, without sending it.
+func TestCredentialsThatCannotSign(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		credentials CredentialsProvider
+	}{
+		{"resolving fails", &countingCredentials{err: errors.New("no profile")}},
+		{"no secret", StaticCredentials("AKID", "", "")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := doerFunc(func(*http.Request) (*http.Response, error) {
+				t.Fatal("request sent")
+				return nil, nil
+			})
+			p, err := New(Config{Credentials: tc.credentials, HTTPClient: client})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = p.Chat(context.Background(), &litellm.Request{Model: "m", Messages: []litellm.Message{litellm.UserText("hi")}})
+			if litellm.ErrorTypeOf(err) != litellm.ErrorTypeAuth || litellm.IsTemporaryError(err) {
+				t.Fatalf("err = %v (%s), want a lasting auth error", err, litellm.ErrorTypeOf(err))
+			}
+		})
+	}
+}
+
+type countingCredentials struct {
+	credentials Credentials
+	err         error
+	calls       int
+}
+
+func (c *countingCredentials) Credentials(context.Context) (Credentials, error) {
+	c.calls++
+	return c.credentials, c.err
 }

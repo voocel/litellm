@@ -187,6 +187,54 @@ func TestRefusals(t *testing.T) {
 	if litellm.ErrorTypeOf(err) != litellm.ErrorTypeRateLimit || litellm.RetryAfter(err) != 7*time.Second {
 		t.Fatalf("429 in front = %v", err)
 	}
+
+	// An error body of another kind is a vendor's, typed by its status.
+	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"error":{"type":"invalid_request_error","message":"You didn't provide an API key."}}`)
+	}))
+	defer vendor.Close()
+	p, _ = gateway.New(gateway.Config{BaseURL: vendor.URL})
+	direct, _ = litellm.New(p)
+	_, err = direct.Chat(context.Background(), ask("smart"))
+	if litellm.ErrorTypeOf(err) != litellm.ErrorTypeAuth {
+		t.Fatalf("401 in front = %v (%s)", err, litellm.ErrorTypeOf(err))
+	}
+}
+
+// A reply that is not a stream of events is a provider error, which a retry
+// does not clear; one cut short is a network error, which it may.
+func TestBadReplies(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		body      string
+		errorType litellm.ErrorType
+	}{
+		{"web page", "<!DOCTYPE html>\n<html></html>\n", litellm.ErrorTypeProvider},
+		{"cut within a line", `{"type":"text_del`, litellm.ErrorTypeNetwork},
+		{"ends before done", `{"type":"heartbeat"}` + "\n", litellm.ErrorTypeNetwork},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+			p, _ := gateway.New(gateway.Config{BaseURL: srv.URL})
+			client, _ := litellm.New(p)
+			_, chatErr := client.Chat(t.Context(), ask("m"))
+			stream, err := client.Stream(t.Context(), ask("m"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stream.Close()
+			_, streamErr := litellm.Collect(stream)
+			for _, err := range []error{chatErr, streamErr} {
+				if litellm.ErrorTypeOf(err) != tc.errorType || litellm.IsTemporaryError(err) != (tc.errorType == litellm.ErrorTypeNetwork) {
+					t.Fatalf("err = %v (%s), want %s", err, litellm.ErrorTypeOf(err), tc.errorType)
+				}
+			}
+		})
+	}
 }
 
 // Cancelling a call cancels the vendor call it runs on.

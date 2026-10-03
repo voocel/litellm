@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"cmp"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -10,10 +11,13 @@ import (
 )
 
 // HTTPError classifies a non-2xx response from its status, headers and body.
-// header may be nil. RetryAfter is the Retry-After header's wait or, without
-// one, the retryDelay a Google API error body suggests, as Gemini sends.
+// header may be nil. The status decides the type unless a vendor code or
+// message identifies a failure it does not; the code names the failure in
+// the error. RetryAfter is the Retry-After header's wait or, without one, the
+// retryDelay a Google API error body suggests, as Gemini sends.
 func HTTPError(provider string, statusCode int, header http.Header, body string) *litellm.Error {
 	code, message := parseHTTPErrorMessage(body)
+	code = cmp.Or(awsErrorType(header.Get("X-Amzn-ErrorType")), code)
 	errorType := classifyHTTPError(statusCode)
 	if vendorType, ok := vendorErrorType(code, message); ok {
 		errorType = vendorType
@@ -53,51 +57,52 @@ func googleRetryDelay(body string) time.Duration {
 	return 0
 }
 
+// awsErrorType is the exception name in the error type header of an AWS
+// REST-JSON service, sent as "Name:url" or "namespace#Name".
+func awsErrorType(header string) string {
+	name, _, _ := strings.Cut(header, ":")
+	if _, after, ok := strings.Cut(name, "#"); ok {
+		name = after
+	}
+	return strings.TrimSpace(name)
+}
+
+// parseHTTPErrorMessage returns the code and message of an error body: its
+// error member, or the top-level code and message AWS and others send.
 func parseHTTPErrorMessage(body string) (string, string) {
 	body = strings.TrimSpace(body)
-	if body == "" {
-		return "", ""
-	}
-
-	var payload struct {
-		Error any `json:"error"`
-	}
-	if err := json.Unmarshal([]byte(body), &payload); err != nil || payload.Error == nil {
+	var payload map[string]any
+	if json.Unmarshal([]byte(body), &payload) != nil {
 		return "", body
 	}
 
-	switch e := payload.Error.(type) {
+	switch e := payload["error"].(type) {
 	case string:
 		return "", strings.TrimSpace(e)
 	case map[string]any:
-		code := stringField(e, "code")
-		msg := stringField(e, "message")
 		meta, _ := e["metadata"].(map[string]any)
-		if code == "" && meta != nil {
-			// OpenRouter uses a numeric code and names the failure here.
-			code = stringField(meta, "error_type")
-		}
+		// OpenRouter uses a numeric code and names the failure in metadata;
+		// Anthropic names it in type alone.
+		code := cmp.Or(stringField(e, "code"), stringField(meta, "error_type"), stringField(e, "type"))
+		msg := stringField(e, "message")
 		// Aggregator gateways (OpenRouter) wrap the upstream provider's real
 		// error under error.metadata: message is a generic "Provider returned
 		// error" while metadata.raw carries the actual reason (unsupported
 		// response_format, context overflow, ...). Dropping raw makes such
 		// failures undiagnosable, so surface it with the serving provider name.
-		if meta != nil {
-			if raw := stringField(meta, "raw"); raw != "" {
-				if pn := stringField(meta, "provider_name"); pn != "" {
-					raw = pn + ": " + raw
-				}
-				if msg == "" {
-					msg = raw
-				} else {
-					msg += " — " + raw
-				}
+		if raw := stringField(meta, "raw"); raw != "" {
+			if pn := stringField(meta, "provider_name"); pn != "" {
+				raw = pn + ": " + raw
+			}
+			if msg == "" {
+				msg = raw
+			} else {
+				msg += " — " + raw
 			}
 		}
-		if msg == "" {
-			msg = body
-		}
-		return code, msg
+		return code, cmp.Or(msg, body)
+	case nil:
+		return stringField(payload, "code"), cmp.Or(stringField(payload, "message"), stringField(payload, "Message"), body)
 	default:
 		return "", body
 	}
@@ -131,18 +136,26 @@ func StreamError(provider, code, message string) *litellm.Error {
 // response would report with a retryable 5xx status.
 var streamServerFaults = map[string]bool{
 	"api_error":                 true,
+	"timeout_error":             true,
 	"internalserverexception":   true,
 	"modelstreamerrorexception": true,
 	"server_error":              true,
 }
 
-// streamErrorTypes maps documented in-stream codes: Anthropic error types,
-// Bedrock ConverseStream exception names and OpenAI Responses error codes.
+// streamErrorTypes maps documented in-stream codes, which stand in for the
+// HTTP status: Anthropic error types, Bedrock ConverseStream exception names
+// and OpenAI Responses error codes.
 var streamErrorTypes = map[string]litellm.ErrorType{
-	"overloaded_error":            litellm.ErrorTypeOverloaded,
+	"invalid_request_error":       litellm.ErrorTypeValidation,
+	"authentication_error":        litellm.ErrorTypeAuth,
+	"permission_error":            litellm.ErrorTypeAuth,
+	"billing_error":               litellm.ErrorTypeQuota,
+	"not_found_error":             litellm.ErrorTypeModel,
+	"request_too_large":           litellm.ErrorTypeValidation,
 	"rate_limit_error":            litellm.ErrorTypeRateLimit,
 	"api_error":                   litellm.ErrorTypeProvider,
-	"invalid_request_error":       litellm.ErrorTypeValidation,
+	"timeout_error":               litellm.ErrorTypeProvider,
+	"overloaded_error":            litellm.ErrorTypeOverloaded,
 	"throttlingexception":         litellm.ErrorTypeRateLimit,
 	"validationexception":         litellm.ErrorTypeValidation,
 	"serviceunavailableexception": litellm.ErrorTypeOverloaded,
@@ -220,13 +233,15 @@ var contentFilterTokens = []string{
 	"content filtering policy",
 }
 
-// quotaTokens are OpenAI billing codes, sent with 429 but not cleared by
-// retrying: insufficient_quota and its specific successors.
+// quotaTokens are billing codes not cleared by retrying: OpenAI's, sent with
+// 429, insufficient_quota and its specific successors, and Bedrock's
+// ServiceQuotaExceededException, sent with 400.
 var quotaTokens = []string{
 	"insufficient_quota",
 	"credit_balance_exhausted",
 	"spend_limit_exceeded",
 	"usage_limit_exceeded",
+	"servicequotaexceededexception",
 }
 
 // authTokens are invalid-key rejections sent without 401/403: Gemini answers
@@ -245,24 +260,22 @@ func containsAny(haystack string, tokens []string) bool {
 	return false
 }
 
+// classifyHTTPError types a status. A server that timed out (408, 504) is a
+// provider failure; ErrorTypeTimeout is the caller's own deadline.
 func classifyHTTPError(statusCode int) litellm.ErrorType {
-	switch {
-	case statusCode == http.StatusUnauthorized, statusCode == http.StatusForbidden:
+	switch statusCode {
+	case http.StatusUnauthorized, http.StatusForbidden:
 		return litellm.ErrorTypeAuth
-	case statusCode == http.StatusTooManyRequests:
+	case http.StatusTooManyRequests:
 		return litellm.ErrorTypeRateLimit
-	case statusCode == http.StatusPaymentRequired:
+	case http.StatusPaymentRequired:
 		return litellm.ErrorTypeQuota
-	case statusCode == http.StatusNotFound:
+	case http.StatusNotFound:
 		return litellm.ErrorTypeModel
-	case statusCode == http.StatusRequestTimeout:
-		return litellm.ErrorTypeTimeout
-	case statusCode == http.StatusBadRequest:
+	case http.StatusBadRequest, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
 		return litellm.ErrorTypeValidation
-	case statusCode == 529:
+	case http.StatusServiceUnavailable, 529:
 		return litellm.ErrorTypeOverloaded
-	case statusCode >= 500:
-		return litellm.ErrorTypeProvider
 	default:
 		return litellm.ErrorTypeProvider
 	}

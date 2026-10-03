@@ -100,6 +100,7 @@ func TestCollectorRejectsLifecycleViolations(t *testing.T) {
 		{"done with open block", []Event{start, done}, "block 0 still open"},
 		{"unknown event", []Event{unknownEvent{}}, "unknown stream event"},
 		{"tool without id", []Event{BlockStart{Index: 0, Block: ToolUseBlock{Name: "t"}}, BlockEnd{Index: 0}, done}, "tool use missing id"},
+		{"tool without name", []Event{BlockStart{Index: 0, Block: ToolUseBlock{ID: "c"}}, BlockEnd{Index: 0}, done}, "missing name"},
 		{"missing provider", []Event{DoneEvent{Model: "m"}}, "missing provider"},
 		{"missing model", []Event{DoneEvent{Provider: "test"}}, "missing model"},
 		{"nil event", []Event{nil}, "nil event"},
@@ -109,8 +110,13 @@ func TestCollectorRejectsLifecycleViolations(t *testing.T) {
 				"external": &testStream{events: tc.events},
 				"client":   newValidatedStream("", "", &testStream{events: tc.events}),
 			} {
-				if _, err := Collect(stream); err == nil || !strings.Contains(err.Error(), tc.want) {
+				_, err := Collect(stream)
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
 					t.Errorf("%s: err = %v, want %q", name, err, tc.want)
+				}
+				// A tool call the vendor left unnamed is the vendor's fault.
+				if strings.HasPrefix(tc.name, "tool") && ErrorTypeOf(err) != ErrorTypeProvider {
+					t.Errorf("%s: type = %q, want provider", name, ErrorTypeOf(err))
 				}
 			}
 		})
@@ -216,6 +222,10 @@ func TestHandleReturnsPartialResponse(t *testing.T) {
 			resp, err := Handle(tc.stream, tc.callback)
 			if !errors.Is(err, tc.want) || resp == nil || resp.Text() != "partial" || resp.FinishReason != "" {
 				t.Fatalf("response=%#v error=%v", resp, err)
+			}
+			// Cut short, an external stream fails as a Client stream does.
+			if tc.want == io.ErrUnexpectedEOF && (ErrorTypeOf(err) != ErrorTypeNetwork || !IsTemporaryError(err)) {
+				t.Fatalf("truncated stream error = %#v", err)
 			}
 		})
 	}

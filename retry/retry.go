@@ -23,18 +23,16 @@ import (
 type Policy struct {
 	// MaxAttempts counts the first attempt; 1 or less disables retries.
 	MaxAttempts int
-	// Delays grow from InitialDelay by Multiplier up to MaxDelay.
+	// Delays grow from InitialDelay by Multiplier up to MaxDelay, each
+	// varied by up to ±25%.
 	InitialDelay time.Duration
 	MaxDelay     time.Duration
 	Multiplier   float64
-	// Jitter varies each delay by up to ±25%.
-	Jitter bool
-	// RespectRetryAfter uses the wait the server suggests instead, in a
-	// Retry-After header or a Google API error body, even beyond MaxDelay.
-	// One beyond MaxRetryAfter, 60s by default, ends retrying with the
-	// response, whose error reports the wait in RetryAfter.
-	RespectRetryAfter bool
-	MaxRetryAfter     time.Duration
+	// MaxRetryAfter bounds the wait a server suggests, in a Retry-After
+	// header or a Google API error body, which is taken instead even beyond
+	// MaxDelay. One beyond it ends retrying with the response, whose error
+	// reports the wait in RetryAfter.
+	MaxRetryAfter time.Duration
 }
 
 // DefaultPolicy returns a conservative retry policy for complete retryable HTTP
@@ -42,13 +40,11 @@ type Policy struct {
 // already have been processed by the provider.
 func DefaultPolicy() *Policy {
 	return &Policy{
-		MaxAttempts:       3,
-		InitialDelay:      200 * time.Millisecond,
-		MaxDelay:          2 * time.Second,
-		Multiplier:        2,
-		Jitter:            true,
-		RespectRetryAfter: true,
-		MaxRetryAfter:     time.Minute,
+		MaxAttempts:   3,
+		InitialDelay:  200 * time.Millisecond,
+		MaxDelay:      2 * time.Second,
+		Multiplier:    2,
+		MaxRetryAfter: time.Minute,
 	}
 }
 
@@ -153,7 +149,7 @@ func normalizePolicy(policy Policy) Policy {
 // delay returns the wait before the next attempt, or false when the server
 // asks, with retryAfter, for a longer one than MaxRetryAfter.
 func (p Policy) delay(attempt int, retryAfter time.Duration) (time.Duration, bool) {
-	if p.RespectRetryAfter && retryAfter > 0 {
+	if retryAfter > 0 {
 		return retryAfter, retryAfter <= p.MaxRetryAfter
 	}
 	delay := p.InitialDelay
@@ -167,14 +163,8 @@ func (p Policy) delay(attempt int, retryAfter time.Duration) (time.Duration, boo
 	if delay > p.MaxDelay {
 		delay = p.MaxDelay
 	}
-	if p.Jitter && delay > 0 {
-		spread := float64(delay) * 0.25
-		delay = time.Duration(float64(delay) + spread*(2*rand.Float64()-1))
-		if delay < 0 {
-			delay = 0
-		}
-	}
-	return delay, true
+	spread := float64(delay) * 0.25
+	return time.Duration(float64(delay) + spread*(2*rand.Float64()-1)), true
 }
 
 // temporary classifies a failed response as the provider will report it:

@@ -138,7 +138,7 @@ func (s *validatedStream) Next() (Event, error) {
 		s.done = true
 		if errors.Is(err, io.EOF) {
 			// The connection ended mid-reply: a fresh request may complete.
-			return nil, NewNetworkError(s.provider, "stream ended before done", io.ErrUnexpectedEOF)
+			return nil, NewNetworkError(s.provider, "stream ended before Done event", io.ErrUnexpectedEOF)
 		}
 		return nil, WrapError(s.provider, ErrorTypeProvider, err)
 	}
@@ -180,7 +180,8 @@ func (s *validatedStream) Close() error {
 
 // Collect consumes the stream and returns the aggregated Response. On failure it
 // returns the partial response together with the error. EOF before DoneEvent is
-// io.ErrUnexpectedEOF; partial responses must not be treated as completed output.
+// a network error wrapping io.ErrUnexpectedEOF; partial responses must not be
+// treated as completed output.
 func Collect(stream Stream) (*Response, error) {
 	return Handle(stream, nil)
 }
@@ -207,7 +208,7 @@ func Handle(stream Stream, fn func(Event) error) (*Response, error) {
 				if validated && state.done {
 					return state.Response(), nil
 				}
-				return state.Response(), fmt.Errorf("stream ended before Done event: %w", io.ErrUnexpectedEOF)
+				return state.Response(), NewNetworkError("", "stream ended before Done event", io.ErrUnexpectedEOF)
 			}
 			return state.Response(), err
 		}
