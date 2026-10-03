@@ -46,10 +46,12 @@ func WithCaptureRawResponse(enabled bool) ClientOption {
 }
 
 // WithStreamIdleTimeout fails a stream, with a temporary network error, once
-// it waits timeout for data from its connection, as when the connection hung.
-// Any data counts, vendor pings and gateway heartbeats included, so a healthy
-// stream fails only when silent for longer, as a vendor may be while the
-// model thinks. Zero disables the check.
+// it waits timeout for data from its connection, as when the connection hung:
+// for the response, the waits of any retries its HTTP client makes included,
+// or then for its body. Any data counts, vendor pings and gateway heartbeats
+// included, so a healthy stream fails only when silent for longer, as a
+// vendor may be while the model reads a long prompt or thinks. Zero disables
+// the check.
 func WithStreamIdleTimeout(timeout time.Duration) ClientOption {
 	return func(c *Client) error {
 		if timeout < 0 {

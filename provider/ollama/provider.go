@@ -17,8 +17,6 @@ const (
 	ProviderOptionFrequencyPenalty = "frequency_penalty"
 	ProviderOptionPresencePenalty  = "presence_penalty"
 	ProviderOptionSeed             = "seed"
-	ProviderOptionLogitBias        = "logit_bias"
-	ProviderOptionUser             = "user"
 )
 
 // New sends Thinking.Effort as reasoning_effort and Thinking.Disabled as
@@ -29,7 +27,6 @@ func New(cfg Config) (*Provider, error) {
 		BaseURL: "http://localhost:11434/v1",
 		Options: []string{
 			ProviderOptionFrequencyPenalty, ProviderOptionPresencePenalty, ProviderOptionSeed,
-			ProviderOptionLogitBias, ProviderOptionUser,
 		},
 		ReasoningFields: []string{"reasoning", "reasoning_content", "thinking"},
 	})

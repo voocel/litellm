@@ -172,3 +172,18 @@ func assertSchemaPrompt(t *testing.T, prompt string, schema *litellm.JSONSchema)
 		}
 	}
 }
+
+// The fallback's warning names the provider as configured.
+func TestSchemaWarningNamesTheConfiguredProvider(t *testing.T) {
+	client := compattest.Doer(func(*http.Request) (*http.Response, error) {
+		return compattest.Response(`{"choices":[{"message":{"content":"{}"},"finish_reason":"stop"}]}`), nil
+	})
+	p, err := deepseek.New(deepseek.Config{Name: "deepseek-beta", APIKey: "key", BaseURL: "https://api.test/v1", HTTPClient: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := p.Chat(context.Background(), schemaRequest())
+	if err != nil || len(resp.Warnings) != 1 || resp.Warnings[0].Provider != "deepseek-beta" {
+		t.Fatalf("warnings = %+v, err = %v", resp, err)
+	}
+}

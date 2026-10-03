@@ -29,7 +29,7 @@ Each adapter maps the shared `litellm.Request` onto its vendor's wire format, in
 | DeepSeek, GLM | `thinking.type: "enabled"` | `thinking.type: "disabled"` | `reasoning_effort` | error | ignored |
 | Grok | — | error (cannot be disabled) | `reasoning_effort` | error | ignored |
 | MiMo | `thinking.type: "enabled"` | `thinking.type: "disabled"` | error | error | ignored |
-| MiniMax | `thinking.type: "adaptive"` | `thinking.type: "disabled"` | error | error | ignored |
+| MiniMax | `thinking.type: "adaptive"` | `thinking.type: "disabled"` | `reasoning_effort` | error | ignored |
 | OpenRouter | `reasoning.enabled: true` | `reasoning.effort: "none"` | `reasoning.effort` | `reasoning.max_tokens` (not with `Effort`) | ignored |
 | Qwen | `enable_thinking: true` | `enable_thinking: false` | error | `thinking_budget` | ignored |
 
@@ -127,7 +127,7 @@ Anthropic requires tool call ids matching `[a-zA-Z0-9_-]+`, and Bedrock Converse
 
 | Provider | Encoding |
 | --- | --- |
-| OpenAI Chat and Responses | content part `prompt_cache_breakpoint: {"mode": "explicit"}`; the `prompt_cache_retention` option sets the lifetime for the whole request |
+| OpenAI Chat and Responses | content part `prompt_cache_breakpoint: {"mode": "explicit"}` (GPT-5.6 and later); the `prompt_cache_options` option sets the lifetime for the whole request with `ttl` |
 | Anthropic | `cache_control: {"type": "ephemeral", "ttl": TTL}` |
 | OpenRouter | `cache_control: {"type": "ephemeral"}` on the content part |
 | Bedrock | a `cachePoint: {"type": "default", "ttl": TTL}` block after the marked block |
@@ -144,7 +144,7 @@ text blocks mark those parts. Unmarked results remain strings.
 `Usage.InputTokens` counts every prompt token, cache reads and writes
 included. A count the vendor does not report is zero, and `catalog.Pricing.Cost`
 prices the input outside the cache counts at the input rate, so a vendor that
-reports no cache counts, such as MiniMax, is priced as uncached input.
+reports no cache counts is priced as uncached input.
 `Usage.OutputTokens` includes reasoning. xAI counts reasoning apart from
 `completion_tokens`, as its `total_tokens` shows; the Chat Completions adapter
 adds it whenever the total says so.

@@ -25,7 +25,7 @@ const (
 // New connects to https://api.deepseek.com. Thinking maps to thinking.type
 // "enabled" or "disabled" with Effort as reasoning_effort; BudgetTokens is
 // rejected. Strict tools require BaseURL "https://api.deepseek.com/beta" and
-// StrictEnabled on every tool. JSON Schema output uses a prompt with JSON mode;
+// Strict on every tool. JSON Schema output uses a prompt with JSON mode;
 // schema adherence is not enforced.
 func New(cfg Config) (*Provider, error) {
 	return openaicompat.New(cfg, openaicompat.Spec{

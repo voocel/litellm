@@ -100,8 +100,8 @@ func ErrorField(provider string, raw json.RawMessage) error {
 }
 
 // HTTPClient returns the client a provider sends with: c, or
-// http.DefaultClient when c is nil, watching the body of each response to a
-// request whose context carries an idle timeout.
+// http.DefaultClient when c is nil, failing a call whose context carries an
+// idle timeout once it waits that long for data.
 func HTTPClient(c litellm.HTTPClient) litellm.HTTPClient {
 	if c == nil {
 		c = http.DefaultClient
@@ -112,11 +112,10 @@ func HTTPClient(c litellm.HTTPClient) litellm.HTTPClient {
 type watcher struct{ client litellm.HTTPClient }
 
 func (w watcher) Do(req *http.Request) (*http.Response, error) {
-	resp, err := w.client.Do(req)
-	if timeout := idle.Timeout(req.Context()); err == nil && timeout > 0 {
-		resp.Body = idle.Watch(resp.Body, timeout)
+	if timeout := idle.Timeout(req.Context()); timeout > 0 {
+		return idle.Do(w.client.Do, req, timeout)
 	}
-	return resp, err
+	return w.client.Do(req)
 }
 
 // DefaultUserAgent identifies the SDK when a config sets no UserAgent.

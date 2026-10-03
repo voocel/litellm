@@ -187,12 +187,17 @@ func parse(reader io.Reader) (map[string]Model, error) {
 		if name == "sample_spec" { // documents the format with placeholder values
 			continue
 		}
+		// Only chat models are read, so that an entry of another kind, whose
+		// fields may differ, cannot fail the load.
+		var kind struct {
+			Mode string `json:"mode"`
+		}
+		if json.Unmarshal(data, &kind) != nil || kind.Mode != "chat" && kind.Mode != "responses" {
+			continue
+		}
 		var entry listEntry
 		if err := json.Unmarshal(data, &entry); err != nil {
 			return nil, fmt.Errorf("catalog: decode model %q: %w", name, err)
-		}
-		if entry.Mode != "chat" && entry.Mode != "responses" {
-			continue
 		}
 		model := Model{
 			Provider:        entry.Provider,

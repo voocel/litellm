@@ -110,7 +110,7 @@ resp, err := litellm.Handle(stream, func(event litellm.Event) error {
 
 `Client.Stream` aggregates as events are read, so `Handle` and `Collect` return the complete response even after some events were read with `Next`. A stream is consumed by one goroutine.
 
-A deadline on `ctx` bounds the whole call, which for a model that thinks at length must be long. To also end a stream over a connection that hung, `litellm.WithStreamIdleTimeout(d)` fails it, with a temporary network error, once it waits `d` for data. Any data counts, vendor pings and gateway heartbeats included, so set `d` above the longest silence of a healthy stream, as a vendor may be silent while the model thinks.
+A deadline on `ctx` bounds the whole call, which for a model that thinks at length must be long. To also end a stream over a connection that hung, `litellm.WithStreamIdleTimeout(d)` fails it, with a temporary network error, once it waits `d` for data: for the response, retries and their backoff included, or then for the body. Any data counts, vendor pings and gateway heartbeats included, so set `d` above the longest silence of a healthy stream, as a vendor may be silent while the model reads a long prompt or thinks. With retries, the wait for the response spans every attempt and backoff.
 
 ## Tools
 

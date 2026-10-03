@@ -296,7 +296,7 @@ func TestChatConvertsResponse(t *testing.T) {
 	if !reflect.DeepEqual(resp.Blocks, want) {
 		t.Fatalf("blocks = %#v", resp.Blocks)
 	}
-	if resp.FinishReason != litellm.FinishReasonToolCall || resp.FinishReasonRaw != "STOP" {
+	if resp.FinishReason != litellm.FinishReasonStop || resp.FinishReasonRaw != "STOP" {
 		t.Fatalf("finish = %q/%q", resp.FinishReason, resp.FinishReasonRaw)
 	}
 	if len(resp.Warnings) != 1 || resp.Warnings[0].Code != "gemini.tool_call_id_generated" {
@@ -357,7 +357,7 @@ func TestStreamEvents(t *testing.T) {
 		litellm.ToolUseDelta{Index: 2, Arguments: `{"q":"x"}`},
 		litellm.BlockEnd{Index: 2},
 		litellm.UsageEvent{Usage: usage},
-		litellm.DoneEvent{FinishReason: litellm.FinishReasonToolCall, FinishReasonRaw: "STOP", Provider: "gemini", Model: "gemini-3-pro"},
+		litellm.DoneEvent{FinishReason: litellm.FinishReasonStop, FinishReasonRaw: "STOP", Provider: "gemini", Model: "gemini-3-pro"},
 	})
 }
 

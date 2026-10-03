@@ -10,8 +10,7 @@ type (
 	// Config holds the connection settings; its fields are documented on the
 	// aliased type.
 	Config = openaicompat.Config
-	// Provider implements litellm.Provider, litellm.CapabilityProvider and
-	// litellm.ModelLister.
+	// Provider implements litellm.Provider and litellm.CapabilityProvider.
 	Provider = openaicompat.Provider
 )
 

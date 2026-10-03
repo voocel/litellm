@@ -92,7 +92,7 @@ func convertResponsesResponse(resp *responsesResponse, provider, model string) *
 	if resp.Model != "" {
 		out.Model = resp.Model
 	}
-	var toolCalls, refused bool
+	var refused bool
 	for _, item := range resp.Output {
 		switch item.Type {
 		case "message":
@@ -108,7 +108,6 @@ func convertResponsesResponse(resp *responsesResponse, provider, model string) *
 				ID: item.CallID, Name: item.Name, Arguments: cmp.Or(item.Arguments, "{}"),
 				State: itemState{ID: item.ID}.state(provider, model),
 			})
-			toolCalls = true
 		case "reasoning":
 			out.Blocks = append(out.Blocks, reasoningBlock(item, provider, model))
 		}
@@ -117,7 +116,7 @@ func convertResponsesResponse(resp *responsesResponse, provider, model string) *
 	if resp.IncompleteDetails != nil {
 		reason = resp.IncompleteDetails.Reason
 	}
-	out.FinishReason, out.FinishReasonRaw = finish(resp.Status, reason, toolCalls, refused)
+	out.FinishReason, out.FinishReasonRaw = finish(resp.Status, reason, refused)
 	return out
 }
 
@@ -151,16 +150,10 @@ func contentPartBlock(part responsesContentPart) (litellm.TextBlock, bool, bool)
 }
 
 // finish derives the finish reason shared by responses and streams.
-func finish(status, incompleteReason string, toolCalls, refused bool) (litellm.FinishReason, string) {
-	raw := status
-	if incompleteReason != "" {
-		raw = incompleteReason
-	}
-	switch {
-	case refused:
+func finish(status, incompleteReason string, refused bool) (litellm.FinishReason, string) {
+	raw := cmp.Or(incompleteReason, status)
+	if refused {
 		return litellm.FinishReasonSafety, raw
-	case status == "completed" && toolCalls:
-		return litellm.FinishReasonToolCall, raw
 	}
 	return wire.FinishReason(raw), raw
 }

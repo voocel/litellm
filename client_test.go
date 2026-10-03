@@ -500,3 +500,49 @@ func TestCallEndedByTheCallersContext(t *testing.T) {
 		})
 	}
 }
+
+// A reply that stops with tool calls ended for them, whichever way it came;
+// one cut short by its length did not.
+func TestStopWithToolCallsIsToolCall(t *testing.T) {
+	call := ToolUseBlock{ID: "c", Name: "f", Arguments: "{}"}
+	for _, tc := range []struct {
+		finish, want FinishReason
+	}{
+		{FinishReasonStop, FinishReasonToolCall},
+		{FinishReasonLength, FinishReasonLength},
+	} {
+		p := &testProvider{
+			name: "test",
+			chatFunc: func(context.Context, *Request) (*Response, error) {
+				return &Response{Blocks: []Block{call}, FinishReason: tc.finish, FinishReasonRaw: "raw"}, nil
+			},
+			streamFunc: func(_ context.Context, req *Request) (Stream, error) {
+				return &testStream{events: []Event{
+					BlockStart{Index: 0, Block: ToolUseBlock{ID: "c", Name: "f"}}, ToolUseDelta{Index: 0, Arguments: "{}"}, BlockEnd{Index: 0},
+					DoneEvent{FinishReason: tc.finish, FinishReasonRaw: "raw", Provider: "test", Model: req.Model},
+				}}, nil
+			},
+		}
+		client, _ := New(p)
+		req := Request{Model: "m", Messages: []Message{UserText("hi")}}
+		resp, err := client.Chat(t.Context(), req)
+		if err != nil || resp.FinishReason != tc.want || resp.FinishReasonRaw != "raw" {
+			t.Fatalf("%s: chat = %+v, %v", tc.finish, resp, err)
+		}
+		stream, err := client.Stream(t.Context(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var done DoneEvent
+		resp, err = Handle(stream, func(e Event) error {
+			if d, ok := e.(DoneEvent); ok {
+				done = d
+			}
+			return nil
+		})
+		stream.Close()
+		if err != nil || resp.FinishReason != tc.want || done.FinishReason != tc.want || done.FinishReasonRaw != "raw" {
+			t.Fatalf("%s: stream = %+v, done = %+v, %v", tc.finish, resp, done, err)
+		}
+	}
+}

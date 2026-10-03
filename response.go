@@ -88,8 +88,11 @@ type Usage struct {
 type FinishReason string
 
 const (
-	FinishReasonStop     FinishReason = "stop"
-	FinishReasonLength   FinishReason = "length"
+	FinishReasonStop   FinishReason = "stop"
+	FinishReasonLength FinishReason = "length"
+	// FinishReasonToolCall ends a turn of tool calls. Providers report the
+	// vendor's reason; a Client also reports this one for a reply that stops
+	// with tool calls, as Gemini and OpenAI Responses end such turns.
 	FinishReasonToolCall FinishReason = "tool_calls"
 	FinishReasonError    FinishReason = "error"
 	// FinishReasonSafety also covers explicit refusals; the refusal text, if

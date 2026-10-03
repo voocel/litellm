@@ -66,7 +66,8 @@ func TestLoadFromReader(t *testing.T) {
 			"supports_reasoning": true
 		},
 		"model-b": {"mode": "responses", "litellm_provider": "openai", "max_output_tokens": 100},
-		"embed": {"mode": "embedding", "input_cost_per_token": 0.001, "output_cost_per_token": 0}
+		"embed": {"mode": "embedding", "input_cost_per_token": 0.001, "output_cost_per_token": 0},
+		"image": {"mode": "image_generation", "max_input_tokens": "unknown", "tiered_pricing": {"range": "1k"}}
 	}`))
 	if err != nil {
 		t.Fatalf("LoadFromReader: %v", err)

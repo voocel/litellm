@@ -138,37 +138,29 @@ type Schema json.RawMessage
 // or string) is validated and copied; any other value is marshaled. A nil v
 // returns a nil Schema.
 func SchemaFrom(v any) (Schema, error) {
+	var text []byte
 	switch s := v.(type) {
 	case nil:
 		return nil, nil
 	case Schema:
-		return cloneBytes([]byte(s)), nil
+		text = s
 	case json.RawMessage:
-		if !json.Valid(s) {
-			return nil, fmt.Errorf("schema must be valid JSON")
-		}
-		return Schema(cloneBytes(s)), nil
+		text = s
 	case []byte:
-		if !json.Valid(s) {
-			return nil, fmt.Errorf("schema must be valid JSON")
-		}
-		return Schema(cloneBytes(s)), nil
+		text = s
 	case string:
-		b := []byte(s)
-		if !json.Valid(b) {
-			return nil, fmt.Errorf("schema must be valid JSON")
-		}
-		return Schema(cloneBytes(b)), nil
+		text = []byte(s)
 	default:
 		b, err := json.Marshal(v)
 		if err != nil {
 			return nil, fmt.Errorf("marshal schema: %w", err)
 		}
-		if !json.Valid(b) {
-			return nil, fmt.Errorf("schema must be valid JSON")
-		}
 		return Schema(b), nil
 	}
+	if !json.Valid(text) {
+		return nil, fmt.Errorf("schema must be valid JSON")
+	}
+	return Schema(cloneBytes(text)), nil
 }
 
 // Tool declares a function the model may call. Strict, when set, asks the

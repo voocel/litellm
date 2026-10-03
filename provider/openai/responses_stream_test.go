@@ -69,7 +69,7 @@ func TestResponsesStreamEvents(t *testing.T) {
 		litellm.UsageEvent{Usage: litellm.Usage{InputTokens: 1}},
 		litellm.BlockEnd{Index: 0},
 		litellm.BlockEnd{Index: 2},
-		litellm.DoneEvent{FinishReason: litellm.FinishReasonToolCall, FinishReasonRaw: "completed", Provider: "openai", Model: "m"},
+		litellm.DoneEvent{FinishReason: litellm.FinishReasonStop, FinishReasonRaw: "completed", Provider: "openai", Model: "m"},
 	}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("events:\n%#v\nwant:\n%#v", events, want)

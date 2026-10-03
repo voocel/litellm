@@ -56,14 +56,14 @@ var wrappers = []struct {
 	},
 	{
 		name: "minimax", newFn: minimax.New,
-		caps: litellm.Capabilities{DisableThinking: true, ProviderOptions: []string{"service_tier"}},
+		caps: litellm.Capabilities{ThinkingEffort: true, DisableThinking: true, ProviderOptions: []string{"service_tier"}},
 		request: func(r *litellm.Request) {
 			r.Model, r.MaxTokens, r.Thinking = "MiniMax-M3", new(128), &litellm.Thinking{}
 		},
 	},
 	{
 		name: "ollama", newFn: ollama.New,
-		caps:    litellm.Capabilities{ThinkingEffort: true, DisableThinking: true, ProviderOptions: []string{"frequency_penalty", "logit_bias", "presence_penalty", "seed", "user"}},
+		caps:    litellm.Capabilities{ThinkingEffort: true, DisableThinking: true, ProviderOptions: []string{"frequency_penalty", "presence_penalty", "seed"}},
 		request: func(r *litellm.Request) { r.Model, r.Thinking = "qwen3", &litellm.Thinking{Effort: "high"} },
 	},
 	{
@@ -135,7 +135,7 @@ func TestWrapperThinking(t *testing.T) {
 		{"grok disabled", grok.New, disabled, "thinking cannot be disabled"},
 		{"mimo enabled", mimo.New, enabled, `{"thinking": {"type": "enabled"}}`},
 		{"mimo effort", mimo.New, high, "effort is not supported"},
-		{"minimax effort", minimax.New, high, "effort is not supported"},
+		{"minimax effort", minimax.New, high, `{"thinking": {"type": "adaptive"}, "reasoning_effort": "high"}`},
 		{"ollama disabled", ollama.New, disabled, `{"reasoning_effort": "none"}`},
 		{"openrouter enabled", openrouter.New, enabled, `{"reasoning": {"enabled": true}}`},
 		{"openrouter budget", openrouter.New, budget, `{"reasoning": {"max_tokens": 1024}}`},

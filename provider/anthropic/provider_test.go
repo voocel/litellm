@@ -127,6 +127,23 @@ func TestStreamIdleTimeout(t *testing.T) {
 	if litellm.ErrorTypeOf(err) != litellm.ErrorTypeNetwork || !litellm.IsTemporaryError(err) || !strings.Contains(err.Error(), "no data for 100ms") {
 		t.Fatalf("hung stream: %v", err)
 	}
+
+	// A vendor that never answers fails the same way.
+	p, err := New(Config{APIKey: "k", HTTPClient: doFunc(func(r *http.Request) (*http.Response, error) {
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := litellm.New(p, litellm.WithStreamIdleTimeout(100*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Stream(t.Context(), litellm.Request{Model: "claude", MaxTokens: new(64), Messages: []litellm.Message{litellm.UserText("hi")}})
+	if litellm.ErrorTypeOf(err) != litellm.ErrorTypeNetwork || !litellm.IsTemporaryError(err) || !strings.Contains(err.Error(), "no data for 100ms") {
+		t.Fatalf("unanswered call: %v", err)
+	}
 }
 
 // A named endpoint tags its replies and replay state with its name.

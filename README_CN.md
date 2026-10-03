@@ -110,7 +110,7 @@ resp, err := litellm.Handle(stream, func(event litellm.Event) error {
 
 `Client.Stream` 在读取时即完成聚合，因此即便先用 `Next` 读过部分事件，`Handle` / `Collect` 仍返回完整响应。流只能由一个 goroutine 消费。
 
-`ctx` 上的 deadline 限制整个调用，模型长时间思考时它必须设得很长。要让挂住的连接上的流也能结束，用 `litellm.WithStreamIdleTimeout(d)`：流等待数据达到 `d` 时以可重试的网络错误失败。任何数据都算，包括厂商的 ping 和网关心跳；厂商在模型思考期间可能完全静默，所以 `d` 要大于健康流的最长静默。
+`ctx` 上的 deadline 限制整个调用，模型长时间思考时它必须设得很长。要让挂住的连接上的流也能结束，用 `litellm.WithStreamIdleTimeout(d)`：流等待数据（先是响应，之后是响应体）达到 `d` 时以可重试的网络错误失败。任何数据都算，包括厂商的 ping 和网关心跳；厂商在模型读长提示或思考期间可能完全静默，所以 `d` 要大于健康流的最长静默。开启重试时，等待响应的时间涵盖所有尝试及其退避。
 
 ## 工具
 

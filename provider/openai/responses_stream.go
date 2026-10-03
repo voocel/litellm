@@ -52,7 +52,6 @@ type responsesStream struct {
 	tools     map[int]litellm.ToolUseBlock
 	streamed  map[int]bool // function calls whose arguments arrived as deltas
 	summaries map[int]int  // last summary index per reasoning item
-	toolCalls bool
 	refused   bool
 	sequence  int
 }
@@ -129,7 +128,6 @@ func (s *responsesStream) events(events []litellm.Event, e responsesEvent, raw j
 			case "function_call":
 				tool := litellm.ToolUseBlock{ID: e.Item.CallID, Name: e.Item.Name, State: itemState{ID: e.Item.ID}.state(s.name, s.requested)}
 				s.tools[e.OutputIndex] = tool
-				s.toolCalls = true
 				events, _ = s.blocks.Open(events, itemKey(e.OutputIndex), tool)
 				return events, nil
 			}
@@ -210,7 +208,7 @@ func (s *responsesStream) events(events []litellm.Event, e responsesEvent, raw j
 			}
 		}
 		status = cmp.Or(status, e.Type[len("response."):])
-		reasonCode, reasonRaw := finish(status, reason, s.toolCalls, s.refused)
+		reasonCode, reasonRaw := finish(status, reason, s.refused)
 		events = append(events, litellm.UsageEvent{Usage: usage})
 		events = s.blocks.CloseAll(events, func(key partKey) litellm.Block {
 			if key.content >= 0 {

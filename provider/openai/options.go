@@ -4,9 +4,11 @@ import "slices"
 
 // ProviderOptions are native request fields of the selected API, copied into
 // the body as is. An option naming a generated object (such as Responses
-// "text" or "reasoning") is merged into it. Responses options whose results
+// "text" or "reasoning") is merged into it. Responses options that add output
 // litellm does not model, hosted tools and server-side compaction, are not
-// offered; nor is previous_response_id, as a Response carries no id.
+// offered, as their items would drop out of the conversation; nor is
+// previous_response_id, as a Response carries no id. Results reported beside
+// the output, such as moderation scores, are in Response.Raw when captured.
 const (
 	ProviderOptionFrequencyPenalty     = "frequency_penalty"
 	ProviderOptionPresencePenalty      = "presence_penalty"
@@ -58,9 +60,9 @@ var chatOptions = []string{
 }
 
 var responsesOptions = []string{
-	ProviderOptionStore, ProviderOptionStreamOptions, ProviderOptionPromptCacheKey,
+	ProviderOptionStore, ProviderOptionModeration, ProviderOptionStreamOptions, ProviderOptionPromptCacheKey,
 	ProviderOptionPromptCacheOptions, ProviderOptionPromptCacheRetention, ProviderOptionMetadata,
-	ProviderOptionServiceTier, ProviderOptionSafetyIdentifier, ProviderOptionParallelToolCalls,
+	ProviderOptionServiceTier, ProviderOptionSafetyIdentifier, ProviderOptionUser, ProviderOptionParallelToolCalls,
 	ProviderOptionTopLogprobs, ProviderOptionConversation, ProviderOptionInclude,
 	ProviderOptionTruncation, ProviderOptionBackground, ProviderOptionPrompt,
 	ProviderOptionText, ProviderOptionReasoning,

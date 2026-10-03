@@ -115,13 +115,15 @@ func TestBuildResponsesRequest(t *testing.T) {
 		req: litellm.Request{
 			Model: "m", Tools: []litellm.Tool{{Name: "ping"}}, ResponseFormat: schema, Thinking: &litellm.Thinking{Effort: "low"},
 			ProviderOptions: providerOptions(t, map[string]any{
-				ProviderOptionText:      map[string]any{"verbosity": "low"},
-				ProviderOptionReasoning: map[string]any{"summary": "detailed"},
-				ProviderOptionInclude:   []any{"reasoning.encrypted_content"},
-				ProviderOptionStore:     false,
+				ProviderOptionText:       map[string]any{"verbosity": "low"},
+				ProviderOptionReasoning:  map[string]any{"summary": "detailed"},
+				ProviderOptionInclude:    []any{"reasoning.encrypted_content"},
+				ProviderOptionStore:      false,
+				ProviderOptionModeration: map[string]any{"model": "omni-moderation-latest"},
+				ProviderOptionUser:       "u",
 			}),
 		},
-		want: `{"model":"m","store":false,"include":["reasoning.encrypted_content"],
+		want: `{"model":"m","store":false,"moderation":{"model":"omni-moderation-latest"},"user":"u","include":["reasoning.encrypted_content"],
 			"tools":[{"type":"function","name":"ping","parameters":{"type":"object"}}],
 			"text":{"format":{"type":"json_schema","name":"answer","description":"d","schema":{"type":"object"},"strict":true},"verbosity":"low"},
 			"reasoning":{"effort":"low","summary":"detailed"}}`,
@@ -202,7 +204,7 @@ func TestConvertResponsesResponse(t *testing.T) {
 			},
 			Usage:        litellm.Usage{InputTokens: 5, OutputTokens: 3, CacheReadTokens: 2, ReasoningTokens: 1},
 			Model:        "gpt-5.1",
-			FinishReason: litellm.FinishReasonToolCall, FinishReasonRaw: "completed",
+			FinishReason: litellm.FinishReasonStop, FinishReasonRaw: "completed",
 		},
 	}, {
 		name: "raw reasoning text and refusal",
@@ -218,7 +220,7 @@ func TestConvertResponsesResponse(t *testing.T) {
 		want: litellm.Response{
 			Blocks:       []litellm.Block{litellm.ToolUseBlock{ID: "c", Name: "f", Arguments: `{}`}},
 			Model:        "req-model",
-			FinishReason: litellm.FinishReasonToolCall, FinishReasonRaw: "completed",
+			FinishReason: litellm.FinishReasonStop, FinishReasonRaw: "completed",
 		},
 	}, {
 		name: "incomplete",

@@ -18,14 +18,15 @@ const ProviderOptionServiceTier = "service_tier"
 
 // New always sends reasoning_split so reasoning arrives in reasoning_details
 // instead of <think> tags inside content. Thinking maps to thinking.type
-// "adaptive" or "disabled"; Effort and BudgetTokens are rejected.
+// "adaptive" or "disabled", and Effort to reasoning_effort; BudgetTokens is
+// rejected.
 func New(cfg Config) (*Provider, error) {
 	return openaicompat.New(cfg, openaicompat.Spec{
 		Name:            "minimax",
 		BaseURL:         "https://api.minimax.io/v1",
 		APIKeyRequired:  true,
 		MaxTokensField:  "max_completion_tokens",
-		Thinking:        openaicompat.ThinkingType("adaptive", false),
+		Thinking:        openaicompat.ThinkingType("adaptive", true),
 		Fields:          map[string]any{"reasoning_split": true},
 		Options:         []string{ProviderOptionServiceTier},
 		ReasoningFields: []string{"reasoning_details", "reasoning_content"},

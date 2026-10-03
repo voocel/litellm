@@ -10,15 +10,15 @@ func (s Spec) usesSchemaPrompt(format *litellm.ResponseFormat) bool {
 	return s.SchemaFallback != "" && format != nil && format.Type == litellm.ResponseFormatJSONSchema
 }
 
-func (s Spec) schemaWarning() litellm.Warning {
+func (s Spec) schemaWarning(provider string) litellm.Warning {
 	mode := "prompt only"
 	if s.SchemaFallback == litellm.ResponseFormatJSONObject {
 		mode = "prompt with JSON mode"
 	}
 	return litellm.Warning{
 		Code:     "litellm.schema_prompt_fallback",
-		Provider: s.Name,
-		Message:  "JSON Schema uses " + mode + "; schema adherence is not enforced, even with StrictEnabled",
+		Provider: provider,
+		Message:  "JSON Schema uses " + mode + "; schema adherence is not enforced, even with Strict",
 	}
 }
 

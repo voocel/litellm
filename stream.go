@@ -149,6 +149,9 @@ func (s *validatedStream) Next() (Event, error) {
 	event, done, err := s.state.Apply(event)
 	if done {
 		s.state.warnings = append(s.state.warnings, malformedToolArgumentWarnings(s.state.blocks, s.provider)...)
+		e := event.(DoneEvent)
+		e.FinishReason = finishReason(e.FinishReason, s.state.blocks)
+		s.state.finish, event = e.FinishReason, e
 	}
 	if err != nil {
 		s.done = true

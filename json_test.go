@@ -100,3 +100,25 @@ func TestRequestJSON(t *testing.T) {
 		t.Fatalf("round trip changed the request:\ngot  %#v\nwant %#v", got, want)
 	}
 }
+
+// Every form of JSON text is checked and copied; other values are marshaled.
+func TestSchemaFrom(t *testing.T) {
+	text := []byte(`{"type":"object"}`)
+	for _, v := range []any{Schema(text), json.RawMessage(text), text, string(text), map[string]any{"type": "object"}} {
+		s, err := SchemaFrom(v)
+		if err != nil || string(s) != `{"type":"object"}` {
+			t.Fatalf("%T: %s, %v", v, s, err)
+		}
+	}
+	if s, _ := SchemaFrom(text); &s[0] == &text[0] {
+		t.Fatal("the schema shares the caller's bytes")
+	}
+	for _, v := range []any{Schema(`{`), json.RawMessage(`{`), []byte(`{`), `{`} {
+		if _, err := SchemaFrom(v); err == nil {
+			t.Fatalf("%T: accepted invalid JSON", v)
+		}
+	}
+	if s, err := SchemaFrom(nil); s != nil || err != nil {
+		t.Fatalf("nil: %s, %v", s, err)
+	}
+}

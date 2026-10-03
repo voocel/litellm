@@ -22,7 +22,6 @@ func convertResponse(resp *response, provider, model string) *litellm.Response {
 		return out
 	}
 	candidate := resp.Candidates[0]
-	var toolCalls bool
 	for _, p := range candidate.Content.Parts {
 		switch b := partBlock(p, provider, model).(type) {
 		case litellm.TextBlock:
@@ -44,10 +43,9 @@ func convertResponse(resp *response, provider, model string) *litellm.Response {
 				out.Warnings = append(out.Warnings, generatedIDWarning(provider, b))
 			}
 			out.Blocks = append(out.Blocks, b)
-			toolCalls = true
 		}
 	}
-	out.FinishReason, out.FinishReasonRaw = finishReason(candidate.FinishReason, toolCalls), candidate.FinishReason
+	out.FinishReason, out.FinishReasonRaw = wire.FinishReason(candidate.FinishReason), candidate.FinishReason
 	if candidate.FinishMessage != "" {
 		out.Warnings = append(out.Warnings, finishMessageWarning(provider, candidate.FinishMessage))
 	}
@@ -120,15 +118,6 @@ func finishMessageWarning(provider, message string) litellm.Warning {
 
 func generatedIDWarning(provider string, tool litellm.ToolUseBlock) litellm.Warning {
 	return litellm.Warning{Code: "gemini.tool_call_id_generated", Provider: provider, Message: fmt.Sprintf("function call %q had no id; generated %q", tool.Name, tool.ID)}
-}
-
-// finishReason reports tool calls: Gemini ends function-call turns with STOP.
-func finishReason(raw string, toolCalls bool) litellm.FinishReason {
-	finish := wire.FinishReason(raw)
-	if finish == litellm.FinishReasonStop && toolCalls {
-		return litellm.FinishReasonToolCall
-	}
-	return finish
 }
 
 // convertUsage reads omitted counts as zero.

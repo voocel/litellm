@@ -1,21 +1,21 @@
-// Package idle fails a response body whose reads wait too long for data, so
-// that a stream over a connection that hung ends instead of waiting forever.
+// Package idle fails a call over a connection that hung: one that waits too
+// long for its response or, once that arrives, for data from its body.
 // Client.Stream puts the timeout on the context; the HTTP client of every
-// provider watches the bodies of responses to requests that carry one.
+// provider sends requests that carry one through Do.
 package idle
 
 import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"sync/atomic"
 	"time"
 )
 
 type key struct{}
 
-// WithTimeout returns ctx carrying timeout for the bodies of the responses
-// to its requests.
+// WithTimeout returns ctx carrying timeout for the calls made with it.
 func WithTimeout(ctx context.Context, timeout time.Duration) context.Context {
 	return context.WithValue(ctx, key{}, timeout)
 }
@@ -26,21 +26,45 @@ func Timeout(ctx context.Context) time.Duration {
 	return timeout
 }
 
-// Watch returns body, closed once a read has waited timeout for data; that
-// read and every later one then fail. Only waiting counts: a consumer slow to
-// read is not idle.
-func Watch(body io.ReadCloser, timeout time.Duration) io.ReadCloser {
-	w := &watched{ReadCloser: body, timeout: timeout}
-	w.timer = time.AfterFunc(timeout, w.expire)
-	w.timer.Stop()
-	return w
+// Do sends req with send and returns the response, failing the call once it
+// waits timeout for data: for the response, the waits of any retries send
+// makes included, or then for a read of its body. Only waiting counts: a
+// consumer slow to read is not idle.
+func Do(send func(*http.Request) (*http.Response, error), req *http.Request, timeout time.Duration) (*http.Response, error) {
+	ctx, cancel := context.WithCancel(req.Context())
+	timer := time.AfterFunc(timeout, cancel)
+	resp, err := send(req.WithContext(ctx))
+	if !timer.Stop() {
+		if err == nil {
+			resp.Body.Close()
+		}
+		return nil, idleError(timeout)
+	}
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	body := &watched{ReadCloser: resp.Body, timeout: timeout, cancel: cancel}
+	body.timer = time.AfterFunc(timeout, body.expire)
+	body.timer.Stop()
+	resp.Body = body
+	return resp, nil
 }
 
+// idleError does not wrap the cancellation that ended the wait, which would
+// read as the caller's.
+func idleError(timeout time.Duration) error {
+	return fmt.Errorf("no data for %v", timeout)
+}
+
+// watched is a body closed once a read has waited timeout for data; that
+// read and every later one then fail.
 type watched struct {
 	io.ReadCloser
 	timeout time.Duration
 	timer   *time.Timer
 	expired atomic.Bool
+	cancel  context.CancelFunc
 }
 
 func (w *watched) expire() {
@@ -53,12 +77,13 @@ func (w *watched) Read(p []byte) (int, error) {
 	n, err := w.ReadCloser.Read(p)
 	w.timer.Stop()
 	if w.expired.Load() {
-		return n, fmt.Errorf("no data for %v", w.timeout)
+		return n, idleError(w.timeout)
 	}
 	return n, err
 }
 
 func (w *watched) Close() error {
 	w.timer.Stop()
+	defer w.cancel()
 	return w.ReadCloser.Close()
 }

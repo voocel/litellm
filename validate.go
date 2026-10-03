@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"unicode/utf8"
 )
 
@@ -241,6 +242,7 @@ func validateResponse(resp *Response, provider, model string) error {
 }
 
 func finalizeResponse(resp *Response, provider, model string) {
+	resp.FinishReason = finishReason(resp.FinishReason, resp.Blocks)
 	if resp.Provider == "" {
 		resp.Provider = provider
 	}
@@ -274,4 +276,15 @@ func malformedToolArgumentWarnings(blocks []Block, provider string) []Warning {
 		})
 	}
 	return warnings
+}
+
+// finishReason is why a reply ended: one that stopped with tool calls, as
+// Gemini, OpenAI Responses and some Chat Completions vendors end a turn of
+// calls, ended for them.
+func finishReason(reason FinishReason, blocks []Block) FinishReason {
+	isCall := func(b Block) bool { _, ok := b.(ToolUseBlock); return ok }
+	if reason == FinishReasonStop && slices.ContainsFunc(blocks, isCall) {
+		return FinishReasonToolCall
+	}
+	return reason
 }

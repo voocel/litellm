@@ -21,7 +21,6 @@ type stream struct {
 	run       int
 	open      string // kind of the open text or thought run
 	signature string // signature of the open run, delivered when it ends
-	toolCalls bool
 }
 
 func newStream(resp *http.Response, name, model string) *stream {
@@ -96,14 +95,13 @@ func (s *stream) events(events []litellm.Event, chunk response) []litellm.Event 
 			events, index = s.blocks.Open(events, s.run, litellm.ToolUseBlock{ID: b.ID, Name: b.Name, State: b.State})
 			events = append(events, litellm.ToolUseDelta{Index: index, Arguments: b.Arguments})
 			events = s.blocks.Close(events, s.run, nil)
-			s.toolCalls = true
 		}
 	}
 	if candidate.FinishMessage != "" {
 		events = append(events, litellm.WarningEvent{Warning: finishMessageWarning(s.name, candidate.FinishMessage)})
 	}
 	if candidate.FinishReason != "" {
-		return s.finish(events, candidate.FinishReason, finishReason(candidate.FinishReason, s.toolCalls))
+		return s.finish(events, candidate.FinishReason, wire.FinishReason(candidate.FinishReason))
 	}
 	return events
 }

@@ -94,7 +94,7 @@ func (p *Provider) Chat(ctx context.Context, req *litellm.Request) (*litellm.Res
 	}
 	out.Raw = data
 	if p.spec.usesSchemaPrompt(req.ResponseFormat) {
-		out.Warnings = append(out.Warnings, p.spec.schemaWarning())
+		out.Warnings = append(out.Warnings, p.spec.schemaWarning(p.Name()))
 	}
 	return out, nil
 }
@@ -111,7 +111,7 @@ func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.St
 	}
 	s := newStream(resp, req, p.Name(), p.spec)
 	if p.spec.usesSchemaPrompt(req.ResponseFormat) {
-		s.pending = append(s.pending, litellm.WarningEvent{Warning: p.spec.schemaWarning()})
+		s.pending = append(s.pending, litellm.WarningEvent{Warning: p.spec.schemaWarning(p.Name())})
 	}
 	return s, nil
 }

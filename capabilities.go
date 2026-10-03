@@ -12,8 +12,10 @@ type Capabilities struct {
 	// the request is sent. Which efforts a model takes is the vendor's call.
 	ThinkingEffort  bool
 	DisableThinking bool
-	// ProviderOptions lists the accepted Request.ProviderOptions keys, sorted.
-	// A provider that passes every key through, such as compat, lists none.
+	// ProviderOptions lists, sorted, the Request.ProviderOptions keys the
+	// adapter knows: native fields of the vendor's request. One that also
+	// passes other keys through, as compat does and the Chat Completions
+	// vendors do with AllowUnknownProviderOptions, lists only those it knows.
 	ProviderOptions []string
 }
 
