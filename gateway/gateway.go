@@ -8,7 +8,9 @@
 // A call POSTs its litellm.Request as JSON, and the reply streams the call's
 // events as JSON lines up to done or error, with a heartbeat line whenever
 // the upstream is silent for a while, so that proxies keep the connection
-// open. Blocks keep their provider state, and errors keep their type, retry
+// open, even before it answers. A call refused before the first line gets
+// an error body instead, with the HTTP status of its error and a
+// Retry-After when it suggests a wait. Blocks keep their provider state, and errors keep their type, retry
 // facts and upstream provider, so a call through a gateway behaves as one
 // made to the vendor directly; only the Server's own vendor key being
 // rejected is a provider error rather than an auth error, which would blame

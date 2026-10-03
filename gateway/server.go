@@ -1,10 +1,12 @@
 package gateway
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -22,48 +24,46 @@ var heartbeatInterval = 15 * time.Second
 type Server struct {
 	// Route returns the Client to make the call req for r with. It may
 	// rewrite req, such as to map the model the caller names to the vendor's,
-	// or to cap its tokens. An error refuses the call, with the type and
-	// status a litellm.Error carries or else as a model not found (404).
+	// or to cap its tokens. An error refuses the call: a litellm.Error with
+	// its type, any other as a model not found.
 	Route func(r *http.Request, req *litellm.Request) (*litellm.Client, error)
 }
 
 // ServeHTTP makes the call r carries, once: retrying is the caller's.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, &wireError{Type: litellm.ErrorTypeValidation, Message: "method not allowed", Provider: "gateway"})
+		writeError(w, &wireError{Type: litellm.ErrorTypeValidation, StatusCode: http.StatusMethodNotAllowed, Message: "method not allowed", Provider: "gateway"})
 		return
 	}
 	if !canFlush(w) {
-		writeError(w, http.StatusInternalServerError, &wireError{Type: litellm.ErrorTypeInternal, Provider: "gateway",
+		writeError(w, &wireError{Type: litellm.ErrorTypeInternal, Provider: "gateway",
 			Message: "the ResponseWriter cannot flush, so a reply cannot stream: a middleware's ResponseWriter must implement http.Flusher or Unwrap"})
 		return
 	}
 	var req litellm.Request
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxRequestBytes)).Decode(&req); err != nil {
-		code := http.StatusBadRequest
+		e := &wireError{Type: litellm.ErrorTypeValidation, Message: fmt.Sprintf("bad request: %v", err), Provider: "gateway"}
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-			code = http.StatusRequestEntityTooLarge
+			e.StatusCode = http.StatusRequestEntityTooLarge
 		}
-		writeError(w, code, &wireError{Type: litellm.ErrorTypeValidation, Message: fmt.Sprintf("bad request: %v", err), Provider: "gateway"})
+		writeError(w, e)
 		return
 	}
 	client, err := s.Route(r, &req)
 	if err != nil {
-		writeError(w, status(err, http.StatusNotFound), toWireError(err, litellm.ErrorTypeModel))
+		writeError(w, toWireError(err, litellm.ErrorTypeModel))
 		return
 	}
+	// Heartbeats start before the upstream answers, which a retry waiting
+	// out a Retry-After may delay.
+	reply := newReply(w)
+	defer reply.close()
 	stream, err := client.Stream(r.Context(), req)
 	if err != nil {
-		err = upstream(err)
-		writeError(w, status(err, http.StatusBadGateway), toWireError(err, litellm.ErrorTypeProvider))
+		reply.fail(toWireError(upstream(err), litellm.ErrorTypeProvider))
 		return
 	}
 	defer stream.Close()
-
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.Header().Set("X-Accel-Buffering", "no") // keep proxies from holding the stream back
-	reply := newReply(w)
-	defer reply.close()
 	// A failed send means the caller is gone; closing the stream ends the
 	// upstream call. Any other failure, an event that does not encode
 	// included, goes to the caller.
@@ -77,8 +77,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return sendErr
 	})
 	if err != nil && sendErr == nil {
-		line, _ := json.Marshal(event{Type: "error", Error: toWireError(upstream(err), litellm.ErrorTypeProvider)}) // an error event always encodes
-		reply.send(line)
+		reply.fail(toWireError(upstream(err), litellm.ErrorTypeProvider))
 	}
 }
 
@@ -108,13 +107,15 @@ func upstream(err error) error {
 	return &litellm.Error{Type: litellm.ErrorTypeProvider, Code: e.Code, Message: "upstream key rejected: " + e.Message, Provider: e.Provider}
 }
 
-// reply writes the lines of a reply, with a heartbeat after each
-// heartbeatInterval without one.
+// reply writes the reply to a call: a refusal, or lines of events with a
+// heartbeat after each heartbeatInterval without one. The first line
+// commits the reply to 200.
 type reply struct {
 	mu     sync.Mutex
 	w      http.ResponseWriter
 	flush  func() error
 	timer  *time.Timer
+	lines  bool
 	closed bool
 }
 
@@ -134,7 +135,27 @@ func (r *reply) send(line []byte) error {
 	return r.write(line)
 }
 
+// fail ends the reply with e: a refusal while no line has gone out, else an
+// error event.
+func (r *reply) fail(e *wireError) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = true
+	r.timer.Stop()
+	if !r.lines {
+		writeError(r.w, e)
+		return
+	}
+	line, _ := json.Marshal(event{Type: "error", Error: e}) // an error event always encodes
+	r.write(line)
+}
+
 func (r *reply) write(line []byte) error {
+	if !r.lines {
+		r.lines = true
+		r.w.Header().Set("Content-Type", "application/x-ndjson")
+		r.w.Header().Set("X-Accel-Buffering", "no") // keep proxies from holding the stream back
+	}
 	if _, err := r.w.Write(append(line, '\n')); err != nil {
 		return err
 	}
@@ -160,20 +181,41 @@ func (r *reply) close() {
 	r.timer.Stop()
 }
 
-// status is the HTTP status of a call refused with err: the upstream status
-// a litellm.Error carries, or fallback.
-func status(err error, fallback int) int {
-	var e *litellm.Error
-	if errors.As(err, &e) && e.StatusCode >= 400 {
-		return e.StatusCode
+// writeError refuses a call with e, with the status of the upstream response
+// it reports or else the one its type has, and the wait it suggests.
+func writeError(w http.ResponseWriter, e *wireError) {
+	e.StatusCode = cmp.Or(e.StatusCode, statusOf(e.Type))
+	w.Header().Set("Content-Type", "application/json")
+	if e.RetryAfterMS > 0 {
+		w.Header().Set("Retry-After", strconv.FormatInt((e.RetryAfterMS+999)/1000, 10))
 	}
-	return fallback
+	w.WriteHeader(e.StatusCode)
+	json.NewEncoder(w).Encode(errorBody{e})
 }
 
-func writeError(w http.ResponseWriter, status int, e *wireError) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(errorBody{e})
+// statusOf is the status vendors refuse a call of type t with; a failure of
+// the upstream itself is a bad gateway.
+func statusOf(t litellm.ErrorType) int {
+	switch t {
+	case litellm.ErrorTypeValidation, litellm.ErrorTypeContextOverflow, litellm.ErrorTypeContentFilter:
+		return http.StatusBadRequest
+	case litellm.ErrorTypeAuth:
+		return http.StatusUnauthorized
+	case litellm.ErrorTypeQuota:
+		return http.StatusPaymentRequired
+	case litellm.ErrorTypeModel:
+		return http.StatusNotFound
+	case litellm.ErrorTypeRateLimit:
+		return http.StatusTooManyRequests
+	case litellm.ErrorTypeInternal:
+		return http.StatusInternalServerError
+	case litellm.ErrorTypeOverloaded:
+		return http.StatusServiceUnavailable
+	case litellm.ErrorTypeTimeout:
+		return http.StatusGatewayTimeout
+	default:
+		return http.StatusBadGateway
+	}
 }
 
 // errorBody is the body of a refused call.

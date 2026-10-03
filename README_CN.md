@@ -282,7 +282,7 @@ p, _ := gateway.New(gateway.Config{BaseURL: "https://gw.example.com/v1/llm", API
 
 调用途中不丢信息：请求除 key 外原样送达，块保留 State，错误保留类型、重试信息和上游 Provider。唯一的例外是上游拒绝了网关自己的厂商 key：调用方收到的是 provider 错误 "upstream key rejected"，而不是会被误认为调用方 key 有问题的 auth 错误。Server 不做认证也不做计量：在你的认证层把调用方放进请求 context，再在路由到的 Client 上挂 Observer 计量，Observer 能看到这个 context。
 
-回复是流式的，所以 Server 前面的中间件必须保持 ResponseWriter 可 Flush（实现 `http.Flusher` 或 `Unwrap`），否则 Server 拒绝调用。上游静默期间，Server 每 15 秒写一行心跳，防止中间代理切断连接，客户端会跳过它。请求体超过 `gateway.MaxRequestBytes`（64 MiB）时拒绝。调用方看不到厂商的能力，所以厂商要求 `MaxTokens` 时由 `Route` 填写。
+回复是流式的，所以 Server 前面的中间件必须保持 ResponseWriter 可 Flush（实现 `http.Flusher` 或 `Unwrap`），否则 Server 拒绝调用。上游静默期间（包括上游尚未响应时），Server 每 15 秒写一行心跳，防止中间代理切断连接，客户端会跳过它。在第一行之前被拒绝的调用（来自 `Route` 或上游），按错误给出 HTTP 状态码：有上游状态码就用它，否则按错误类型映射，例如限流为 429；错误带有等待时间时附 `Retry-After`。第一行之后的失败以错误事件的形式出现在流中。请求体超过 `gateway.MaxRequestBytes`（64 MiB）时拒绝。调用方看不到厂商的能力，所以厂商要求 `MaxTokens` 时由 `Route` 填写。
 
 ## 错误
 
@@ -348,7 +348,7 @@ observer := litellmotel.New(tracer, litellmotel.WithCaptureContent(true))
 
 ## 用量与模型目录
 
-Token 计数为普通 int，厂商未报告的计数为零。输入含缓存读写，输出含推理，明细计数是子集，例如 `CacheWrite1hTokens` 是缓存一小时的写入。`Pricing.Cost` 把未读写缓存的输入按输入价计费，因此不报告缓存计数的厂商按未缓存输入计价。一小时写入按 `CacheWrite1hCostPerToken` 计价，缺少该费率时报错。没有输入 token 的用量同样报错：每次调用都有输入，没有就说明厂商没报告，费用是未知而不是零。对长输入加价的厂商，会把这类调用的全部 token 按更高费率计费：`Pricing.Tiers` 保存这些费率（从模型列表的 `*_above_<n>k_tokens` 键和 `tiered_pricing` 表加载），`Cost` 采用输入 token 数超过的最后一档。
+Token 计数为普通 int，厂商未报告的计数为零。输入含缓存读写，输出含推理，明细计数是子集，例如 `CacheWrite1hTokens` 是缓存一小时的写入。`Pricing.Cost` 把未读写缓存的输入按输入价计费，因此不报告缓存计数的厂商按未缓存输入计价。一小时写入按 `CacheWrite1h` 计价，缺少该费率时报错。没有输入 token 的用量同样报错：每次调用都有输入，没有就说明厂商没报告，费用是未知而不是零。对长输入加价的厂商，会把这类调用的全部 token 按更高费率计费：`Pricing.Tiers` 保存这些费率（从模型列表的 `*_above_<n>k_tokens` 键和 `tiered_pricing` 表加载），`Cost` 采用输入 token 数超过的最后一档。
 
 模型目录来自 LiteLLM 的模型表，包含上下文窗口、输出上限、是否支持推理和价格，从不隐式加载远程数据：
 

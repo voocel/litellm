@@ -552,3 +552,84 @@ func TestEventThatDoesNotEncode(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A refusal has the status its type has, unless the upstream refused with
+// its own, and the wait it suggests in Retry-After.
+func TestRefusalStatus(t *testing.T) {
+	limited := litellm.NewError("gateway", litellm.ErrorTypeRateLimit, "team over budget", nil)
+	limited.RetryAfter = 1500 * time.Millisecond
+	vendor := litellm.NewError("test", litellm.ErrorTypeValidation, "bad tool schema", nil)
+	vendor.StatusCode = http.StatusUnprocessableEntity
+	for _, tc := range []struct {
+		name       string
+		route      error
+		upstream   error
+		status     int
+		retryAfter string
+	}{
+		{"route rate limit", limited, nil, http.StatusTooManyRequests, "2"},
+		{"route other error", errors.New("no such model"), nil, http.StatusNotFound, ""},
+		{"upstream status", nil, vendor, http.StatusUnprocessableEntity, ""},
+		{"upstream overloaded", nil, litellm.NewError("test", litellm.ErrorTypeOverloaded, "busy", nil), http.StatusServiceUnavailable, ""},
+		{"upstream unreachable", nil, litellm.NewNetworkError("test", "dial", errors.New("refused")), http.StatusBadGateway, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			routed, _ := litellm.New(litellmtest.New(litellmtest.Fail(tc.upstream), litellmtest.Fail(tc.upstream)))
+			srv := httptest.NewServer(&gateway.Server{Route: func(*http.Request, *litellm.Request) (*litellm.Client, error) {
+				return routed, tc.route
+			}})
+			defer srv.Close()
+			resp, err := http.Post(srv.URL, "application/json", strings.NewReader(`{"model":"m","messages":[{"role":"user","blocks":[{"type":"text","text":"hi"}]}]}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != tc.status || resp.Header.Get("Retry-After") != tc.retryAfter {
+				t.Fatalf("status = %d, Retry-After = %q", resp.StatusCode, resp.Header.Get("Retry-After"))
+			}
+
+			p, _ := gateway.New(gateway.Config{BaseURL: srv.URL})
+			client, _ := litellm.New(p)
+			_, err = client.Chat(t.Context(), ask("m"))
+			if e, ok := errors.AsType[*litellm.Error](err); !ok || e.StatusCode != tc.status {
+				t.Fatalf("err = %#v", err)
+			}
+			if tc.route == limited && (litellm.ErrorTypeOf(err) != litellm.ErrorTypeRateLimit || litellm.RetryAfter(err) != limited.RetryAfter) {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+}
+
+// Heartbeats keep the connection while the upstream is slow to answer; a
+// failure after one is an error event that keeps the error's facts.
+func TestHeartbeatBeforeUpstreamAnswers(t *testing.T) {
+	gateway.SetHeartbeatInterval(t, 5*time.Millisecond)
+	limited := litellm.NewError("test", litellm.ErrorTypeRateLimit, "slow down", nil)
+	limited.StatusCode, limited.RetryAfter = http.StatusTooManyRequests, time.Second
+	client, _ := serve(t, &late{delay: 50 * time.Millisecond, err: limited})
+	stream, err := client.Stream(t.Context(), ask("smart"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	_, err = litellm.Collect(stream)
+	if litellm.ErrorTypeOf(err) != litellm.ErrorTypeRateLimit || litellm.RetryAfter(err) != time.Second {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// late fails its Stream with err after delay.
+type late struct {
+	delay time.Duration
+	err   error
+}
+
+func (*late) Name() string { return "test" }
+func (l *late) Chat(context.Context, *litellm.Request) (*litellm.Response, error) {
+	return nil, errors.New("not used")
+}
+func (l *late) Stream(context.Context, *litellm.Request) (litellm.Stream, error) {
+	time.Sleep(l.delay)
+	return nil, l.err
+}

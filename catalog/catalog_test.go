@@ -16,10 +16,10 @@ import (
 
 func TestPricingCost(t *testing.T) {
 	price := Pricing{Rates: Rates{
-		InputCostPerToken:      0.001,
-		OutputCostPerToken:     0.002,
-		CacheReadCostPerToken:  new(0.0005),
-		CacheWriteCostPerToken: new(0.0015),
+		Input:      0.001,
+		Output:     0.002,
+		CacheRead:  new(0.0005),
+		CacheWrite: new(0.0015),
 	}}
 	cost, err := price.Cost(litellm.Usage{
 		InputTokens:      100,
@@ -76,7 +76,7 @@ func TestLoadFromReader(t *testing.T) {
 		MaxInputTokens:  128000,
 		MaxOutputTokens: 4096,
 		Reasoning:       new(true),
-		Pricing:         &Pricing{Rates: Rates{InputCostPerToken: 0.001, OutputCostPerToken: 0.002, CacheReadCostPerToken: new(0.0005)}},
+		Pricing:         &Pricing{Rates: Rates{Input: 0.001, Output: 0.002, CacheRead: new(0.0005)}},
 	}
 	if got, ok := c.Get("model-a"); !ok || !reflect.DeepEqual(got, want) {
 		t.Fatalf("model-a = %+v, ok=%v", got, ok)
@@ -125,10 +125,10 @@ func TestGetKeepsPricingSourcesSeparate(t *testing.T) {
 		name string
 		want *Pricing
 	}{
-		{"model-a", &Pricing{Rates: Rates{InputCostPerToken: 1, OutputCostPerToken: 2}}},
-		{"site-a/model-a", &Pricing{Rates: Rates{InputCostPerToken: 3, OutputCostPerToken: 4}}},
-		{"site-b/model-a", &Pricing{Rates: Rates{InputCostPerToken: 5, OutputCostPerToken: 6}}},
-		{"site-a/model-b", &Pricing{Rates: Rates{InputCostPerToken: 7, OutputCostPerToken: 8}}},
+		{"model-a", &Pricing{Rates: Rates{Input: 1, Output: 2}}},
+		{"site-a/model-a", &Pricing{Rates: Rates{Input: 3, Output: 4}}},
+		{"site-b/model-a", &Pricing{Rates: Rates{Input: 5, Output: 6}}},
+		{"site-a/model-b", &Pricing{Rates: Rates{Input: 7, Output: 8}}},
 		{"unknown/model-a", nil},
 		{"site-b/model-b", nil},
 		{"model-b", nil},
@@ -151,10 +151,10 @@ func TestLoadRejectsInvalidModelsWithoutReplacingCatalog(t *testing.T) {
 		{"empty name", Model{}, `{" ":{"mode":"chat"}}`},
 		{"input limit", Model{MaxInputTokens: -1}, `{"bad":{"mode":"chat","max_input_tokens":-1}}`},
 		{"output limit", Model{MaxOutputTokens: -1}, `{"bad":{"mode":"responses","max_output_tokens":-1}}`},
-		{"input rate", Model{Pricing: &Pricing{Rates: Rates{InputCostPerToken: -1}}}, `{"bad":{"mode":"chat","input_cost_per_token":-1,"output_cost_per_token":0}}`},
-		{"output rate", Model{Pricing: &Pricing{Rates: Rates{OutputCostPerToken: -1}}}, `{"bad":{"mode":"chat","input_cost_per_token":0,"output_cost_per_token":-1}}`},
-		{"cache read rate", Model{Pricing: &Pricing{Rates: Rates{CacheReadCostPerToken: new(-1.0)}}}, `{"bad":{"mode":"chat","input_cost_per_token":0,"output_cost_per_token":0,"cache_read_input_token_cost":-1}}`},
-		{"cache write rate", Model{Pricing: &Pricing{Rates: Rates{CacheWriteCostPerToken: new(-1.0)}}}, `{"bad":{"mode":"chat","input_cost_per_token":0,"output_cost_per_token":0,"cache_creation_input_token_cost":-1}}`},
+		{"input rate", Model{Pricing: &Pricing{Rates: Rates{Input: -1}}}, `{"bad":{"mode":"chat","input_cost_per_token":-1,"output_cost_per_token":0}}`},
+		{"output rate", Model{Pricing: &Pricing{Rates: Rates{Output: -1}}}, `{"bad":{"mode":"chat","input_cost_per_token":0,"output_cost_per_token":-1}}`},
+		{"cache read rate", Model{Pricing: &Pricing{Rates: Rates{CacheRead: new(-1.0)}}}, `{"bad":{"mode":"chat","input_cost_per_token":0,"output_cost_per_token":0,"cache_read_input_token_cost":-1}}`},
+		{"cache write rate", Model{Pricing: &Pricing{Rates: Rates{CacheWrite: new(-1.0)}}}, `{"bad":{"mode":"chat","input_cost_per_token":0,"output_cost_per_token":0,"cache_creation_input_token_cost":-1}}`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var c Catalog
@@ -248,7 +248,7 @@ func TestReasoningOwnership(t *testing.T) {
 }
 
 func TestCostUnreportedCacheAndInvalidUsage(t *testing.T) {
-	price := Pricing{Rates: Rates{InputCostPerToken: 1, OutputCostPerToken: 2, CacheReadCostPerToken: new(0.5)}}
+	price := Pricing{Rates: Rates{Input: 1, Output: 2, CacheRead: new(0.5)}}
 	for _, usage := range []litellm.Usage{
 		{InputTokens: 10, OutputTokens: 1, CacheReadTokens: 8, CacheWriteTokens: 3},
 		{InputTokens: -1, OutputTokens: 1},
@@ -266,7 +266,7 @@ func TestCostUnreportedCacheAndInvalidUsage(t *testing.T) {
 	if cost, err := price.Cost(litellm.Usage{InputTokens: 10, OutputTokens: 1}); err != nil || cost.Total != 12 {
 		t.Fatalf("unreported cache: %+v %v", cost, err)
 	}
-	price = Pricing{Rates: Rates{InputCostPerToken: 1, OutputCostPerToken: 2}}
+	price = Pricing{Rates: Rates{Input: 1, Output: 2}}
 	if cost, err := price.Cost(litellm.Usage{InputTokens: 10, OutputTokens: 2}); err != nil || cost.Total != 14 {
 		t.Fatalf("equal cache rates: %+v %v", cost, err)
 	}
@@ -274,12 +274,12 @@ func TestCostUnreportedCacheAndInvalidUsage(t *testing.T) {
 
 // Writes cached for an hour are priced at their own rate, and only at it.
 func TestCostOfHourLongCacheWrites(t *testing.T) {
-	price := Pricing{Rates: Rates{InputCostPerToken: 1, OutputCostPerToken: 2, CacheWriteCostPerToken: new(1.25), CacheWrite1hCostPerToken: new(2.0)}}
+	price := Pricing{Rates: Rates{Input: 1, Output: 2, CacheWrite: new(1.25), CacheWrite1h: new(2.0)}}
 	usage := litellm.Usage{InputTokens: 10, OutputTokens: 1, CacheWriteTokens: 8, CacheWrite1hTokens: 4}
 	if cost, err := price.Cost(usage); err != nil || cost.CacheWrite != 4*1.25+4*2 || cost.Total != 2+2+13 {
 		t.Fatalf("cost = %+v, %v", cost, err)
 	}
-	price.CacheWrite1hCostPerToken = nil
+	price.CacheWrite1h = nil
 	if _, err := price.Cost(usage); err == nil {
 		t.Fatal("priced hour-long writes without their rate")
 	}
@@ -292,11 +292,11 @@ func TestCostOfHourLongCacheWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	model, _ := c.Get("m")
-	if rate := model.Pricing.CacheWrite1hCostPerToken; rate == nil || *rate != 2 {
+	if rate := model.Pricing.CacheWrite1h; rate == nil || *rate != 2 {
 		t.Fatalf("hour-long write rate = %v", rate)
 	}
-	*model.Pricing.CacheWrite1hCostPerToken = 9
-	if again, _ := c.Get("m"); *again.Pricing.CacheWrite1hCostPerToken != 2 {
+	*model.Pricing.CacheWrite1h = 9
+	if again, _ := c.Get("m"); *again.Pricing.CacheWrite1h != 2 {
 		t.Fatal("Get exposed the catalog's hour-long write rate")
 	}
 }
@@ -304,16 +304,16 @@ func TestCostOfHourLongCacheWrites(t *testing.T) {
 func TestFreeCacheRatesAndOwnership(t *testing.T) {
 	var c Catalog
 	zero := 0.0
-	price := Pricing{Rates: Rates{InputCostPerToken: 1, OutputCostPerToken: 2, CacheReadCostPerToken: &zero, CacheWriteCostPerToken: &zero}}
+	price := Pricing{Rates: Rates{Input: 1, Output: 2, CacheRead: &zero, CacheWrite: &zero}}
 	if err := c.Set("free-cache", Model{Pricing: &price}); err != nil {
 		t.Fatal(err)
 	}
 	zero = 99
 	got, ok := c.Get("free-cache")
-	if !ok || got.Pricing.CacheReadCostPerToken == nil || *got.Pricing.CacheReadCostPerToken != 0 {
+	if !ok || got.Pricing.CacheRead == nil || *got.Pricing.CacheRead != 0 {
 		t.Fatalf("model = %+v", got)
 	}
-	*got.Pricing.CacheReadCostPerToken = 100
+	*got.Pricing.CacheRead = 100
 	usage := litellm.Usage{InputTokens: 10, OutputTokens: 2, CacheReadTokens: 6, CacheWriteTokens: 4}
 	stored, _ := c.Get("free-cache")
 	if cost, err := stored.Pricing.Cost(usage); err != nil || cost.Total != 4 || cost.CacheRead != 0 || cost.CacheWrite != 0 {
@@ -330,7 +330,7 @@ func TestFreeCacheRatesAndOwnership(t *testing.T) {
 		}
 	}
 	for _, value := range []float64{-1, math.NaN(), math.Inf(1)} {
-		if err := c.Set("bad", Model{Pricing: &Pricing{Rates: Rates{CacheReadCostPerToken: &value}}}); err == nil {
+		if err := c.Set("bad", Model{Pricing: &Pricing{Rates: Rates{CacheRead: &value}}}); err == nil {
 			t.Fatal("accepted invalid rate")
 		}
 	}
@@ -376,22 +376,22 @@ func TestLoadTiers(t *testing.T) {
 	}
 	for name, want := range map[string]*Pricing{
 		"claude": {
-			Rates: Rates{InputCostPerToken: 3e-6, OutputCostPerToken: 15e-6, CacheReadCostPerToken: new(3e-7), CacheWriteCostPerToken: new(3.75e-6), CacheWrite1hCostPerToken: new(6e-6)},
-			Tiers: []Tier{{AboveInputTokens: 200000, Rates: Rates{InputCostPerToken: 6e-6, OutputCostPerToken: 22.5e-6, CacheReadCostPerToken: new(6e-7), CacheWriteCostPerToken: new(7.5e-6), CacheWrite1hCostPerToken: new(12e-6)}}},
+			Rates: Rates{Input: 3e-6, Output: 15e-6, CacheRead: new(3e-7), CacheWrite: new(3.75e-6), CacheWrite1h: new(6e-6)},
+			Tiers: []Tier{{AboveInputTokens: 200000, Rates: Rates{Input: 6e-6, Output: 22.5e-6, CacheRead: new(6e-7), CacheWrite: new(7.5e-6), CacheWrite1h: new(12e-6)}}},
 		},
 		"coder": {
-			Rates: Rates{InputCostPerToken: 1, OutputCostPerToken: 2},
+			Rates: Rates{Input: 1, Output: 2},
 			Tiers: []Tier{
-				{AboveInputTokens: 32000, Rates: Rates{InputCostPerToken: 3, OutputCostPerToken: 2}},
-				{AboveInputTokens: 128000, Rates: Rates{InputCostPerToken: 5, OutputCostPerToken: 6}},
+				{AboveInputTokens: 32000, Rates: Rates{Input: 3, Output: 2}},
+				{AboveInputTokens: 128000, Rates: Rates{Input: 5, Output: 6}},
 			},
 		},
 		"flash": {
-			Rates: Rates{InputCostPerToken: 1, OutputCostPerToken: 2, CacheReadCostPerToken: new(0.5)},
-			Tiers: []Tier{{AboveInputTokens: 256000, Rates: Rates{InputCostPerToken: 4, OutputCostPerToken: 8}}},
+			Rates: Rates{Input: 1, Output: 2, CacheRead: new(0.5)},
+			Tiers: []Tier{{AboveInputTokens: 256000, Rates: Rates{Input: 4, Output: 8}}},
 		},
 		"no output":   nil,
-		"empty table": {Rates: Rates{InputCostPerToken: 1, OutputCostPerToken: 2}},
+		"empty table": {Rates: Rates{Input: 1, Output: 2}},
 	} {
 		if got, _ := c.Get(name); !reflect.DeepEqual(got.Pricing, want) {
 			t.Errorf("%s: pricing = %+v, want %+v", name, got.Pricing, want)
@@ -402,10 +402,10 @@ func TestLoadTiers(t *testing.T) {
 // Every token of a call above a tier's input count is priced at its rates.
 func TestPricingCostTiers(t *testing.T) {
 	price := Pricing{
-		Rates: Rates{InputCostPerToken: 1, OutputCostPerToken: 2},
+		Rates: Rates{Input: 1, Output: 2},
 		Tiers: []Tier{
-			{AboveInputTokens: 100, Rates: Rates{InputCostPerToken: 3, OutputCostPerToken: 4, CacheWrite1hCostPerToken: new(5.0)}},
-			{AboveInputTokens: 200, Rates: Rates{InputCostPerToken: 10, OutputCostPerToken: 20, CacheReadCostPerToken: new(1.0)}},
+			{AboveInputTokens: 100, Rates: Rates{Input: 3, Output: 4, CacheWrite1h: new(5.0)}},
+			{AboveInputTokens: 200, Rates: Rates{Input: 10, Output: 20, CacheRead: new(1.0)}},
 		},
 	}
 	for _, tc := range []struct {
@@ -430,21 +430,21 @@ func TestTiersAreValidatedAndOwned(t *testing.T) {
 	for _, tiers := range [][]Tier{
 		{{AboveInputTokens: 0}},
 		{{AboveInputTokens: 200}, {AboveInputTokens: 100}},
-		{{AboveInputTokens: 100, Rates: Rates{InputCostPerToken: -1}}},
+		{{AboveInputTokens: 100, Rates: Rates{Input: -1}}},
 	} {
 		if err := c.Set("bad", Model{Pricing: &Pricing{Tiers: tiers}}); err == nil {
 			t.Errorf("accepted tiers %+v", tiers)
 		}
 	}
 	rate := 1.0
-	if err := c.Set("m", Model{Pricing: &Pricing{Tiers: []Tier{{AboveInputTokens: 100, Rates: Rates{CacheReadCostPerToken: &rate}}}}}); err != nil {
+	if err := c.Set("m", Model{Pricing: &Pricing{Tiers: []Tier{{AboveInputTokens: 100, Rates: Rates{CacheRead: &rate}}}}}); err != nil {
 		t.Fatal(err)
 	}
 	rate = 2
 	got, _ := c.Get("m")
-	*got.Pricing.Tiers[0].CacheReadCostPerToken = 3
-	got.Pricing.Tiers[0].InputCostPerToken = 3
-	if again, _ := c.Get("m"); *again.Pricing.Tiers[0].CacheReadCostPerToken != 1 || again.Pricing.Tiers[0].InputCostPerToken != 0 {
+	*got.Pricing.Tiers[0].CacheRead = 3
+	got.Pricing.Tiers[0].Input = 3
+	if again, _ := c.Get("m"); *again.Pricing.Tiers[0].CacheRead != 1 || again.Pricing.Tiers[0].Input != 0 {
 		t.Fatalf("tier = %+v", again.Pricing.Tiers[0])
 	}
 }

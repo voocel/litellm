@@ -58,13 +58,13 @@ type Pricing struct {
 
 // Rates are per-token rates. A nil cache rate inherits the input rate; a
 // non-nil zero means free cache usage. Writes cached for an hour are priced
-// at CacheWrite1hCostPerToken alone, since vendors charge more for them.
+// at CacheWrite1h alone, since vendors charge more for them.
 type Rates struct {
-	InputCostPerToken        float64  `json:"input_cost_per_token"`
-	OutputCostPerToken       float64  `json:"output_cost_per_token"`
-	CacheReadCostPerToken    *float64 `json:"cache_read_input_token_cost,omitempty"`
-	CacheWriteCostPerToken   *float64 `json:"cache_creation_input_token_cost,omitempty"`
-	CacheWrite1hCostPerToken *float64 `json:"cache_creation_input_token_cost_above_1hr,omitempty"`
+	Input        float64  `json:"input_cost_per_token"`
+	Output       float64  `json:"output_cost_per_token"`
+	CacheRead    *float64 `json:"cache_read_input_token_cost,omitempty"`
+	CacheWrite   *float64 `json:"cache_creation_input_token_cost,omitempty"`
+	CacheWrite1h *float64 `json:"cache_creation_input_token_cost_above_1hr,omitempty"`
 }
 
 // rateNames are the list keys of Rates; a tier's keys add a suffix, as in
@@ -295,7 +295,7 @@ func (e listEntry) tieredPricing() *Pricing {
 	var pricing Pricing
 	for i, t := range tiers {
 		output := cmp.Or(t.Output, e.Output)
-		rates := Rates{InputCostPerToken: *t.Input, OutputCostPerToken: *output, CacheReadCostPerToken: t.CacheRead, CacheWriteCostPerToken: t.CacheWrite}
+		rates := Rates{Input: *t.Input, Output: *output, CacheRead: t.CacheRead, CacheWrite: t.CacheWrite}
 		if i == 0 {
 			pricing.Rates = rates
 		} else {
@@ -328,22 +328,22 @@ func (p Pricing) Cost(usage litellm.Usage) (Cost, error) {
 			r = tier.Rates
 		}
 	}
-	if cacheWrite1h > 0 && r.CacheWrite1hCostPerToken == nil {
+	if cacheWrite1h > 0 && r.CacheWrite1h == nil {
 		return Cost{}, fmt.Errorf("catalog: no rate for cache writes kept an hour")
 	}
-	cacheReadRate, cacheWriteRate := r.InputCostPerToken, r.InputCostPerToken
-	if r.CacheReadCostPerToken != nil {
-		cacheReadRate = *r.CacheReadCostPerToken
+	cacheReadRate, cacheWriteRate := r.Input, r.Input
+	if r.CacheRead != nil {
+		cacheReadRate = *r.CacheRead
 	}
-	if r.CacheWriteCostPerToken != nil {
-		cacheWriteRate = *r.CacheWriteCostPerToken
+	if r.CacheWrite != nil {
+		cacheWriteRate = *r.CacheWrite
 	}
-	inputCost := float64(in-cacheRead-cacheWrite) * r.InputCostPerToken
-	outputCost := float64(out) * r.OutputCostPerToken
+	inputCost := float64(in-cacheRead-cacheWrite) * r.Input
+	outputCost := float64(out) * r.Output
 	cacheReadCost := float64(cacheRead) * cacheReadRate
 	cacheWriteCost := float64(cacheWrite-cacheWrite1h) * cacheWriteRate
 	if cacheWrite1h > 0 {
-		cacheWriteCost += float64(cacheWrite1h) * *r.CacheWrite1hCostPerToken
+		cacheWriteCost += float64(cacheWrite1h) * *r.CacheWrite1h
 	}
 	return Cost{
 		Input:      inputCost,
@@ -390,9 +390,9 @@ func (r Rates) validate() error {
 		name  string
 		value *float64
 	}{
-		{"input", &r.InputCostPerToken}, {"output", &r.OutputCostPerToken},
-		{"cache read", r.CacheReadCostPerToken}, {"cache write", r.CacheWriteCostPerToken},
-		{"hour-long cache write", r.CacheWrite1hCostPerToken},
+		{"input", &r.Input}, {"output", &r.Output},
+		{"cache read", r.CacheRead}, {"cache write", r.CacheWrite},
+		{"hour-long cache write", r.CacheWrite1h},
 	} {
 		if rate.value != nil && (*rate.value < 0 || math.IsNaN(*rate.value) || math.IsInf(*rate.value, 0)) {
 			return fmt.Errorf("%s cost per token must be finite and non-negative", rate.name)
@@ -420,9 +420,9 @@ func (m Model) clone() Model {
 }
 
 func (r Rates) clone() Rates {
-	r.CacheReadCostPerToken = copyRate(r.CacheReadCostPerToken)
-	r.CacheWriteCostPerToken = copyRate(r.CacheWriteCostPerToken)
-	r.CacheWrite1hCostPerToken = copyRate(r.CacheWrite1hCostPerToken)
+	r.CacheRead = copyRate(r.CacheRead)
+	r.CacheWrite = copyRate(r.CacheWrite)
+	r.CacheWrite1h = copyRate(r.CacheWrite1h)
 	return r
 }
 
