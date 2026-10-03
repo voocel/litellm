@@ -84,6 +84,25 @@ func TestStreamEvents(t *testing.T) {
 			},
 		},
 		{
+			// Ollama sends each parallel call whole, all at index 0.
+			name:  "a new id at an index in use starts another call",
+			newFn: plain,
+			chunks: []string{
+				`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"f","arguments":"{}"}}]}}]}`,
+				`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"arguments":""}}]}}]}`,
+				`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"b","function":{"name":"g","arguments":"{\"x\":1}"}}]}}]}`,
+			},
+			want: []litellm.Event{
+				litellm.BlockStart{Index: 0, Block: litellm.ToolUseBlock{ID: "a", Name: "f"}},
+				litellm.ToolUseDelta{Index: 0, Arguments: "{}"},
+				litellm.BlockStart{Index: 1, Block: litellm.ToolUseBlock{ID: "b", Name: "g"}},
+				litellm.ToolUseDelta{Index: 1, Arguments: `{"x":1}`},
+				litellm.BlockEnd{Index: 0, Block: litellm.ToolUseBlock{ID: "a", Name: "f"}},
+				litellm.BlockEnd{Index: 1, Block: litellm.ToolUseBlock{ID: "b", Name: "g"}},
+				done,
+			},
+		},
+		{
 			name:  "refusal ends with a safety finish",
 			newFn: plain,
 			chunks: []string{

@@ -282,7 +282,7 @@ p, _ := gateway.New(gateway.Config{BaseURL: "https://gw.example.com/v1/llm", API
 
 Calls keep everything on the way: the request whole but for the key, blocks with their state, and errors with their type, retry facts and upstream provider. The upstream rejecting the gateway's own vendor key is the exception: it reaches the caller as a provider error, "upstream key rejected", rather than an auth error, which would blame the caller's key. The Server neither authenticates nor meters: put the caller on the request context in your authentication, and meter with an Observer on the routed Clients, which see that context.
 
-While the upstream is silent, the Server writes a heartbeat line every 15 seconds, which keeps proxies from cutting the connection and which the client skips. It refuses request bodies over `gateway.MaxRequestBytes` (64 MiB). The caller cannot see the vendor's capabilities, so `Route` sets `MaxTokens` where the vendor requires it.
+Replies stream, so middleware in front of the Server must keep the ResponseWriter flushable, by implementing `http.Flusher` or `Unwrap`; the Server refuses calls otherwise. While the upstream is silent, the Server writes a heartbeat line every 15 seconds, which keeps proxies from cutting the connection and which the client skips. It refuses request bodies over `gateway.MaxRequestBytes` (64 MiB). The caller cannot see the vendor's capabilities, so `Route` sets `MaxTokens` where the vendor requires it.
 
 ## Errors
 

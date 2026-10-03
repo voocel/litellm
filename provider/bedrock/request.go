@@ -49,7 +49,7 @@ func buildRequest(req *litellm.Request, provider string) ([]byte, error) {
 		return nil, err
 	}
 	out := &request{InferenceConfig: convertInference(req)}
-	if err := convertMessages(out, req.Messages, provider); err != nil {
+	if err := convertMessages(out, req.Messages, provider, req.Model); err != nil {
 		return nil, err
 	}
 	if thinking := claude.Thinking(req.Thinking); thinking != nil {
@@ -112,13 +112,16 @@ func hasToolBlocks(messages []litellm.Message) bool {
 	return false
 }
 
-func convertMessages(out *request, messages []litellm.Message, provider string) error {
+func convertMessages(out *request, messages []litellm.Message, provider, model string) error {
 	for i, msg := range messages {
 		if msg.Role == litellm.RoleSystem {
 			for _, block := range msg.Blocks {
 				text, ok := block.(litellm.TextBlock)
 				if !ok {
 					return fmt.Errorf("messages[%d]: system only supports text blocks, got %T", i, block)
+				}
+				if text.Text == "" {
+					continue // an empty text block has no content member
 				}
 				out.System = append(out.System, content{Text: text.Text})
 				if text.Cache != nil {
@@ -127,7 +130,7 @@ func convertMessages(out *request, messages []litellm.Message, provider string) 
 			}
 			continue
 		}
-		blocks, err := convertBlocks(msg.Blocks, provider)
+		blocks, err := convertBlocks(msg.Blocks, provider, model)
 		if err != nil {
 			return fmt.Errorf("messages[%d]: %w", i, err)
 		}
@@ -150,7 +153,7 @@ func convertMessages(out *request, messages []litellm.Message, provider string) 
 
 // convertBlocks maps blocks; a cache breakpoint becomes a cachePoint after
 // its block.
-func convertBlocks(blocks []litellm.Block, provider string) ([]content, error) {
+func convertBlocks(blocks []litellm.Block, provider, model string) ([]content, error) {
 	out := make([]content, 0, len(blocks))
 	for _, block := range blocks {
 		var c content
@@ -168,9 +171,11 @@ func convertBlocks(blocks []litellm.Block, provider string) ([]content, error) {
 			}
 			c, cache = content{Image: img}, b.Cache
 		case litellm.ReasoningBlock:
-			// Reasoning from elsewhere lacks the signature models require.
+			// Reasoning from elsewhere lacks the signature models require,
+			// including that of another model: one provider serves models of
+			// every family, which reject each other's reasoning.
 			state, ok := wire.ReadState[reasoningState](b.State, provider)
-			if !ok {
+			if !ok || b.State.Model != model {
 				continue
 			}
 			c = content{ReasoningContent: &reasoningContent{ReasoningText: &reasoningText{Text: b.Text, Signature: state.Signature}}}
@@ -195,6 +200,9 @@ func convertBlocks(blocks []litellm.Block, provider string) ([]content, error) {
 			for _, child := range b.Content {
 				switch child := child.(type) {
 				case litellm.TextBlock:
+					if child.Text == "" {
+						continue // as for message text
+					}
 					result.Content = append(result.Content, content{Text: child.Text})
 				case litellm.ImageBlock:
 					img, err := convertImage(child)

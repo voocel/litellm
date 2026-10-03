@@ -33,6 +33,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, &wireError{Type: litellm.ErrorTypeValidation, Message: "method not allowed", Provider: "gateway"})
 		return
 	}
+	if !canFlush(w) {
+		writeError(w, http.StatusInternalServerError, &wireError{Type: litellm.ErrorTypeInternal, Provider: "gateway",
+			Message: "the ResponseWriter cannot flush, so a reply cannot stream: a middleware's ResponseWriter must implement http.Flusher or Unwrap"})
+		return
+	}
 	var req litellm.Request
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxRequestBytes)).Decode(&req); err != nil {
 		code := http.StatusBadRequest
@@ -60,14 +65,35 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	reply := newReply(w)
 	defer reply.close()
 	// A failed send means the caller is gone; closing the stream ends the
-	// upstream call.
+	// upstream call. Any other failure, an event that does not encode
+	// included, goes to the caller.
 	var sendErr error
 	_, err = litellm.Handle(stream, func(ev litellm.Event) error {
-		sendErr = reply.send(toEvent(ev))
+		line, err := json.Marshal(toEvent(ev))
+		if err != nil {
+			return err
+		}
+		sendErr = reply.send(line)
 		return sendErr
 	})
 	if err != nil && sendErr == nil {
-		reply.send(event{Type: "error", Error: toWireError(upstream(err), litellm.ErrorTypeProvider)})
+		line, _ := json.Marshal(event{Type: "error", Error: toWireError(upstream(err), litellm.ErrorTypeProvider)}) // an error event always encodes
+		reply.send(line)
+	}
+}
+
+// canFlush reports whether w, or a ResponseWriter it unwraps to, can flush,
+// as http.ResponseController looks for it.
+func canFlush(w http.ResponseWriter) bool {
+	for {
+		switch t := w.(type) {
+		case http.Flusher, interface{ FlushError() error }:
+			return true
+		case interface{ Unwrap() http.ResponseWriter }:
+			w = t.Unwrap()
+		default:
+			return false
+		}
 	}
 }
 
@@ -86,25 +112,30 @@ func upstream(err error) error {
 // heartbeatInterval without one.
 type reply struct {
 	mu     sync.Mutex
-	enc    *json.Encoder
+	w      http.ResponseWriter
 	flush  func() error
 	timer  *time.Timer
 	closed bool
 }
 
 func newReply(w http.ResponseWriter) *reply {
-	r := &reply{enc: json.NewEncoder(w), flush: http.NewResponseController(w).Flush}
+	r := &reply{w: w, flush: http.NewResponseController(w).Flush}
 	r.mu.Lock() // a heartbeat waits for the timer to be set
 	defer r.mu.Unlock()
 	r.timer = time.AfterFunc(heartbeatInterval, r.heartbeat)
 	return r
 }
 
-func (r *reply) send(e event) error {
+// send writes line, an encoded event, and flushes it.
+func (r *reply) send(line []byte) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.timer.Reset(heartbeatInterval)
-	if err := r.enc.Encode(e); err != nil {
+	return r.write(line)
+}
+
+func (r *reply) write(line []byte) error {
+	if _, err := r.w.Write(append(line, '\n')); err != nil {
 		return err
 	}
 	return r.flush()
@@ -117,9 +148,7 @@ func (r *reply) heartbeat() {
 	if r.closed {
 		return
 	}
-	if r.enc.Encode(event{Type: heartbeat}) == nil {
-		r.flush()
-	}
+	r.write([]byte(`{"type":"` + heartbeat + `"}`))
 	r.timer.Reset(heartbeatInterval)
 }
 

@@ -8,6 +8,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 type testProvider struct {
@@ -433,5 +434,69 @@ func TestLaterUsageReplacesEarlier(t *testing.T) {
 	}
 	if got := collector.Response().Usage; got != (Usage{OutputTokens: 2}) {
 		t.Fatalf("usage = %+v, want the last snapshot", got)
+	}
+}
+
+// causeStream fails as net/http does once its context ends: with the
+// context's cause, which need not be context.Canceled.
+type causeStream struct{ ctx context.Context }
+
+func (s causeStream) Next() (Event, error) {
+	<-s.ctx.Done()
+	return nil, NewNetworkError("test", "stream read error", context.Cause(s.ctx))
+}
+
+func (s causeStream) Close() error { return nil }
+
+// A call the caller's context ends is canceled or timed out, and not
+// temporary, whatever error the request failed with.
+func TestCallEndedByTheCallersContext(t *testing.T) {
+	provider := &testProvider{
+		name: "test",
+		chatFunc: func(ctx context.Context, _ *Request) (*Response, error) {
+			_, err := causeStream{ctx}.Next()
+			return nil, err
+		},
+		streamFunc: func(ctx context.Context, _ *Request) (Stream, error) { return causeStream{ctx}, nil },
+	}
+	client, err := New(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := errors.New("user stopped")
+	for _, tc := range []struct {
+		name string
+		ctx  func() (context.Context, context.CancelFunc)
+		want ErrorType
+		is   error
+	}{
+		{"canceled with a cause", func() (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancelCause(context.Background())
+			cancel(stop)
+			return ctx, func() {}
+		}, ErrorTypeCanceled, context.Canceled},
+		{"timed out with a cause", func() (context.Context, context.CancelFunc) {
+			return context.WithTimeoutCause(context.Background(), time.Millisecond, stop)
+		}, ErrorTypeTimeout, context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			check := func(err error) {
+				t.Helper()
+				if ErrorTypeOf(err) != tc.want || IsTemporaryError(err) || !errors.Is(err, tc.is) || !errors.Is(err, stop) {
+					t.Fatalf("err = %v (type %q, temporary %v)", err, ErrorTypeOf(err), IsTemporaryError(err))
+				}
+			}
+			ctx, cancel := tc.ctx()
+			defer cancel()
+			_, err := client.Chat(ctx, Request{Model: "m", Messages: hi})
+			check(err)
+			stream, err := client.Stream(ctx, Request{Model: "m", Messages: hi})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stream.Close()
+			_, err = Collect(stream)
+			check(err)
+		})
 	}
 }

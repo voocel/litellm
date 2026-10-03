@@ -146,7 +146,7 @@ func TestBuildRequest(t *testing.T) {
 					litellm.Assistant(litellm.ToolUseBlock{ID: "t1", Name: "f"}, litellm.ToolUseBlock{ID: "t2", Name: "f"}),
 					litellm.ToolResultText("t1", "one"),
 					{Role: litellm.RoleTool, Blocks: []litellm.Block{litellm.ToolResultBlock{ToolUseID: "t2", IsError: true, Content: []litellm.Block{litellm.Text("boom")}}}},
-					{Role: litellm.RoleTool, Blocks: []litellm.Block{litellm.ToolResultBlock{ToolUseID: "t3"}}},
+					litellm.ToolResultText("t3", ""),
 				}
 			},
 			want: map[string]string{"messages": `[
@@ -163,6 +163,15 @@ func TestBuildRequest(t *testing.T) {
 				r.Messages = []litellm.Message{litellm.User(litellm.TextBlock{Text: "doc", Cache: &litellm.CacheControl{}}, litellm.Text("question"))}
 			},
 			want: map[string]string{"messages": `[{"role":"user","content":[{"text":"doc"},{"cachePoint":{"type":"default"}},{"text":"question"}]}]`},
+		},
+		{
+			// Content blocks are unions: an empty text would leave one with no
+			// member, which Converse rejects.
+			name: "empty system text is left out",
+			req: func(r *litellm.Request) {
+				r.Messages = []litellm.Message{litellm.System(""), litellm.UserText("hi")}
+			},
+			want: map[string]string{"system": ""},
 		},
 		{
 			name: "cache points carry their TTL",
@@ -205,6 +214,7 @@ func TestBuildRequest(t *testing.T) {
 					litellm.ReasoningBlock{State: testState(`{"redactedContent":"b3BhcXVl"}`)},
 					litellm.ReasoningBlock{Text: "plain", State: testState(`{}`)},
 					litellm.ReasoningBlock{Text: "foreign", State: &litellm.ProviderState{Provider: "anthropic", Data: json.RawMessage(`{"type":"thinking","signature":"a"}`)}},
+					litellm.ReasoningBlock{Text: "other model", State: &litellm.ProviderState{Provider: "bedrock", Model: "openai.gpt-oss", Data: json.RawMessage(`{"signature":"o"}`)}},
 					litellm.ReasoningBlock{Text: "unsigned"},
 					litellm.Text("answer"),
 				), litellm.Assistant(litellm.ReasoningBlock{Text: "only foreign"}), litellm.UserText("next")}

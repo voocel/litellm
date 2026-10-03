@@ -314,6 +314,10 @@ func convertCache(cache *litellm.CacheControl) *cacheControl {
 func convertImage(block litellm.ImageBlock) (*imageSource, error) {
 	switch {
 	case block.URL != "":
+		// The url source takes hosted images only.
+		if mime, data, ok := wire.ParseDataURL(block.URL); ok {
+			return &imageSource{Type: "base64", MediaType: mime, Data: data}, nil
+		}
 		return &imageSource{Type: "url", URL: block.URL}, nil
 	case len(block.Data) > 0:
 		if block.MIME == "" {

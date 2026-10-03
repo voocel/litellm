@@ -127,7 +127,7 @@ func callStatus(err error) CallStatus {
 	if errors.Is(err, context.DeadlineExceeded) || ErrorTypeOf(err) == ErrorTypeTimeout {
 		return CallFailed
 	}
-	if errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) || ErrorTypeOf(err) == ErrorTypeCanceled {
 		return CallCanceled
 	}
 	if err != nil {
@@ -140,6 +140,7 @@ type observedStream struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	call     *callObservation
+	provider string
 	inner    Stream
 	closed   bool
 	closeErr error
@@ -163,6 +164,7 @@ func (s *observedStream) Next() (Event, error) {
 	}
 	event, err := s.inner.Next()
 	if err != nil {
+		err = endedBy(s.ctx, s.provider, err)
 		s.finish(callStatus(err), err)
 		return nil, err
 	}

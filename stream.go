@@ -147,8 +147,7 @@ func (s *validatedStream) Next() (Event, error) {
 		return nil, NewError(s.provider, ErrorTypeInternal, "stream returned nil event without error", nil)
 	}
 	event, done, err := s.state.Apply(event)
-	if err == nil && done {
-		err = validateResponse(&Response{Blocks: s.state.blocks, Provider: s.state.provider, Model: s.state.model}, s.provider, s.state.model)
+	if done {
 		s.state.warnings = append(s.state.warnings, malformedToolArgumentWarnings(s.state.blocks, s.provider)...)
 	}
 	if err != nil {
@@ -228,13 +227,7 @@ func Handle(stream Stream, fn func(Event) error) (*Response, error) {
 			}
 		}
 		if done {
-			resp := state.Response()
-			if !validated {
-				if err := validateResponse(resp, resp.Provider, resp.Model); err != nil {
-					return resp, err
-				}
-			}
-			return resp, nil
+			return state.Response(), nil
 		}
 	}
 }
@@ -303,15 +296,20 @@ func (c *collector) Apply(event Event) (Event, bool, error) {
 				return nil, false, fmt.Errorf("stream completed with block %d still open", i)
 			}
 		}
-		c.done = true
-		c.finish = e.FinishReason
-		c.finishRaw = e.FinishReasonRaw
 		if e.Provider != "" {
 			c.provider = e.Provider
 		}
 		if e.Model != "" {
 			c.model = e.Model
 		}
+		// The reply is checked before it counts as complete, so that a stream
+		// failing here never reads as done.
+		if err := validateResponse(&Response{Blocks: c.blocks, Provider: c.provider, Model: c.model}, c.provider, c.model); err != nil {
+			return nil, false, err
+		}
+		c.done = true
+		c.finish = e.FinishReason
+		c.finishRaw = e.FinishReasonRaw
 		return event, true, nil
 	default:
 		return nil, false, fmt.Errorf("unknown stream event %T", event)

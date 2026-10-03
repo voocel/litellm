@@ -63,7 +63,7 @@ The replay rule is the same for every adapter: portable content (text, reasoning
 | Provider | `State.Data` | Reasoning from elsewhere |
 | --- | --- | --- |
 | Anthropic | thinking: `{"type":"thinking","signature":…}`, redacted: `{"type":"redacted_thinking","data":…}` | dropped: thinking needs a Claude signature |
-| Bedrock | `{"signature":…}` or `{"redactedContent":…}`, `{}` when unsigned | dropped |
+| Bedrock | `{"signature":…}` or `{"redactedContent":…}`, `{}` when unsigned | dropped, as is reasoning from another Bedrock model: model families reject each other's |
 | Gemini | `{"thoughtSignature":…}` on text, thought and function call blocks | sent as an unsigned thought |
 | OpenAI Responses | reasoning: the `reasoning` item; text: `{"id":…,"phase":…}`; tool calls: `{"id":…}` | dropped: an input reasoning item needs its API-assigned id |
 | MiniMax, OpenRouter | reasoning: the merged `reasoning_details` array | `Text` goes to the text reasoning field |

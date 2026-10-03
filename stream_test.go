@@ -119,7 +119,7 @@ func TestCollectorRejectsLifecycleViolations(t *testing.T) {
 
 func TestCollectorRejectsEventsAfterDone(t *testing.T) {
 	collector := newCollector()
-	if _, done, err := collector.Apply(DoneEvent{}); !done || err != nil {
+	if _, done, err := collector.Apply(DoneEvent{Provider: "test", Model: "m"}); !done || err != nil {
 		t.Fatalf("done=%v err=%v", done, err)
 	}
 	if _, _, err := collector.Apply(BlockStart{Index: 0, Block: TextBlock{}}); err == nil || !strings.Contains(err.Error(), "after Done") {
@@ -336,4 +336,30 @@ func BenchmarkCollectorText(b *testing.B) {
 
 func testState(data string) *ProviderState {
 	return &ProviderState{Provider: "test", Data: json.RawMessage(data)}
+}
+
+// A reply that fails its check at Done never completes: Handle's callback
+// does not see its DoneEvent, and collecting it again is no success.
+func TestInvalidReplyNeverCompletes(t *testing.T) {
+	events := func() []Event {
+		return []Event{BlockStart{Index: 0, Block: ToolUseBlock{Name: "t"}}, BlockEnd{Index: 0}, DoneEvent{Provider: "test", Model: "m"}}
+	}
+	for name, stream := range map[string]Stream{
+		"external": &testStream{events: events()},
+		"client":   newValidatedStream("test", "m", &testStream{events: events()}),
+	} {
+		sawDone := false
+		_, err := Handle(stream, func(e Event) error {
+			if _, ok := e.(DoneEvent); ok {
+				sawDone = true
+			}
+			return nil
+		})
+		if err == nil || sawDone {
+			t.Fatalf("%s: err = %v, saw Done = %v", name, err, sawDone)
+		}
+		if _, err := Collect(stream); err == nil {
+			t.Fatalf("%s: collected again without error", name)
+		}
+	}
 }

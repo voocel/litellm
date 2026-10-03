@@ -436,3 +436,71 @@ func (w *waiting) Next() (litellm.Event, error) {
 	return nil, w.ctx.Err()
 }
 func (w *waiting) Close() error { return nil }
+
+// recorder stands for logging middleware: its ResponseWriter hides the
+// Flush of the one it wraps, unless it unwraps to it.
+type recorder struct{ http.ResponseWriter }
+
+type unwrapping struct{ recorder }
+
+func (u unwrapping) Unwrap() http.ResponseWriter { return u.ResponseWriter }
+
+// A reply streams through middleware whose ResponseWriter unwraps to one that
+// flushes. Behind one that cannot flush, the Server refuses before calling
+// the upstream, rather than cut every reply short.
+func TestServeBehindMiddleware(t *testing.T) {
+	for name, tc := range map[string]struct {
+		wrap func(http.ResponseWriter) http.ResponseWriter
+		ok   bool
+	}{
+		"unwraps":     {func(w http.ResponseWriter) http.ResponseWriter { return unwrapping{recorder{w}} }, true},
+		"hides flush": {func(w http.ResponseWriter) http.ResponseWriter { return recorder{w} }, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			upstream := litellmtest.New(litellmtest.Text("hi"))
+			routed, err := litellm.New(upstream)
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv := &gateway.Server{Route: func(*http.Request, *litellm.Request) (*litellm.Client, error) { return routed, nil }}
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { srv.ServeHTTP(tc.wrap(w), r) }))
+			defer ts.Close()
+			p, err := gateway.New(gateway.Config{BaseURL: ts.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			client, err := litellm.New(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := client.Chat(t.Context(), ask("m"))
+			if tc.ok && (err != nil || resp.Text() != "hi") {
+				t.Fatalf("resp = %+v, err = %v", resp, err)
+			}
+			if !tc.ok && (err == nil || !strings.Contains(err.Error(), "cannot flush") || len(upstream.Requests()) != 0) {
+				t.Fatalf("err = %v, upstream requests = %d", err, len(upstream.Requests()))
+			}
+		})
+	}
+}
+
+// broken streams a vendor event that does not encode.
+type broken struct{}
+
+func (broken) Name() string { return "test" }
+func (broken) Chat(context.Context, *litellm.Request) (*litellm.Response, error) {
+	return nil, errors.New("not used")
+}
+func (broken) Stream(context.Context, *litellm.Request) (litellm.Stream, error) {
+	return &script{events: []litellm.Event{litellm.ProviderEvent{Name: "x", Raw: json.RawMessage("{")}}}, nil
+}
+
+// An event the Server cannot encode fails the call, rather than read as the
+// caller having gone.
+func TestEventThatDoesNotEncode(t *testing.T) {
+	client, _ := serve(t, broken{})
+	_, err := client.Chat(t.Context(), ask("smart"))
+	if err == nil || strings.Contains(err.Error(), "before Done") {
+		t.Fatalf("err = %v", err)
+	}
+}

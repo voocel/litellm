@@ -2,6 +2,7 @@ package litellm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -94,7 +95,7 @@ func (c *Client) Chat(ctx context.Context, req Request) (*Response, error) {
 	}
 	resp, err := c.provider.Chat(ctx, prepared)
 	if err != nil {
-		err = WrapError(c.provider.Name(), ErrorTypeProvider, err)
+		err = endedBy(ctx, c.provider.Name(), WrapError(c.provider.Name(), ErrorTypeProvider, err))
 	}
 	if err == nil {
 		err = validateResponse(resp, c.provider.Name(), prepared.Model)
@@ -128,7 +129,7 @@ func (c *Client) Stream(ctx context.Context, req Request) (Stream, error) {
 	}
 	stream, err := c.provider.Stream(streamCtx, prepared)
 	if err != nil {
-		err = WrapError(c.provider.Name(), ErrorTypeProvider, err)
+		err = endedBy(streamCtx, c.provider.Name(), WrapError(c.provider.Name(), ErrorTypeProvider, err))
 	} else if stream == nil {
 		err = NewError(c.provider.Name(), ErrorTypeInternal, "provider returned nil stream without error", nil)
 	}
@@ -138,7 +139,26 @@ func (c *Client) Stream(ctx context.Context, req Request) (Stream, error) {
 		return nil, err
 	}
 	stream = newValidatedStream(c.provider.Name(), prepared.Model, stream)
-	return &observedStream{ctx: streamCtx, cancel: cancel, call: call, inner: stream}, nil
+	return &observedStream{ctx: streamCtx, cancel: cancel, call: call, provider: c.provider.Name(), inner: stream}, nil
+}
+
+// endedBy is err as the caller sees it once ctx has ended: the call was
+// canceled or ran out of time, whatever err says. A request fails with the
+// cause its context ended with, which need not be context.Canceled.
+func endedBy(ctx context.Context, provider string, err error) error {
+	ended := ctx.Err()
+	if ended == nil || isContextError(err) {
+		return err
+	}
+	message := err.Error()
+	if e, ok := errors.AsType[*Error](err); ok {
+		message = e.Message
+	}
+	cause := context.Cause(ctx)
+	if cause != ended {
+		cause = fmt.Errorf("%w: %w", ended, cause)
+	}
+	return NewNetworkError(provider, message, cause)
 }
 
 func prepareRequest(req Request) (*Request, error) {

@@ -282,7 +282,7 @@ p, _ := gateway.New(gateway.Config{BaseURL: "https://gw.example.com/v1/llm", API
 
 调用途中不丢信息：请求除 key 外原样送达，块保留 State，错误保留类型、重试信息和上游 Provider。唯一的例外是上游拒绝了网关自己的厂商 key：调用方收到的是 provider 错误 "upstream key rejected"，而不是会被误认为调用方 key 有问题的 auth 错误。Server 不做认证也不做计量：在你的认证层把调用方放进请求 context，再在路由到的 Client 上挂 Observer 计量，Observer 能看到这个 context。
 
-上游静默期间，Server 每 15 秒写一行心跳，防止中间代理切断连接，客户端会跳过它。请求体超过 `gateway.MaxRequestBytes`（64 MiB）时拒绝。调用方看不到厂商的能力，所以厂商要求 `MaxTokens` 时由 `Route` 填写。
+回复是流式的，所以 Server 前面的中间件必须保持 ResponseWriter 可 Flush（实现 `http.Flusher` 或 `Unwrap`），否则 Server 拒绝调用。上游静默期间，Server 每 15 秒写一行心跳，防止中间代理切断连接，客户端会跳过它。请求体超过 `gateway.MaxRequestBytes`（64 MiB）时拒绝。调用方看不到厂商的能力，所以厂商要求 `MaxTokens` 时由 `Route` 填写。
 
 ## 错误
 

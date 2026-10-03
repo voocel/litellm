@@ -12,7 +12,7 @@ import (
 )
 
 // Chat Completions has no block index: a choice carries at most one reasoning
-// run and one text run, and tool calls are keyed by their own index.
+// run and one text run, and tool calls are numbered as they start.
 type blockKey struct {
 	kind int
 	call int
@@ -41,7 +41,10 @@ type stream struct {
 	finishRaw string
 	refused   bool
 	blocks    wire.BlockTracker[blockKey]
-	tools     map[int]*toolState
+	// tools holds the calls by number; callAt numbers the call at each
+	// vendor index.
+	tools  map[int]*toolState
+	callAt map[int]int
 	// details accumulates reasoning_details, delivered when the block ends.
 	details     []map[string]json.RawMessage
 	logprobs    *chatLogprobs
@@ -57,6 +60,7 @@ func newStream(resp *http.Response, req *litellm.Request, name string, spec Spec
 		requested: req.Model,
 		model:     req.Model,
 		tools:     make(map[int]*toolState),
+		callAt:    make(map[int]int),
 	}
 }
 
@@ -190,16 +194,23 @@ func (s *stream) tool(events []litellm.Event, position int, call toolCallDelta) 
 	if call.Index != nil {
 		index = *call.Index
 	}
-	key := blockKey{kind: toolKind, call: index}
-	state := s.tools[index]
-	if state == nil {
+	n, ok := s.callAt[index]
+	// Another id at the same index starts another call: Ollama sends each
+	// parallel call whole, all at index 0.
+	if ok && call.ID != "" && s.tools[n].id != "" && call.ID != s.tools[n].id {
+		ok = false
+	}
+	if !ok {
 		if call.ID == "" && call.Function.Name == "" && call.Function.Arguments == "" {
 			return events
 		}
-		state = &toolState{id: call.ID, name: call.Function.Name}
-		s.tools[index] = state
-		events, _ = s.blocks.Open(events, key, litellm.ToolUseBlock{ID: call.ID, Name: call.Function.Name})
+		n = len(s.tools)
+		s.callAt[index] = n
+		s.tools[n] = &toolState{id: call.ID, name: call.Function.Name}
+		events, _ = s.blocks.Open(events, blockKey{kind: toolKind, call: n}, litellm.ToolUseBlock{ID: call.ID, Name: call.Function.Name})
 	}
+	key := blockKey{kind: toolKind, call: n}
+	state := s.tools[n]
 	// Some gateways send the id or name after the opening chunk.
 	if state.id == "" {
 		state.id = call.ID
@@ -240,6 +251,7 @@ func (s *stream) closeAll(events []litellm.Event) []litellm.Event {
 		return nil
 	})
 	clear(s.tools)
+	clear(s.callAt)
 	s.details = nil
 	s.logprobs = nil
 	s.annotations = nil

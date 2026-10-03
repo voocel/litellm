@@ -101,10 +101,12 @@ func TestBuildRequest(t *testing.T) {
 		},
 		{
 			name: "images",
-			req:  withMessages(litellm.User(litellm.ImageURL("https://x.test/a.png"), litellm.ImageBlock{Data: []byte("png"), MIME: "image/png"})),
+			req: withMessages(litellm.User(litellm.ImageURL("https://x.test/a.png"), litellm.ImageBlock{Data: []byte("png"), MIME: "image/png"},
+				litellm.ImageURL("data:image/jpeg;base64,anBn"))),
 			want: map[string]string{"messages": `[{"role":"user","content":[
 				{"type":"image","source":{"type":"url","url":"https://x.test/a.png"}},
-				{"type":"image","source":{"type":"base64","media_type":"image/png","data":"cG5n"}}]}]`},
+				{"type":"image","source":{"type":"base64","media_type":"image/png","data":"cG5n"}},
+				{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"anBn"}}]}]`},
 		},
 		{
 			name:    "inline image without MIME",
