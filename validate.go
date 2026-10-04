@@ -2,6 +2,7 @@ package litellm
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -257,22 +258,29 @@ func finalizeResponse(resp *Response, provider, model string) {
 	resp.Warnings = append(resp.Warnings, malformedToolArgumentWarnings(resp.Blocks, resp.Provider)...)
 }
 
-// malformedToolArgumentWarnings reports tool calls whose arguments are not valid
-// JSON; the Client adds them to a response once. Raw arguments stay out of
-// warnings so observers never receive large or sensitive payloads.
+// malformedToolArgumentWarnings reports tool calls whose arguments are not
+// the JSON object every protocol takes; the Client adds them to a response
+// once. Raw arguments stay out of warnings so observers never receive large
+// or sensitive payloads.
 func malformedToolArgumentWarnings(blocks []Block, provider string) []Warning {
 	var warnings []Warning
 	for _, block := range blocks {
 		tool, ok := block.(ToolUseBlock)
-		if !ok || tool.Arguments == "" || json.Valid([]byte(tool.Arguments)) {
+		if !ok || tool.Arguments == "" {
 			continue
 		}
-		var probe any
-		parseErr := json.Unmarshal([]byte(tool.Arguments), &probe)
+		var object map[string]json.RawMessage
+		err := json.Unmarshal([]byte(tool.Arguments), &object)
+		if err == nil && object != nil {
+			continue
+		}
+		if err == nil {
+			err = errors.New("null")
+		}
 		warnings = append(warnings, Warning{
 			Code:     "litellm.tool_arguments_invalid",
 			Provider: provider,
-			Message:  fmt.Sprintf("tool use %q returned malformed JSON arguments: %v", tool.ID, parseErr),
+			Message:  fmt.Sprintf("tool use %q returned arguments that are not a JSON object: %v", tool.ID, err),
 		})
 	}
 	return warnings

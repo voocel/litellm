@@ -141,6 +141,8 @@ resp, err := client.Chat(ctx, litellm.Request{
 
 A tool result holds text, images and tool references on every provider. Where a tool result carries text only, as in Chat Completions, the images follow the turn's tool messages in a user message.
 
+A `Tool` marked `Deferred` is offered once a `ToolReferenceBlock` in a tool result names it, as a tool search returns; `Request.OfferedTools` lists what a request offers. Anthropic receives every tool from the first request on, deferred ones with `defer_loading`, so the tools of a conversation never change and its prompt cache and thinking stay valid; at least one tool must not be deferred. Bedrock, which cannot defer a tool, receives them all; the other providers receive the offered tools.
+
 ## Structured Output
 
 ```go
@@ -319,6 +321,8 @@ provider, err := openai.New(openai.Config{
 - Retried: complete 408, 429, 500, 502, 503, 504 and 529 responses, unless the body shows exhausted quota, an auth failure, content filtering or context overflow.
 - Not retried, returning the original response or error: network failures, interrupted streams, requests whose body cannot be resent, and a `Retry-After` beyond `MaxRetryAfter` (60s by default).
 - Bedrock: the retried request reuses its SigV4 signature, which stays valid for five minutes.
+
+A caller retrying at another layer, such as a whole stream that broke off, can pace its retries with the same `Policy`: `Policy.Delay` returns the wait before the next attempt, or reports that the server's `Retry-After` ends retrying.
 
 ## Observers And OTel
 

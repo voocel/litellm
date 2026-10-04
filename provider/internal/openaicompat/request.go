@@ -59,8 +59,8 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) ([]byte, erro
 	if len(req.Stop) > 0 {
 		body["stop"] = req.Stop
 	}
-	if len(req.Tools) > 0 {
-		tools, err := convertTools(req.Tools)
+	if offered := req.OfferedTools(); len(offered) > 0 {
+		tools, err := convertTools(offered)
 		if err != nil {
 			return nil, err
 		}

@@ -93,8 +93,8 @@ func buildResponsesRequest(req *litellm.Request, provider string, stream bool) (
 	if len(input) > 0 {
 		body["input"] = input
 	}
-	if len(req.Tools) > 0 {
-		body["tools"] = responsesTools(req.Tools)
+	if offered := req.OfferedTools(); len(offered) > 0 {
+		body["tools"] = responsesTools(offered)
 	}
 	if choice := req.ToolChoice; choice != nil {
 		if choice.Name != "" {

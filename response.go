@@ -83,6 +83,16 @@ type Usage struct {
 	CacheWrite1hTokens int `json:"cache_write_1h_tokens,omitempty"`
 }
 
+// Add adds o to u, as a running total.
+func (u *Usage) Add(o Usage) {
+	u.InputTokens += o.InputTokens
+	u.OutputTokens += o.OutputTokens
+	u.ReasoningTokens += o.ReasoningTokens
+	u.CacheReadTokens += o.CacheReadTokens
+	u.CacheWriteTokens += o.CacheWriteTokens
+	u.CacheWrite1hTokens += o.CacheWrite1hTokens
+}
+
 // FinishReason is a normalized stop reason; FinishReasonRaw keeps the vendor
 // value. Empty means the vendor reported none.
 type FinishReason string

@@ -101,10 +101,11 @@ type cacheControl struct {
 }
 
 type tool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema"`
-	Strict      *bool           `json:"strict,omitempty"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	InputSchema  json.RawMessage `json:"input_schema"`
+	Strict       *bool           `json:"strict,omitempty"`
+	DeferLoading bool            `json:"defer_loading,omitempty"`
 }
 
 func buildRequest(req *litellm.Request, provider string, stream bool) ([]byte, error) {
@@ -185,7 +186,7 @@ func convertTool(t litellm.Tool) tool {
 	if len(t.Parameters) > 0 {
 		out.InputSchema = json.RawMessage(t.Parameters)
 	}
-	out.Strict = t.Strict
+	out.Strict, out.DeferLoading = t.Strict, t.Deferred
 	return out
 }
 

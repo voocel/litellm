@@ -135,19 +135,19 @@ type CacheControl struct {
 type Schema json.RawMessage
 
 // SchemaFrom returns v as a Schema. JSON text (Schema, json.RawMessage, []byte
-// or string) is validated and copied; any other value is marshaled. A nil v
-// returns a nil Schema.
+// or string) is validated and copied; any other value is marshaled. A v that
+// is nil, or JSON null, such as a nil map, returns a nil Schema.
 func SchemaFrom(v any) (Schema, error) {
 	var text []byte
 	switch s := v.(type) {
 	case nil:
 		return nil, nil
 	case Schema:
-		text = s
+		text = cloneBytes(s)
 	case json.RawMessage:
-		text = s
+		text = cloneBytes(s)
 	case []byte:
-		text = s
+		text = cloneBytes(s)
 	case string:
 		text = []byte(s)
 	default:
@@ -155,22 +155,70 @@ func SchemaFrom(v any) (Schema, error) {
 		if err != nil {
 			return nil, fmt.Errorf("marshal schema: %w", err)
 		}
-		return Schema(b), nil
+		text = b
 	}
 	if !json.Valid(text) {
 		return nil, fmt.Errorf("schema must be valid JSON")
 	}
-	return Schema(cloneBytes(text)), nil
+	if string(bytes.TrimSpace(text)) == "null" {
+		return nil, nil
+	}
+	return Schema(text), nil
 }
 
 // Tool declares a function the model may call. Strict, when set, asks the
 // vendor to enforce, or not, that calls fit Parameters; nil leaves its
 // default.
+//
+// A Deferred tool is offered once a ToolReferenceBlock in a tool result
+// names it, as a tool search returns. Anthropic receives every tool from the
+// first request on, deferred ones marked defer_loading, so the tools of a
+// conversation never change, which keeps its prompt cache and thinking
+// valid; Bedrock, which cannot defer a tool, receives them all as offered;
+// other vendors receive the OfferedTools of each request.
 type Tool struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Parameters  Schema `json:"parameters,omitempty"`
 	Strict      *bool  `json:"strict,omitempty"`
+	Deferred    bool   `json:"deferred,omitempty"`
+}
+
+// OfferedTools returns the tools r offers the model: all but the deferred
+// ones that no tool result in its messages references yet.
+func (r *Request) OfferedTools() []Tool {
+	var referenced map[string]bool
+	var out []Tool
+	for _, t := range r.Tools {
+		if t.Deferred {
+			if referenced == nil {
+				referenced = referencedTools(r.Messages)
+			}
+			if !referenced[t.Name] {
+				continue
+			}
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+func referencedTools(messages []Message) map[string]bool {
+	names := map[string]bool{}
+	for _, m := range messages {
+		for _, b := range m.Blocks {
+			result, ok := b.(ToolResultBlock)
+			if !ok {
+				continue
+			}
+			for _, c := range result.Content {
+				if ref, ok := c.(ToolReferenceBlock); ok {
+					names[ref.ToolName] = true
+				}
+			}
+		}
+	}
+	return names
 }
 
 // NewTool builds a Tool, converting parameters with SchemaFrom.

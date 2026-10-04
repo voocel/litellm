@@ -77,6 +77,7 @@ var targets = []target{
 	{provider: "gemini", model: "gemini-3.7-flash", keyEnv: "GEMINI_API_KEY", urlEnv: "GEMINI_BASE_URL"},
 	{provider: "glm", model: "glm-5.3-flash", keyEnv: "GLM_API_KEY", urlEnv: "GLM_BASE_URL"},
 	{provider: "openai", model: "gpt-5-mini", keyEnv: "OPENAI_API_KEY", urlEnv: "OPENAI_BASE_URL"},
+	{provider: "openrouter", model: "deepseek/deepseek-v4.1-flash", keyEnv: "OPENROUTER_API_KEY", urlEnv: "OPENROUTER_BASE_URL"},
 	{provider: "qwen", model: "qwen3.8-max-0902", keyEnv: "QWEN_API_KEY", urlEnv: "QWEN_BASE_URL"},
 }
 

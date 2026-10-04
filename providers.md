@@ -157,7 +157,7 @@ adds it whenever the total says so.
 | DeepSeek, GLM, Qwen | reported | 0: caching carries no write charge; Qwen breakpoints are dropped, leaving implicit caching |
 | other Chat Completions vendors, compat | `cached_tokens` or `prompt_cache_hit_tokens` when sent | `cache_write_tokens` when sent |
 
-DeepSeek, Gemini, GLM and Qwen are checked against their recorded responses in
+DeepSeek, Gemini, GLM, OpenRouter and Qwen are checked against their recorded responses in
 `provider/testdata/live`. `LITELLM_LIVE=1 LITELLM_RECORD=1 go test ./provider
 -run TestLive` calls the vendors whose key is set and records them again.
 
@@ -187,6 +187,8 @@ A `ToolResultBlock` holds text, images and tool references on every provider:
 | Gemini | `functionResponse.parts` as `inlineData`, a multimodal function response of Gemini 3 models; images by URL or file are rejected ([Multimodal function responses](https://ai.google.dev/gemini-api/docs/generate-content/function-calling)) | text |
 
 A tool reference sent as text reads `Tool <name> is now available.`; the tool must be among the request's tools.
+
+A `Deferred` tool goes to Anthropic from the first request on with `defer_loading: true`, and the API loads it once a `tool_reference` names it ([Tool search](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool)); Bedrock's Converse cannot defer one and receives it from the start; the other adapters send it from the request whose history references it.
 
 `ToolUseBlock.Arguments` is the text the model wrote. Anthropic, Bedrock and Gemini need a JSON object on the wire and return a validation error naming the call when the arguments are not one; the Chat Completions and Responses adapters send the text as it is.
 

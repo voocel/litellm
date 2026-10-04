@@ -71,6 +71,8 @@ func buildRequest(req *litellm.Request, provider string) ([]byte, error) {
 
 // convertToolConfig expresses ToolChoiceNone by omitting the tools. Converse
 // has no "none" choice and requires tools whenever history holds tool blocks.
+// It cannot defer a tool either, and a tool list that changes invalidates
+// Claude's thinking, so deferred tools are offered from the start.
 func convertToolConfig(req *litellm.Request) (*toolConfig, error) {
 	choice := req.ToolChoice
 	if choice != nil && choice.Mode == litellm.ToolChoiceNone {

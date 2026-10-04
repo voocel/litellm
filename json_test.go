@@ -118,7 +118,9 @@ func TestSchemaFrom(t *testing.T) {
 			t.Fatalf("%T: accepted invalid JSON", v)
 		}
 	}
-	if s, err := SchemaFrom(nil); s != nil || err != nil {
-		t.Fatalf("nil: %s, %v", s, err)
+	for _, v := range []any{nil, map[string]any(nil), "null", json.RawMessage(" null")} {
+		if s, err := SchemaFrom(v); s != nil || err != nil {
+			t.Fatalf("%T %v: %s, %v", v, v, s, err)
+		}
 	}
 }

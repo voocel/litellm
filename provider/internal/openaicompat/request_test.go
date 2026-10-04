@@ -364,3 +364,21 @@ func TestNewAndHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A deferred tool is sent once a tool result references it.
+func TestDeferredTools(t *testing.T) {
+	tools := []litellm.Tool{{Name: "search"}, {Name: "grep", Deferred: true}, {Name: "deploy", Deferred: true}}
+	body := compattest.Body(t, plain, &litellm.Request{
+		Model: "m",
+		Messages: []litellm.Message{
+			litellm.UserText("find it"),
+			litellm.Assistant(litellm.ToolUseBlock{ID: "c1", Name: "search", Arguments: `{}`}),
+			litellm.ToolResult("c1", litellm.ToolReferenceBlock{ToolName: "grep"}),
+		},
+		Tools: tools,
+	}, false)
+	compattest.AssertJSON(t, body["tools"], `[
+		{"type": "function", "function": {"name": "search", "parameters": {"type": "object"}}},
+		{"type": "function", "function": {"name": "grep", "parameters": {"type": "object"}}}
+	]`)
+}

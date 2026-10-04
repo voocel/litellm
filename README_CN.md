@@ -141,6 +141,8 @@ resp, err := client.Chat(ctx, litellm.Request{
 
 工具结果在所有 Provider 上都可包含文本、图片和工具引用。工具结果只能承载文本的协议（如 Chat Completions）把图片放进紧随本轮 tool 消息之后的 user 消息。
 
+标记为 `Deferred` 的 `Tool` 在某个工具结果里的 `ToolReferenceBlock` 点名它之后才提供给模型，工具搜索返回的就是这种引用；`Request.OfferedTools` 列出一次请求提供的工具。Anthropic 从第一次请求起就收到全部工具，延迟的带 `defer_loading`，因此一次对话的工具列表始终不变，提示缓存和 thinking 都保持有效；至少要有一个工具不延迟。Bedrock 无法延迟工具，收到全部工具；其他 Provider 收到已提供的工具。
+
 ## 结构化输出
 
 ```go
@@ -319,6 +321,8 @@ provider, err := openai.New(openai.Config{
 - 重试：完整的 408、429、500、502、503、504、529 响应，响应体表明额度耗尽、鉴权失败、内容过滤或上下文超限的除外。
 - 不重试（原样返回响应或错误）：网络失败、中断的流、请求体无法重发的请求，以及 `Retry-After` 超过 `MaxRetryAfter`（默认 60 秒）的响应。
 - Bedrock：重试沿用已签名的 SigV4 请求，签名五分钟内有效。
+
+在其他层重试的调用方（例如重试整个中断的流）可以用同一个 `Policy` 控制节奏：`Policy.Delay` 返回下次尝试前的等待时间，或报告服务端的 `Retry-After` 已超出上限、应停止重试。
 
 ## Observer 与 OTel
 

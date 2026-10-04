@@ -1,4 +1,6 @@
-// Package retry provides opt-in HTTP retries for providers.
+// Package retry provides opt-in HTTP retries for providers, paced by a
+// Policy that callers retrying at another layer, such as a whole stream,
+// can pace their retries with too.
 //
 // Providers never retry. Pass a client from NewHTTPClient as a provider
 // Config.HTTPClient to opt in. Enabling retries authorizes repeated requests
@@ -100,7 +102,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if !temp {
 			return resp, nil
 		}
-		delay, ok := policy.delay(attempt, retryAfter)
+		delay, ok := policy.Delay(attempt, retryAfter)
 		if !ok {
 			return resp, nil
 		}
@@ -146,9 +148,12 @@ func normalizePolicy(policy Policy) Policy {
 	return policy
 }
 
-// delay returns the wait before the next attempt, or false when the server
-// asks, with retryAfter, for a longer one than MaxRetryAfter.
-func (p Policy) delay(attempt int, retryAfter time.Duration) (time.Duration, bool) {
+// Delay returns the wait before the attempt after attempt, the first being
+// 1: retryAfter, when the server suggests a wait, or else the backoff. It
+// returns false when retryAfter is longer than MaxRetryAfter, which ends
+// retrying.
+func (p Policy) Delay(attempt int, retryAfter time.Duration) (time.Duration, bool) {
+	p = normalizePolicy(p)
 	if retryAfter > 0 {
 		return retryAfter, retryAfter <= p.MaxRetryAfter
 	}

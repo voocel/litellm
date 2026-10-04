@@ -220,3 +220,21 @@ type failingBody struct{ err error }
 
 func (b *failingBody) Read([]byte) (int, error) { return 0, b.err }
 func (b *failingBody) Close() error             { return nil }
+
+// Delay backs off from the defaults a zero Policy takes, within the jitter,
+// and takes the server's wait up to MaxRetryAfter.
+func TestPolicyDelay(t *testing.T) {
+	within := func(d, want time.Duration) bool { return d >= want*3/4 && d <= want*5/4 }
+	var p Policy
+	for attempt, want := range map[int]time.Duration{1: 200 * time.Millisecond, 2: 400 * time.Millisecond, 5: 2 * time.Second, 64: 2 * time.Second} {
+		if d, ok := p.Delay(attempt, 0); !ok || !within(d, want) {
+			t.Errorf("attempt %d: %v, %v; want about %v", attempt, d, ok, want)
+		}
+	}
+	if d, ok := p.Delay(1, 30*time.Second); !ok || d != 30*time.Second {
+		t.Errorf("retry after 30s: %v, %v", d, ok)
+	}
+	if _, ok := p.Delay(1, 2*time.Minute); ok {
+		t.Error("a wait past MaxRetryAfter did not end retrying")
+	}
+}

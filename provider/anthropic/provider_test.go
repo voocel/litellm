@@ -27,7 +27,7 @@ func TestCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := litellm.Capabilities{MaxTokensRequired: true, ThinkingEffort: true, DisableThinking: true, ProviderOptions: []string{
+	want := litellm.Capabilities{MaxTokensRequired: true, ThinkingEffort: true, DisableThinking: true, DeferredTools: true, ProviderOptions: []string{
 		"metadata", "output_config", "service_tier", "thinking", "tool_choice", "top_k",
 	}}
 	if got := p.Capabilities(); !reflect.DeepEqual(got, want) {

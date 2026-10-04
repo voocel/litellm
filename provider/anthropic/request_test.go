@@ -362,3 +362,26 @@ func jsonEqual(t *testing.T, got json.RawMessage, want string) bool {
 	}
 	return reflect.DeepEqual(g, w)
 }
+
+// Every tool is sent from the start, deferred ones marked defer_loading, so
+// the tools of a conversation never change.
+func TestDeferredToolsLoadLater(t *testing.T) {
+	data, err := buildRequest(&litellm.Request{
+		Model:     "claude-sonnet-5-5",
+		MaxTokens: new(1024),
+		Messages:  []litellm.Message{litellm.UserText("find it")},
+		Tools:     []litellm.Tool{{Name: "search"}, {Name: "grep", Deferred: true}},
+	}, "anthropic", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	if err := json.Unmarshal(data, &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Tools) != 2 || body.Tools[0]["defer_loading"] != nil || body.Tools[1]["defer_loading"] != true {
+		t.Fatalf("tools = %v", body.Tools)
+	}
+}

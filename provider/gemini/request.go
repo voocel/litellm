@@ -63,8 +63,8 @@ func buildRequest(req *litellm.Request, provider string) ([]byte, error) {
 	if out.GenerationConfig, err = convertGenerationConfig(req); err != nil {
 		return nil, err
 	}
-	if len(req.Tools) > 0 {
-		declarations, strict, err := convertTools(req.Tools)
+	if offered := req.OfferedTools(); len(offered) > 0 {
+		declarations, strict, err := convertTools(offered)
 		if err != nil {
 			return nil, err
 		}

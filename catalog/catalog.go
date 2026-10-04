@@ -93,6 +93,15 @@ type Cost struct {
 	Total      float64 `json:"total"`
 }
 
+// Add adds o to c, as a running total.
+func (c *Cost) Add(o Cost) {
+	c.Input += o.Input
+	c.Output += o.Output
+	c.CacheRead += o.CacheRead
+	c.CacheWrite += o.CacheWrite
+	c.Total += o.Total
+}
+
 // Catalog is a concurrency-safe model table. The zero value is empty and
 // ready to use.
 type Catalog struct {
@@ -317,8 +326,8 @@ func (e listEntry) tieredPricing() *Pricing {
 // is an error: every call has some, so the vendor reported none. So are
 // writes cached for an hour without their rate.
 func (p Pricing) Cost(usage litellm.Usage) (Cost, error) {
-	if err := p.validate(); err != nil {
-		return Cost{}, fmt.Errorf("catalog: %w", err)
+	if err := p.Validate(); err != nil {
+		return Cost{}, err
 	}
 	in, out, cacheRead, cacheWrite, cacheWrite1h := usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens, usage.CacheWrite1hTokens
 	if in == 0 {
@@ -371,6 +380,15 @@ func (m Model) validate(name string) error {
 	}
 	if err := m.Pricing.validate(); err != nil {
 		return fmt.Errorf("catalog: model %q: %w", name, err)
+	}
+	return nil
+}
+
+// Validate reports rates that are negative or not finite, and tiers out of
+// order. A catalog validates the pricing it holds; Cost, any it is given.
+func (p Pricing) Validate() error {
+	if err := p.validate(); err != nil {
+		return fmt.Errorf("catalog: %w", err)
 	}
 	return nil
 }

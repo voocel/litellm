@@ -12,6 +12,10 @@ type Capabilities struct {
 	// the request is sent. Which efforts a model takes is the vendor's call.
 	ThinkingEffort  bool
 	DisableThinking bool
+	// DeferredTools reports that the vendor loads the tools marked Deferred
+	// once a tool reference names them, the adapter sending every tool from
+	// the start; other adapters send what the request offers (see Tool).
+	DeferredTools bool
 	// ProviderOptions lists, sorted, the Request.ProviderOptions keys the
 	// adapter knows: native fields of the vendor's request. One that also
 	// passes other keys through, as compat does and the Chat Completions
