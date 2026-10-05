@@ -21,25 +21,9 @@ type Observer struct {
 var _ litellm.Observer = (*Observer)(nil)
 
 // Start implements litellm.Observer, starting one span per call.
-func (o *Observer) Start(ctx context.Context, info litellm.CallInfo) (next context.Context, call litellm.CallObserver) {
-	// Preserve the existing adapter's panic isolation. If setup panics after
-	// creating a span, close it; the SDK still receives its original context.
-	next = ctx
-	var span trace.Span
-	defer func() {
-		if recover() != nil {
-			if span != nil {
-				span.End()
-			}
-			next = ctx
-			call = nil
-		}
-	}()
+func (o *Observer) Start(ctx context.Context, info litellm.CallInfo) (context.Context, litellm.CallObserver) {
 	operation := semanticOperation(info.Provider)
-	var model string
-	if info.Request != nil {
-		model = info.Request.Model
-	}
+	model := info.Request.Model
 	attrs := []attribute.KeyValue{
 		attribute.String(attrProviderName, semanticProvider(info.Provider)),
 		attribute.String(attrOperationName, operation),
@@ -48,7 +32,7 @@ func (o *Observer) Start(ctx context.Context, info litellm.CallInfo) (next conte
 	if info.Streaming {
 		attrs = append(attrs, attribute.Bool(attrRequestStream, true))
 	}
-	if o.captureContent && info.Request != nil && len(info.Request.Messages) > 0 {
+	if o.captureContent && len(info.Request.Messages) > 0 {
 		if data, err := marshalInputMessages(info.Request.Messages); err == nil {
 			attrs = append(attrs, attribute.String(attrInputMessages, data))
 		}
@@ -60,7 +44,7 @@ func (o *Observer) Start(ctx context.Context, info litellm.CallInfo) (next conte
 	if model != "" {
 		name += " " + model
 	}
-	next, span = o.tracer.Start(ctx, name, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attrs...))
+	next, span := o.tracer.Start(ctx, name, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attrs...))
 	return next, &observation{span: span, captureContent: o.captureContent}
 }
 
@@ -71,7 +55,6 @@ type observation struct {
 
 func (o *observation) OnEvent(litellm.Event) {}
 func (o *observation) End(result litellm.CallResult) {
-	defer recoverObserver()
 	defer o.span.End()
 	o.span.SetAttributes(attribute.String("litellm.call.status", string(result.Status)))
 	if result.Err != nil {
@@ -82,39 +65,36 @@ func (o *observation) End(result litellm.CallResult) {
 		if result.Status != litellm.CallCompleted {
 			finish = ""
 		}
-		stampResponse(o.span, resp.Model, string(finish), &resp.Usage)
+		stampResponse(o.span, resp.Model, finish, resp.Usage)
 		if o.captureContent && len(resp.Blocks) > 0 {
 			setOutputMessages(o.span, resp.Blocks, finish)
 		}
 	}
 }
 
-// stampResponse records the response-side attributes shared by the streaming
-// and non-streaming paths. usage may be nil.
-func stampResponse(span trace.Span, model, finishReason string, usage *litellm.Usage) {
+// stampResponse records the response model, the finish reason of a completed
+// call and the reported token counts.
+func stampResponse(span trace.Span, model string, finish litellm.FinishReason, usage litellm.Usage) {
 	if model != "" {
 		span.SetAttributes(attribute.String(attrResponseModel, model))
 	}
-	if finishReason != "" {
-		span.SetAttributes(attribute.StringSlice(attrFinishReasons, []string{semanticFinishReason(litellm.FinishReason(finishReason))}))
+	if finish != "" {
+		span.SetAttributes(attribute.StringSlice(attrFinishReasons, []string{semanticFinishReason(finish)}))
 	}
-	if usage != nil {
-		for _, count := range []struct {
-			key   string
-			value int
-		}{
-			{attrInputTokens, usage.InputTokens},
-			{attrOutputTokens, usage.OutputTokens},
-			{attrCacheReadTokens, usage.CacheReadTokens},
-			{attrCacheWriteTokens, usage.CacheWriteTokens},
-			{attrReasoningTokens, usage.ReasoningTokens},
-		} {
-			if count.value != 0 { // unreported
-				span.SetAttributes(attribute.Int(count.key, count.value))
-			}
+	for _, count := range []struct {
+		key   string
+		value int
+	}{
+		{attrInputTokens, usage.InputTokens},
+		{attrOutputTokens, usage.OutputTokens},
+		{attrCacheReadTokens, usage.CacheReadTokens},
+		{attrCacheWriteTokens, usage.CacheWriteTokens},
+		{attrReasoningTokens, usage.ReasoningTokens},
+	} {
+		if count.value != 0 { // unreported
+			span.SetAttributes(attribute.Int(count.key, count.value))
 		}
 	}
-
 }
 
 func setOutputMessages(span trace.Span, blocks []litellm.Block, finishReason litellm.FinishReason) {
@@ -127,8 +107,4 @@ func recordSpanError(span trace.Span, err error) {
 	span.RecordError(err)
 	span.SetStatus(codes.Error, err.Error())
 	span.SetAttributes(attribute.String(attrErrorType, semanticErrorType(err)))
-}
-
-func recoverObserver() {
-	_ = recover() // observability must never break the LLM call
 }

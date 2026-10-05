@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/voocel/litellm"
@@ -91,7 +92,7 @@ func (p *Provider) Name() string {
 
 // Capabilities reports the static protocol facts.
 func (p *Provider) Capabilities() litellm.Capabilities {
-	return litellm.Capabilities{ThinkingEffort: true, DisableThinking: true, ProviderOptions: sortedOptions()}
+	return litellm.Capabilities{ThinkingEffort: true, DisableThinking: true, ProviderOptions: slices.Clone(providerOptions)}
 }
 
 // Chat sends a Converse request; Request.Model is the model or inference

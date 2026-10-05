@@ -53,22 +53,8 @@ func validateRequest(req *Request) error {
 			return NewError("", ErrorTypeValidation, fmt.Sprintf("tool %q parameters must be valid JSON", tool.Name), nil)
 		}
 	}
-	if req.ResponseFormat != nil && req.ResponseFormat.Type == ResponseFormatJSONSchema {
-		if req.ResponseFormat.JSONSchema == nil {
-			return NewError("", ErrorTypeValidation, "json schema response format requires schema", nil)
-		}
-		if req.ResponseFormat.JSONSchema.Name == "" {
-			return NewError("", ErrorTypeValidation, "json schema response format requires name", nil)
-		}
-		if !utf8.ValidString(req.ResponseFormat.JSONSchema.Name) {
-			return NewError("", ErrorTypeValidation, "json schema response format name must be valid UTF-8", nil)
-		}
-		if !utf8.ValidString(req.ResponseFormat.JSONSchema.Description) {
-			return NewError("", ErrorTypeValidation, "json schema response format description must be valid UTF-8", nil)
-		}
-		if len(req.ResponseFormat.JSONSchema.Schema) > 0 && !json.Valid(req.ResponseFormat.JSONSchema.Schema) {
-			return NewError("", ErrorTypeValidation, "json schema response format schema must be valid JSON", nil)
-		}
+	if err := req.ResponseFormat.validate(); err != nil {
+		return err
 	}
 	if err := req.Thinking.validate(); err != nil {
 		return err
@@ -209,39 +195,7 @@ func validateImageUTF8(messageIndex int, block ImageBlock) error {
 	return nil
 }
 
-// validateResponse checks a reply: a tool call the vendor left without an id
-// or a name is a provider error.
-func validateResponse(resp *Response, provider, model string) error {
-	if resp == nil {
-		return NewError(provider, ErrorTypeInternal, "provider returned nil response without error", nil)
-	}
-	resolvedProvider := resp.Provider
-	if resolvedProvider == "" {
-		resolvedProvider = provider
-	}
-	resolvedModel := resp.Model
-	if resolvedModel == "" {
-		resolvedModel = model
-	}
-	if resolvedProvider == "" {
-		return NewError(provider, ErrorTypeInternal, "response missing provider", nil)
-	}
-	if resolvedModel == "" {
-		return NewError(resolvedProvider, ErrorTypeInternal, "response missing model", nil)
-	}
-	for _, block := range resp.Blocks {
-		if tool, ok := block.(ToolUseBlock); ok {
-			if tool.ID == "" {
-				return NewError(resolvedProvider, ErrorTypeProvider, "tool use missing id", nil)
-			}
-			if tool.Name == "" {
-				return NewError(resolvedProvider, ErrorTypeProvider, fmt.Sprintf("tool use %q missing name", tool.ID), nil)
-			}
-		}
-	}
-	return nil
-}
-
+// finalizeResponse completes a provider's reply as the Client returns it.
 func finalizeResponse(resp *Response, provider, model string) {
 	resp.FinishReason = finishReason(resp.FinishReason, resp.Blocks)
 	if resp.Provider == "" {
@@ -250,12 +204,41 @@ func finalizeResponse(resp *Response, provider, model string) {
 	if resp.Model == "" {
 		resp.Model = model
 	}
+	for i, block := range resp.Blocks {
+		resp.Blocks[i] = withArguments(block)
+	}
 	for i := range resp.Warnings {
 		if resp.Warnings[i].Provider == "" {
 			resp.Warnings[i].Provider = resp.Provider
 		}
 	}
 	resp.Warnings = append(resp.Warnings, malformedToolArgumentWarnings(resp.Blocks, resp.Provider)...)
+}
+
+// withArguments gives a tool call without arguments the empty object they
+// stand for: vendors may omit them, and such a call streams no deltas.
+func withArguments(block Block) Block {
+	if tool, ok := block.(ToolUseBlock); ok && tool.Arguments == "" {
+		tool.Arguments = "{}"
+		return tool
+	}
+	return block
+}
+
+// validateToolCalls reports a tool call the vendor left without an id or a
+// name, a provider error.
+func validateToolCalls(blocks []Block, provider string) error {
+	for _, block := range blocks {
+		if tool, ok := block.(ToolUseBlock); ok {
+			if tool.ID == "" {
+				return NewError(provider, ErrorTypeProvider, "tool use missing id", nil)
+			}
+			if tool.Name == "" {
+				return NewError(provider, ErrorTypeProvider, fmt.Sprintf("tool use %q missing name", tool.ID), nil)
+			}
+		}
+	}
+	return nil
 }
 
 // malformedToolArgumentWarnings reports tool calls whose arguments are not
@@ -266,7 +249,7 @@ func malformedToolArgumentWarnings(blocks []Block, provider string) []Warning {
 	var warnings []Warning
 	for _, block := range blocks {
 		tool, ok := block.(ToolUseBlock)
-		if !ok || tool.Arguments == "" {
+		if !ok {
 			continue
 		}
 		var object map[string]json.RawMessage

@@ -94,7 +94,7 @@ func (p *Provider) Name() string {
 // Capabilities reports the static protocol facts of the selected API.
 func (p *Provider) Capabilities() litellm.Capabilities {
 	if p.cfg.API == APIResponses {
-		return litellm.Capabilities{ThinkingEffort: true, DisableThinking: true, ProviderOptions: sortedCopy(responsesOptions)}
+		return litellm.Capabilities{ThinkingEffort: true, DisableThinking: true, ProviderOptions: slices.Clone(responsesOptions)}
 	}
 	return p.chat.Capabilities()
 }

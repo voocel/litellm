@@ -84,10 +84,7 @@ func (e *Error) Error() string {
 }
 
 func shouldShowCause(e *Error) bool {
-	if e == nil || e.Cause == nil {
-		return false
-	}
-	return e.Type == ErrorTypeNetwork || e.Type == ErrorTypeTimeout
+	return e.Cause != nil && (e.Type == ErrorTypeNetwork || e.Type == ErrorTypeTimeout)
 }
 
 // Unwrap returns Cause.

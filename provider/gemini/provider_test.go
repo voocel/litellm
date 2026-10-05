@@ -291,7 +291,7 @@ func TestChatConvertsResponse(t *testing.T) {
 		}},
 		litellm.TextBlock{Text: "answer"},
 		litellm.ToolUseBlock{ID: "call_1", Name: "lookup", Arguments: `{"q":"x"}`, State: signed("gemini", "gemini-3-pro", "sig-call")},
-		litellm.ToolUseBlock{ID: generated.ID, Name: "noop", Arguments: `{}`},
+		litellm.ToolUseBlock{ID: generated.ID, Name: "noop"}, // the Client completes its arguments
 	}
 	if !reflect.DeepEqual(resp.Blocks, want) {
 		t.Fatalf("blocks = %#v", resp.Blocks)
@@ -428,7 +428,7 @@ func TestUsageIncludesReasoningAndReadsOmittedCountsAsZero(t *testing.T) {
 
 func TestCapabilities(t *testing.T) {
 	caps := testProvider(t, nil).Capabilities()
-	if caps.MaxTokensRequired || !caps.ThinkingEffort || !caps.DisableThinking || !slices.IsSorted(caps.ProviderOptions) || !slices.Equal(caps.ProviderOptions, sortedOptions()) || len(caps.ProviderOptions) != len(providerOptions) {
+	if caps.MaxTokensRequired || !caps.ThinkingEffort || !caps.DisableThinking || !slices.IsSorted(caps.ProviderOptions) || !slices.Equal(caps.ProviderOptions, providerOptions) {
 		t.Fatalf("capabilities = %+v", caps)
 	}
 }

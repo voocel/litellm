@@ -29,12 +29,10 @@ type toolState struct {
 }
 
 type stream struct {
-	resp      *http.Response
+	*wire.Stream
 	sse       *wire.SSEReader
 	name      string // the provider's
 	spec      Spec
-	pending   []litellm.Event
-	done      bool
 	requested string // the requested model, for ProviderState
 	model     string
 	finish    litellm.FinishReason
@@ -51,9 +49,10 @@ type stream struct {
 	annotations []json.RawMessage
 }
 
+// newStream opens with the warning that a JSON Schema went into a prompt,
+// as Chat reports it.
 func newStream(resp *http.Response, req *litellm.Request, name string, spec Spec) *stream {
-	return &stream{
-		resp:      resp,
+	s := &stream{
 		sse:       wire.NewSSEReader(resp.Body, name),
 		name:      name,
 		spec:      spec,
@@ -62,65 +61,44 @@ func newStream(resp *http.Response, req *litellm.Request, name string, spec Spec
 		tools:     make(map[int]*toolState),
 		callAt:    make(map[int]int),
 	}
-}
-
-func (s *stream) Next() (event litellm.Event, err error) {
-	defer func() {
-		if err != nil {
-			s.done = true
-		}
-	}()
-	for len(s.pending) == 0 {
-		if s.done {
-			return nil, io.EOF
-		}
-		frame, err := s.sse.Next()
-		if errors.Is(err, io.EOF) {
-			// Some vendors close the stream after the finish chunk without
-			// [DONE]; only an EOF before any finish reason is a truncation,
-			// which the Client reports as a retryable network error.
-			if s.finishRaw == "" {
-				return nil, io.EOF
-			}
-			s.end()
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		if frame.Data == "[DONE]" {
-			s.end()
-			break
-		}
-		var chunk streamChunk
-		if err := json.Unmarshal([]byte(frame.Data), &chunk); err != nil {
-			return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "parse stream chunk", err)
-		}
-		if err := wire.ErrorField(s.name, chunk.Error); err != nil {
-			return nil, err
-		}
-		s.pending = s.events(s.pending, chunk)
+	var warnings []litellm.Event
+	if spec.usesSchemaPrompt(req.ResponseFormat) {
+		warnings = append(warnings, litellm.WarningEvent{Warning: spec.schemaWarning(name)})
 	}
-	event = s.pending[0]
-	s.pending = s.pending[1:]
-	return event, nil
+	s.Stream = wire.NewStream(resp.Body, s.read, warnings...)
+	return s
 }
 
-// end queues the remaining block ends and the DoneEvent.
-func (s *stream) end() {
-	s.pending = s.closeAll(s.pending)
+func (s *stream) read(events []litellm.Event) ([]litellm.Event, error) {
+	frame, err := s.sse.Next()
+	switch {
+	case errors.Is(err, io.EOF) && s.finishRaw != "":
+		// Some vendors close the stream after the finish chunk without
+		// [DONE]; only an EOF before any finish reason is a truncation.
+		return s.end(events), nil
+	case err != nil:
+		return nil, err
+	case frame.Data == "[DONE]":
+		return s.end(events), nil
+	}
+	var chunk streamChunk
+	if err := json.Unmarshal([]byte(frame.Data), &chunk); err != nil {
+		return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "parse stream chunk", err)
+	}
+	if err := wire.ErrorField(s.name, chunk.Error); err != nil {
+		return nil, err
+	}
+	return s.events(events, chunk), nil
+}
+
+// end appends the remaining block ends and the DoneEvent.
+func (s *stream) end(events []litellm.Event) []litellm.Event {
+	events = s.closeAll(events)
 	finish := s.finish
 	if s.refused {
 		finish = litellm.FinishReasonSafety
 	}
-	s.pending = append(s.pending, litellm.DoneEvent{FinishReason: finish, FinishReasonRaw: s.finishRaw, Provider: s.name, Model: s.model})
-	s.done = true
-}
-
-func (s *stream) Close() error {
-	s.done = true
-	s.pending = nil
-	return s.resp.Body.Close()
+	return append(events, litellm.DoneEvent{FinishReason: finish, FinishReasonRaw: s.finishRaw, Provider: s.name, Model: s.model})
 }
 
 func (s *stream) events(events []litellm.Event, chunk streamChunk) []litellm.Event {

@@ -324,11 +324,9 @@ func (e listEntry) tieredPricing() *Pricing {
 // and the rest of the input at the input rate; a cache count the vendor did
 // not report is zero, its tokens priced as input. Usage without input tokens
 // is an error: every call has some, so the vendor reported none. So are
-// writes cached for an hour without their rate.
+// writes cached for an hour without their rate. p must be valid, as a
+// Catalog's pricing is; check any other with Validate first.
 func (p Pricing) Cost(usage litellm.Usage) (Cost, error) {
-	if err := p.Validate(); err != nil {
-		return Cost{}, err
-	}
 	in, out, cacheRead, cacheWrite, cacheWrite1h := usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens, usage.CacheWrite1hTokens
 	if in == 0 {
 		return Cost{}, fmt.Errorf("catalog: the usage reports no input tokens")
@@ -385,7 +383,7 @@ func (m Model) validate(name string) error {
 }
 
 // Validate reports rates that are negative or not finite, and tiers out of
-// order. A catalog validates the pricing it holds; Cost, any it is given.
+// order. A Catalog validates the pricing it holds.
 func (p Pricing) Validate() error {
 	if err := p.validate(); err != nil {
 		return fmt.Errorf("catalog: %w", err)

@@ -5,9 +5,10 @@ import (
 	"net/http"
 )
 
-// Provider adapts one vendor protocol. Chat and Stream receive a validated
-// copy of the request that the provider owns. Implementations may also
-// implement CapabilityProvider.
+// Provider adapts one vendor protocol. Name identifies it in responses,
+// errors and ProviderState, and must not be empty. Chat and Stream receive a
+// validated copy of the request that the provider owns. Implementations may
+// also implement CapabilityProvider.
 type Provider interface {
 	Name() string
 	Chat(context.Context, *Request) (*Response, error)

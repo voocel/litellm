@@ -37,12 +37,10 @@ type streamEvent struct {
 }
 
 type stream struct {
+	*wire.Stream
 	reader    *bufio.Reader
-	response  *http.Response
 	name      string // the provider's
 	model     string
-	pending   []litellm.Event
-	done      bool
 	finish    litellm.FinishReason
 	finishRaw string
 	blocks    wire.BlockTracker[int] // native index to litellm index
@@ -50,52 +48,33 @@ type stream struct {
 }
 
 func newStream(resp *http.Response, name, model string) *stream {
-	return &stream{reader: bufio.NewReader(resp.Body), response: resp, name: name, model: model, reasoning: make(map[int]reasoningState)}
+	s := &stream{reader: bufio.NewReader(resp.Body), name: name, model: model, reasoning: make(map[int]reasoningState)}
+	s.Stream = wire.NewStream(resp.Body, s.read)
+	return s
 }
 
-func (s *stream) Next() (event litellm.Event, err error) {
-	defer func() {
-		if err != nil {
-			s.done = true
-		}
-	}()
-	for len(s.pending) == 0 {
-		if s.done {
-			return nil, io.EOF
-		}
-		msg, err := readEventStreamMessage(s.reader)
-		switch {
-		case errors.Is(err, io.EOF):
-			// Before metadata: the Client reports the truncation as a
-			// retryable network error.
-			return nil, io.EOF
-		case errors.Is(err, errInvalidFrame):
-			return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "read stream", err)
-		case err != nil:
-			return nil, litellm.NewNetworkError(s.name, "read stream", err)
-		}
-		switch msg.headers[":message-type"] {
-		case "exception":
-			return nil, streamException(s.name, msg.headers[":exception-type"], msg.payload)
-		case "error":
-			return nil, wire.StreamError(s.name, msg.headers[":error-code"], "stream error: "+msg.headers[":error-message"])
-		}
-		name := msg.headers[":event-type"]
-		var e streamEvent
-		if err := json.Unmarshal(msg.payload, &e); err != nil {
-			return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "parse "+name, err)
-		}
-		s.pending = s.events(s.pending, name, e, msg.payload)
+func (s *stream) read(events []litellm.Event) ([]litellm.Event, error) {
+	msg, err := readEventStreamMessage(s.reader)
+	switch {
+	case errors.Is(err, io.EOF):
+		return nil, err // the end of the body, which wire.Stream reports
+	case errors.Is(err, errInvalidFrame):
+		return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "read stream", err)
+	case err != nil:
+		return nil, litellm.NewNetworkError(s.name, "read stream", err)
 	}
-	event = s.pending[0]
-	s.pending = s.pending[1:]
-	return event, nil
-}
-
-func (s *stream) Close() error {
-	s.done = true
-	s.pending = nil
-	return s.response.Body.Close()
+	switch msg.headers[":message-type"] {
+	case "exception":
+		return nil, streamException(s.name, msg.headers[":exception-type"], msg.payload)
+	case "error":
+		return nil, wire.StreamError(s.name, msg.headers[":error-code"], "stream error: "+msg.headers[":error-message"])
+	}
+	name := msg.headers[":event-type"]
+	var e streamEvent
+	if err := json.Unmarshal(msg.payload, &e); err != nil {
+		return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "parse "+name, err)
+	}
+	return s.events(events, name, e, msg.payload), nil
 }
 
 func (s *stream) events(events []litellm.Event, name string, e streamEvent, raw []byte) []litellm.Event {
@@ -136,7 +115,6 @@ func (s *stream) events(events []litellm.Event, name string, e streamEvent, raw 
 			events = append(events, litellm.UsageEvent{Usage: convertUsage(*e.Usage)})
 		}
 		events = s.blocks.CloseAll(events, s.final)
-		s.done = true
 		return append(events, litellm.DoneEvent{FinishReason: s.finish, FinishReasonRaw: s.finishRaw, Provider: s.name, Model: s.model})
 	}
 	return append(events, litellm.ProviderEvent{Name: "bedrock." + name, Raw: json.RawMessage(raw)})

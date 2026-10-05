@@ -52,7 +52,7 @@ func model() string {
 	if m := os.Getenv("BEDROCK_MODEL"); m != "" {
 		return m
 	}
-	return "anthropic.claude-3-5-sonnet-20240620-v1:0"
+	return "global.anthropic.claude-sonnet-5-5"
 }
 
 func runChat(ctx context.Context, client *litellm.Client) {

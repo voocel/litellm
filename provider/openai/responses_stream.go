@@ -3,8 +3,6 @@ package openai
 import (
 	"cmp"
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 
 	"github.com/voocel/litellm"
@@ -39,11 +37,9 @@ type partKey struct{ output, content int }
 func itemKey(output int) partKey { return partKey{output, -1} }
 
 type responsesStream struct {
-	resp      *http.Response
+	*wire.Stream
 	sse       *wire.SSEReader
 	name      string // the provider's
-	pending   []litellm.Event
-	done      bool
 	requested string // the requested model, for ProviderState
 	model     string
 	blocks    wire.BlockTracker[partKey]
@@ -57,8 +53,7 @@ type responsesStream struct {
 }
 
 func newResponsesStream(resp *http.Response, name, model string) *responsesStream {
-	return &responsesStream{
-		resp:      resp,
+	s := &responsesStream{
 		sse:       wire.NewSSEReader(resp.Body, name),
 		name:      name,
 		requested: model,
@@ -69,52 +64,28 @@ func newResponsesStream(resp *http.Response, name, model string) *responsesStrea
 		streamed:  make(map[int]bool),
 		summaries: make(map[int]int),
 	}
+	s.Stream = wire.NewStream(resp.Body, s.read)
+	return s
 }
 
-func (s *responsesStream) Next() (event litellm.Event, err error) {
-	defer func() {
-		if err != nil {
-			s.done = true
-		}
-	}()
-	for len(s.pending) == 0 {
-		if s.done {
-			return nil, io.EOF
-		}
-		frame, err := s.sse.Next()
-		if errors.Is(err, io.EOF) {
-			// Before response.completed: the Client reports the truncation
-			// as a retryable network error.
-			return nil, io.EOF
-		}
-		if err != nil {
-			return nil, err
-		}
-		var e responsesEvent
-		if err := json.Unmarshal([]byte(frame.Data), &e); err != nil {
-			return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "parse stream event", err)
-		}
-		e.Type = cmp.Or(frame.Name, e.Type)
-		// Resumed streams may repeat events; sequence numbers identify them.
-		if e.Sequence != 0 {
-			if e.Sequence <= s.sequence {
-				continue
-			}
-			s.sequence = e.Sequence
-		}
-		if s.pending, err = s.events(s.pending, e, json.RawMessage(frame.Data)); err != nil {
-			return nil, err
-		}
+func (s *responsesStream) read(events []litellm.Event) ([]litellm.Event, error) {
+	frame, err := s.sse.Next()
+	if err != nil {
+		return nil, err
 	}
-	event = s.pending[0]
-	s.pending = s.pending[1:]
-	return event, nil
-}
-
-func (s *responsesStream) Close() error {
-	s.done = true
-	s.pending = nil
-	return s.resp.Body.Close()
+	var e responsesEvent
+	if err := json.Unmarshal([]byte(frame.Data), &e); err != nil {
+		return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "parse stream event", err)
+	}
+	e.Type = cmp.Or(frame.Name, e.Type)
+	// Resumed streams may repeat events; sequence numbers identify them.
+	if e.Sequence != 0 {
+		if e.Sequence <= s.sequence {
+			return events, nil
+		}
+		s.sequence = e.Sequence
+	}
+	return s.events(events, e, json.RawMessage(frame.Data))
 }
 
 func (s *responsesStream) events(events []litellm.Event, e responsesEvent, raw json.RawMessage) ([]litellm.Event, error) {
@@ -216,7 +187,6 @@ func (s *responsesStream) events(events []litellm.Event, e responsesEvent, raw j
 			}
 			return nil
 		})
-		s.done = true
 		return append(events, litellm.DoneEvent{FinishReason: reasonCode, FinishReasonRaw: reasonRaw, Provider: s.name, Model: s.model}), nil
 	case "response.failed":
 		var code, message string

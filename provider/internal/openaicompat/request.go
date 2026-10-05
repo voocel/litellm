@@ -60,23 +60,13 @@ func (p *Provider) buildRequest(req *litellm.Request, stream bool) ([]byte, erro
 		body["stop"] = req.Stop
 	}
 	if offered := req.OfferedTools(); len(offered) > 0 {
-		tools, err := convertTools(offered)
-		if err != nil {
-			return nil, err
-		}
-		body["tools"] = tools
+		body["tools"] = convertTools(offered)
 	}
 	if req.ToolChoice != nil {
 		body["tool_choice"] = convertToolChoice(req.ToolChoice)
 	}
-	if responseFormat != nil {
-		format, err := convertResponseFormat(responseFormat)
-		if err != nil {
-			return nil, err
-		}
-		if format != nil {
-			body["response_format"] = format
-		}
+	if format := convertResponseFormat(responseFormat); format != nil {
+		body["response_format"] = format
 	}
 	if req.Thinking != nil {
 		fields, err := p.convertThinking(req.Thinking)
@@ -306,30 +296,34 @@ func ImageURL(block litellm.ImageBlock) (string, error) {
 	}
 }
 
-func convertTools(tools []litellm.Tool) ([]any, error) {
-	out := make([]any, 0, len(tools))
-	for _, tool := range tools {
-		fn := map[string]any{"name": tool.Name, "parameters": map[string]any{"type": "object"}}
-		if tool.Description != "" {
-			fn["description"] = tool.Description
-		}
-		if len(tool.Parameters) > 0 {
-			fn["parameters"] = json.RawMessage(tool.Parameters)
-		}
-		if tool.Strict != nil {
-			fn["strict"] = *tool.Strict
-		}
-		out = append(out, map[string]any{"type": "function", "function": fn})
+// Function returns the function definition of tool, which Chat Completions
+// nests in its tool and Responses spreads into it.
+func Function(tool litellm.Tool) map[string]any {
+	fn := map[string]any{"name": tool.Name, "parameters": wire.ToolParameters(tool)}
+	if tool.Description != "" {
+		fn["description"] = tool.Description
 	}
-	return out, nil
+	if tool.Strict != nil {
+		fn["strict"] = *tool.Strict
+	}
+	return fn
 }
 
-func convertResponseFormat(format *litellm.ResponseFormat) (any, error) {
+func convertTools(tools []litellm.Tool) []any {
+	out := make([]any, 0, len(tools))
+	for _, tool := range tools {
+		out = append(out, map[string]any{"type": "function", "function": Function(tool)})
+	}
+	return out
+}
+
+func convertResponseFormat(format *litellm.ResponseFormat) any {
+	if format == nil {
+		return nil
+	}
 	switch format.Type {
-	case "", litellm.ResponseFormatText:
-		return nil, nil
 	case litellm.ResponseFormatJSONObject:
-		return map[string]any{"type": "json_object"}, nil
+		return map[string]any{"type": "json_object"}
 	case litellm.ResponseFormatJSONSchema:
 		schema := map[string]any{"name": format.JSONSchema.Name}
 		if format.JSONSchema.Description != "" {
@@ -341,10 +335,9 @@ func convertResponseFormat(format *litellm.ResponseFormat) (any, error) {
 		if format.JSONSchema.Strict != nil {
 			schema["strict"] = *format.JSONSchema.Strict
 		}
-		return map[string]any{"type": "json_schema", "json_schema": schema}, nil
-	default:
-		return nil, fmt.Errorf("unsupported response format %q", format.Type)
+		return map[string]any{"type": "json_schema", "json_schema": schema}
 	}
+	return nil
 }
 
 func convertToolChoice(choice *litellm.ToolChoice) any {

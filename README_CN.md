@@ -137,7 +137,7 @@ resp, err := client.Chat(ctx, litellm.Request{
 
 `ToolChoice` 取 `Mode`（`Auto`、`None`、`Required`）或工具 `Name`；nil 表示沿用厂商默认。
 
-`ToolUseBlock.Arguments` 是模型写出的文本。它本应是 JSON 对象，但不一定是，例如回复在输出上限处被截断；此时 Client 追加 `litellm.tool_arguments_invalid` 警告，线上格式要求对象的 Provider 在回放这条历史时返回点名该调用的校验错误。
+`ToolUseBlock.Arguments` 是模型写出的文本，无参数的调用为 `{}`。它本应是 JSON 对象，但不一定是，例如回复在输出上限处被截断；此时 Client 追加 `litellm.tool_arguments_invalid` 警告，线上格式要求对象的 Provider 在回放这条历史时返回点名该调用的校验错误。
 
 工具结果在所有 Provider 上都可包含文本、图片和工具引用。工具结果只能承载文本的协议（如 Chat Completions）把图片放进紧随本轮 tool 消息之后的 user 消息。
 
@@ -388,11 +388,11 @@ if err != nil {
 
 `ok == false` 表示模型未收录；`Pricing == nil` 表示价格未知；非 nil 的 `Pricing` 中费率为零表示对应用量免费。
 
-`Model.Reasoning` 为 `*bool`：nil 表示未知，false 表示不支持，true 表示支持。Token 上限为零表示未知。`Set` 和模型表加载都会校验名称、上限和费率；加载失败保留原目录。Provider 不会依据目录改写请求。
+`Model.Reasoning` 为 `*bool`：nil 表示未知，false 表示不支持，true 表示支持。Token 上限为零表示未知。`Set` 和模型表加载都会校验名称、上限和费率；加载失败保留原目录。`Cost` 要求费率有效，其他来源的 `Pricing` 请先用 `Validate` 校验。Provider 不会依据目录改写请求。
 
 ## 自定义 Provider
 
-实现 Provider 接口即可；`CapabilityProvider` 可选：
+实现 Provider 接口即可；`CapabilityProvider` 可选。`Name` 不能为空：响应、错误和 `ProviderState` 都带着它。
 
 ```go
 type Provider interface {

@@ -215,14 +215,6 @@ func TestConvertResponsesResponse(t *testing.T) {
 			FinishReason: litellm.FinishReasonSafety, FinishReasonRaw: "completed",
 		},
 	}, {
-		name: "argument-less call is an empty object, as streamed",
-		body: `{"status":"completed","output":[{"type":"function_call","call_id":"c","name":"f","arguments":""}]}`,
-		want: litellm.Response{
-			Blocks:       []litellm.Block{litellm.ToolUseBlock{ID: "c", Name: "f", Arguments: `{}`}},
-			Model:        "req-model",
-			FinishReason: litellm.FinishReasonStop, FinishReasonRaw: "completed",
-		},
-	}, {
 		name: "incomplete",
 		body: `{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[]}`,
 		want: litellm.Response{Model: "req-model", FinishReason: litellm.FinishReasonLength, FinishReasonRaw: "max_output_tokens"},

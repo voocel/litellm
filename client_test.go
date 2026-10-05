@@ -138,6 +138,7 @@ func TestValidateRequest(t *testing.T) {
 		{"top-level tool reference", Request{Model: "m", Messages: []Message{User(ToolReferenceBlock{ToolName: "lookup"})}}, "only valid inside tool result content"},
 		{"tool without name", Request{Model: "m", Messages: hi, Tools: []Tool{{}}}, "tool name cannot be empty"},
 		{"invalid tool schema", Request{Model: "m", Messages: hi, Tools: []Tool{{Name: "t", Parameters: Schema(`{`)}}}, "parameters must be valid JSON"},
+		{"unknown response format", Request{Model: "m", Messages: hi, ResponseFormat: &ResponseFormat{Type: "xml"}}, "unsupported response format"},
 		{"json schema without name", Request{Model: "m", Messages: hi, ResponseFormat: &ResponseFormat{Type: ResponseFormatJSONSchema, JSONSchema: &JSONSchema{}}}, "requires name"},
 		{"tool choice mode and name", Request{Model: "m", Messages: hi, ToolChoice: &ToolChoice{Mode: ToolChoiceAuto, Name: "t"}}, "mutually exclusive"},
 		{"unknown tool choice mode", Request{Model: "m", Messages: hi, ToolChoice: &ToolChoice{Mode: "any"}}, "unsupported tool choice mode"},
@@ -344,6 +345,34 @@ func TestClientWarnsOnMalformedToolArguments(t *testing.T) {
 	}
 }
 
+// A tool call without arguments has the empty object, whether the vendor
+// omitted them or streamed no deltas.
+func TestClientCompletesArgumentlessToolCalls(t *testing.T) {
+	call := ToolUseBlock{ID: "call", Name: "noop"}
+	client, err := New(&testProvider{
+		name:     "test",
+		chatFunc: func(context.Context, *Request) (*Response, error) { return &Response{Blocks: []Block{call}}, nil },
+		streamFunc: func(context.Context, *Request) (Stream, error) {
+			return &testStream{events: []Event{BlockStart{Index: 0, Block: call}, BlockEnd{Index: 0}, DoneEvent{}}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Chat(context.Background(), Request{Model: "m", Messages: hi})
+	if err != nil || resp.ToolCalls()[0].Arguments != "{}" || len(resp.Warnings) != 0 {
+		t.Fatalf("chat = %+v, %v", resp, err)
+	}
+	stream, err := client.Stream(context.Background(), Request{Model: "m", Messages: hi})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if resp, err = Collect(stream); err != nil || resp.ToolCalls()[0].Arguments != "{}" || len(resp.Warnings) != 0 {
+		t.Fatalf("stream = %+v, %v", resp, err)
+	}
+}
+
 func TestClientWrapsProviderErrors(t *testing.T) {
 	boom := errors.New("boom")
 	provider := &testProvider{
@@ -419,7 +448,7 @@ func TestProviderOptionsJSONBoundary(t *testing.T) {
 		t.Fatal("failed Set changed options")
 	}
 	for _, raw := range []json.RawMessage{nil, json.RawMessage(`{"unterminated":`), json.RawMessage(`1 2`), {'"', 0xff, '"'}} {
-		if _, err := (ProviderOptions{"invalid": raw}).Decode(); ErrorTypeOf(err) != ErrorTypeValidation {
+		if err := (ProviderOptions{"invalid": raw}).validate(); ErrorTypeOf(err) != ErrorTypeValidation {
 			t.Fatalf("raw %q: %v", raw, err)
 		}
 	}
@@ -544,5 +573,11 @@ func TestStopWithToolCallsIsToolCall(t *testing.T) {
 		if err != nil || resp.FinishReason != tc.want || done.FinishReason != tc.want || done.FinishReasonRaw != "raw" {
 			t.Fatalf("%s: stream = %+v, done = %+v, %v", tc.finish, resp, done, err)
 		}
+	}
+}
+
+func TestNewRejectsUnnamedProvider(t *testing.T) {
+	if _, err := New(&testProvider{}); err == nil {
+		t.Fatal("accepted a provider without a name")
 	}
 }

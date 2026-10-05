@@ -128,23 +128,15 @@ func StreamError(provider, code, message string) *litellm.Error {
 	err := litellm.NewError(provider, errorType, message, nil)
 	err.Code = code
 	// A server fault reported mid-stream is as transient as its HTTP 5xx.
-	err.Temporary = err.Temporary || streamServerFaults[strings.ToLower(code)]
+	err.Temporary = err.Temporary || streamErrorTypes[strings.ToLower(code)] == litellm.ErrorTypeProvider
 	return err
-}
-
-// streamServerFaults are the in-stream codes of server faults, which an HTTP
-// response would report with a retryable 5xx status.
-var streamServerFaults = map[string]bool{
-	"api_error":                 true,
-	"timeout_error":             true,
-	"internalserverexception":   true,
-	"modelstreamerrorexception": true,
-	"server_error":              true,
 }
 
 // streamErrorTypes maps documented in-stream codes, which stand in for the
 // HTTP status: Anthropic error types, Bedrock ConverseStream exception names
-// and OpenAI Responses error codes.
+// and OpenAI Responses error codes. The provider errors among them are
+// server faults, which an HTTP response would report with a retryable 5xx
+// status.
 var streamErrorTypes = map[string]litellm.ErrorType{
 	"invalid_request_error":       litellm.ErrorTypeValidation,
 	"authentication_error":        litellm.ErrorTypeAuth,

@@ -2,8 +2,6 @@ package gemini
 
 import (
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 
 	"github.com/voocel/litellm"
@@ -11,11 +9,9 @@ import (
 )
 
 type stream struct {
-	resp      *http.Response
+	*wire.Stream
 	sse       *wire.SSEReader
 	name      string // the provider's
-	pending   []litellm.Event
-	done      bool
 	model     string
 	blocks    wire.BlockTracker[int] // key: run number
 	run       int
@@ -26,46 +22,24 @@ type stream struct {
 func newStream(resp *http.Response, name, model string) *stream {
 	reader := wire.NewSSEReader(resp.Body, name)
 	reader.AcceptBare = true
-	return &stream{resp: resp, sse: reader, name: name, model: model}
+	s := &stream{sse: reader, name: name, model: model}
+	s.Stream = wire.NewStream(resp.Body, s.read)
+	return s
 }
 
-func (s *stream) Next() (event litellm.Event, err error) {
-	defer func() {
-		if err != nil {
-			s.done = true
-		}
-	}()
-	for len(s.pending) == 0 {
-		if s.done {
-			return nil, io.EOF
-		}
-		frame, err := s.sse.Next()
-		if errors.Is(err, io.EOF) {
-			// Before a finishReason: the Client reports the truncation as a
-			// retryable network error.
-			return nil, io.EOF
-		}
-		if err != nil {
-			return nil, err
-		}
-		var chunk response
-		if err := json.Unmarshal([]byte(frame.Data), &chunk); err != nil {
-			return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "parse stream chunk", err)
-		}
-		if err := wire.ErrorField(s.name, chunk.Error); err != nil {
-			return nil, err
-		}
-		s.pending = s.events(s.pending, chunk)
+func (s *stream) read(events []litellm.Event) ([]litellm.Event, error) {
+	frame, err := s.sse.Next()
+	if err != nil {
+		return nil, err
 	}
-	event = s.pending[0]
-	s.pending = s.pending[1:]
-	return event, nil
-}
-
-func (s *stream) Close() error {
-	s.done = true
-	s.pending = nil
-	return s.resp.Body.Close()
+	var chunk response
+	if err := json.Unmarshal([]byte(frame.Data), &chunk); err != nil {
+		return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "parse stream chunk", err)
+	}
+	if err := wire.ErrorField(s.name, chunk.Error); err != nil {
+		return nil, err
+	}
+	return s.events(events, chunk), nil
 }
 
 func (s *stream) events(events []litellm.Event, chunk response) []litellm.Event {
@@ -152,6 +126,5 @@ func (s *stream) endRun(events []litellm.Event) []litellm.Event {
 func (s *stream) finish(events []litellm.Event, raw string, reason litellm.FinishReason) []litellm.Event {
 	events = s.endRun(events)
 	events = s.blocks.CloseAll(events, nil)
-	s.done = true
 	return append(events, litellm.DoneEvent{FinishReason: reason, FinishReasonRaw: raw, Provider: s.name, Model: s.model})
 }

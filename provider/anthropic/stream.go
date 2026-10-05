@@ -2,8 +2,6 @@ package anthropic
 
 import (
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 
 	"github.com/voocel/litellm"
@@ -35,11 +33,9 @@ type streamEvent struct {
 }
 
 type stream struct {
-	resp       *http.Response
+	*wire.Stream
 	sse        *wire.SSEReader
 	name       string // the provider's
-	pending    []litellm.Event
-	done       bool
 	requested  string // the requested model, for ProviderState
 	model      string
 	usage      usage
@@ -51,45 +47,21 @@ type stream struct {
 }
 
 func newStream(resp *http.Response, name, model string) *stream {
-	return &stream{resp: resp, sse: wire.NewSSEReader(resp.Body, name), name: name, requested: model, model: model, signatures: make(map[int]string), citations: make(map[int][]json.RawMessage)}
+	s := &stream{sse: wire.NewSSEReader(resp.Body, name), name: name, requested: model, model: model, signatures: make(map[int]string), citations: make(map[int][]json.RawMessage)}
+	s.Stream = wire.NewStream(resp.Body, s.read)
+	return s
 }
 
-func (s *stream) Next() (event litellm.Event, err error) {
-	defer func() {
-		if err != nil {
-			s.done = true
-		}
-	}()
-	for len(s.pending) == 0 {
-		if s.done {
-			return nil, io.EOF
-		}
-		frame, err := s.sse.Next()
-		if errors.Is(err, io.EOF) {
-			// Before message_stop: the Client reports the truncation as a
-			// retryable network error.
-			return nil, io.EOF
-		}
-		if err != nil {
-			return nil, err
-		}
-		var e streamEvent
-		if err := json.Unmarshal([]byte(frame.Data), &e); err != nil {
-			return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "parse stream event", err)
-		}
-		if s.pending, err = s.events(s.pending, e, json.RawMessage(frame.Data)); err != nil {
-			return nil, err
-		}
+func (s *stream) read(events []litellm.Event) ([]litellm.Event, error) {
+	frame, err := s.sse.Next()
+	if err != nil {
+		return nil, err
 	}
-	event = s.pending[0]
-	s.pending = s.pending[1:]
-	return event, nil
-}
-
-func (s *stream) Close() error {
-	s.done = true
-	s.pending = nil
-	return s.resp.Body.Close()
+	var e streamEvent
+	if err := json.Unmarshal([]byte(frame.Data), &e); err != nil {
+		return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "parse stream event", err)
+	}
+	return s.events(events, e, json.RawMessage(frame.Data))
 }
 
 func (s *stream) events(events []litellm.Event, e streamEvent, raw json.RawMessage) ([]litellm.Event, error) {
@@ -111,7 +83,6 @@ func (s *stream) events(events []litellm.Event, e streamEvent, raw json.RawMessa
 			return append(events, s.mergeUsage(e.Usage)), nil
 		}
 	case "message_stop":
-		s.done = true
 		events = s.blocks.CloseAll(events, s.final)
 		return append(events, litellm.DoneEvent{FinishReason: s.finish, FinishReasonRaw: s.finishRaw, Provider: s.name, Model: s.model}), nil
 	case "content_block_start":

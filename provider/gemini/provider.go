@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/voocel/litellm"
@@ -41,8 +42,11 @@ type Provider struct {
 
 // New returns a Provider for cfg.
 func New(cfg Config) (*Provider, error) {
+	if cfg.Name == "" {
+		cfg.Name = "gemini"
+	}
 	if cfg.APIKey == "" && cfg.APIKeyFunc == nil {
-		return nil, litellm.NewError("gemini", litellm.ErrorTypeValidation, "api key is required", nil)
+		return nil, litellm.NewError(cfg.Name, litellm.ErrorTypeValidation, "api key is required", nil)
 	}
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "https://generativelanguage.googleapis.com"
@@ -54,17 +58,14 @@ func New(cfg Config) (*Provider, error) {
 	return &Provider{cfg: cfg}, nil
 }
 
-// Name returns Config.Name, or else "gemini".
+// Name returns the configured name.
 func (p *Provider) Name() string {
-	if p.cfg.Name != "" {
-		return p.cfg.Name
-	}
-	return "gemini"
+	return p.cfg.Name
 }
 
 // Capabilities reports the static protocol facts.
 func (p *Provider) Capabilities() litellm.Capabilities {
-	return litellm.Capabilities{ThinkingEffort: true, DisableThinking: true, ProviderOptions: sortedOptions()}
+	return litellm.Capabilities{ThinkingEffort: true, DisableThinking: true, ProviderOptions: slices.Clone(providerOptions)}
 }
 
 // Chat sends a generateContent request.

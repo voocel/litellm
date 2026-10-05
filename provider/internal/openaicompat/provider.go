@@ -22,41 +22,41 @@ type Provider struct {
 	spec Spec
 }
 
-// New returns a provider for spec; BaseURL falls back to spec.BaseURL.
+// New returns a provider for spec; Name and BaseURL fall back to the spec's.
 func New(cfg Config, spec Spec) (*Provider, error) {
+	if cfg.Name == "" {
+		cfg.Name = spec.Name
+	}
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = spec.BaseURL
 	}
 	if cfg.BaseURL == "" {
-		return nil, litellm.NewError(spec.Name, litellm.ErrorTypeValidation, "base url is required", nil)
+		return nil, litellm.NewError(cfg.Name, litellm.ErrorTypeValidation, "base url is required", nil)
 	}
 	if spec.APIKeyRequired && cfg.APIKey == "" && cfg.APIKeyFunc == nil {
-		return nil, litellm.NewError(spec.Name, litellm.ErrorTypeValidation, "api key is required", nil)
+		return nil, litellm.NewError(cfg.Name, litellm.ErrorTypeValidation, "api key is required", nil)
 	}
 	cfg.HTTPClient = wire.HTTPClient(cfg.HTTPClient)
 	if cfg.UserAgent == "" {
 		cfg.UserAgent = wire.DefaultUserAgent
 	}
+	// Sorted once, as Capabilities lists them.
+	spec.Options = slices.Sorted(slices.Values(spec.Options))
 	return &Provider{cfg: cfg, spec: spec}, nil
 }
 
-// Name returns Config.Name, or else the spec name.
+// Name returns the configured name.
 func (p *Provider) Name() string {
-	if p.cfg.Name != "" {
-		return p.cfg.Name
-	}
-	return p.spec.Name
+	return p.cfg.Name
 }
 
 // Capabilities lists the accepted provider options and the thinking settings
 // the dialect's mapping takes.
 func (p *Provider) Capabilities() litellm.Capabilities {
-	options := slices.Clone(p.spec.Options)
-	slices.Sort(options)
 	return litellm.Capabilities{
 		ThinkingEffort:  p.takes(litellm.Thinking{Effort: "high"}),
 		DisableThinking: p.takes(litellm.Thinking{Disabled: true}),
-		ProviderOptions: options,
+		ProviderOptions: slices.Clone(p.spec.Options),
 	}
 }
 
@@ -109,11 +109,7 @@ func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.St
 	if err != nil {
 		return nil, err
 	}
-	s := newStream(resp, req, p.Name(), p.spec)
-	if p.spec.usesSchemaPrompt(req.ResponseFormat) {
-		s.pending = append(s.pending, litellm.WarningEvent{Warning: p.spec.schemaWarning(p.Name())})
-	}
-	return s, nil
+	return newStream(resp, req, p.Name(), p.spec), nil
 }
 
 func (p *Provider) post(ctx context.Context, body []byte, stream bool) (*http.Response, error) {

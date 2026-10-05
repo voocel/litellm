@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 
 	"github.com/voocel/litellm"
 	"github.com/voocel/litellm/internal/claude"
@@ -30,15 +29,10 @@ const (
 	ProviderOptionToolChoice = "tool_choice"
 )
 
+// providerOptions is sorted, as Capabilities lists it.
 var providerOptions = []string{
-	ProviderOptionMetadata, ProviderOptionServiceTier, ProviderOptionTopK, ProviderOptionOutputConfig,
-	ProviderOptionThinking, ProviderOptionToolChoice,
-}
-
-func sortedOptions() []string {
-	out := slices.Clone(providerOptions)
-	slices.Sort(out)
-	return out
+	ProviderOptionMetadata, ProviderOptionOutputConfig, ProviderOptionServiceTier,
+	ProviderOptionThinking, ProviderOptionToolChoice, ProviderOptionTopK,
 }
 
 type request struct {
@@ -131,8 +125,8 @@ func buildRequest(req *litellm.Request, provider string, stream bool) ([]byte, e
 	if choice := req.ToolChoice; choice != nil {
 		out.ToolChoice = convertToolChoice(choice)
 	}
-	if out.Thinking != nil && out.Thinking.Effort != "" {
-		out.OutputConfig = map[string]any{"effort": out.Thinking.Effort}
+	if req.Thinking != nil && req.Thinking.Effort != "" {
+		out.OutputConfig = map[string]any{"effort": req.Thinking.Effort}
 	}
 	if format, err := convertResponseFormat(req.ResponseFormat); err != nil {
 		return nil, err
@@ -166,8 +160,6 @@ func convertResponseFormat(format *litellm.ResponseFormat) (map[string]any, erro
 		return nil, nil
 	}
 	switch format.Type {
-	case "", litellm.ResponseFormatText:
-		return nil, nil
 	case litellm.ResponseFormatJSONSchema:
 		out := map[string]any{"type": "json_schema"}
 		if len(format.JSONSchema.Schema) > 0 {
@@ -176,18 +168,12 @@ func convertResponseFormat(format *litellm.ResponseFormat) (map[string]any, erro
 		return out, nil
 	case litellm.ResponseFormatJSONObject:
 		return nil, errors.New("response_format json_object has no Messages API equivalent; use json_schema")
-	default:
-		return nil, fmt.Errorf("unsupported response format %q", format.Type)
 	}
+	return nil, nil
 }
 
 func convertTool(t litellm.Tool) tool {
-	out := tool{Name: t.Name, Description: t.Description, InputSchema: json.RawMessage(`{"type":"object"}`)}
-	if len(t.Parameters) > 0 {
-		out.InputSchema = json.RawMessage(t.Parameters)
-	}
-	out.Strict, out.DeferLoading = t.Strict, t.Deferred
-	return out
+	return tool{Name: t.Name, Description: t.Description, InputSchema: wire.ToolParameters(t), Strict: t.Strict, DeferLoading: t.Deferred}
 }
 
 // convertMessages sends leading system messages as the system field and later
@@ -260,7 +246,7 @@ func convertBlocks(blocks []litellm.Block, provider string) ([]content, error) {
 				c.Thinking = new(b.Text)
 			}
 		case litellm.ToolUseBlock:
-			input, err := toolInput(b)
+			input, err := wire.ToolInput(b)
 			if err != nil {
 				return nil, err
 			}
@@ -279,18 +265,6 @@ func convertBlocks(blocks []litellm.Block, provider string) ([]content, error) {
 		out = append(out, c)
 	}
 	return out, nil
-}
-
-// toolInput returns the arguments as the input object the protocol requires.
-func toolInput(b litellm.ToolUseBlock) (json.RawMessage, error) {
-	if b.Arguments == "" {
-		return json.RawMessage("{}"), nil
-	}
-	var object map[string]json.RawMessage
-	if json.Unmarshal([]byte(b.Arguments), &object) != nil || object == nil {
-		return nil, fmt.Errorf("tool use %q (%s) arguments are not a JSON object", b.ID, b.Name)
-	}
-	return json.RawMessage(b.Arguments), nil
 }
 
 func convertToolResult(blocks []litellm.Block, provider string) (any, error) {

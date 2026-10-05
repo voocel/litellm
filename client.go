@@ -28,6 +28,9 @@ func New(provider Provider, opts ...ClientOption) (*Client, error) {
 	if provider == nil {
 		return nil, fmt.Errorf("provider cannot be nil")
 	}
+	if provider.Name() == "" {
+		return nil, fmt.Errorf("provider name cannot be empty")
+	}
 	client := &Client{provider: provider}
 	for _, opt := range opts {
 		if err := opt(client); err != nil {
@@ -64,7 +67,7 @@ func WithStreamIdleTimeout(timeout time.Duration) ClientOption {
 
 // ProviderName returns the provider's Name.
 func (c *Client) ProviderName() string {
-	if c == nil || c.provider == nil {
+	if c == nil {
 		return ""
 	}
 	return c.provider.Name()
@@ -96,17 +99,20 @@ func (c *Client) Chat(ctx context.Context, req Request) (*Response, error) {
 		return nil, err
 	}
 	resp, err := c.provider.Chat(ctx, prepared)
-	if err != nil {
+	switch {
+	case err != nil:
 		err = endedBy(ctx, c.provider.Name(), WrapError(c.provider.Name(), ErrorTypeProvider, err))
-	}
-	if err == nil {
-		err = validateResponse(resp, c.provider.Name(), prepared.Model)
+	case resp == nil:
+		err = NewError(c.provider.Name(), ErrorTypeInternal, "provider returned nil response without error", nil)
 	}
 	if resp != nil {
 		if !c.captureRawResponse {
 			resp.Raw = nil
 		}
 		finalizeResponse(resp, c.provider.Name(), prepared.Model)
+		if err == nil {
+			err = validateToolCalls(resp.Blocks, resp.Provider)
+		}
 		for _, warning := range resp.Warnings {
 			call.event(WarningEvent{Warning: warning})
 		}

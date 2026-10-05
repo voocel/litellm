@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/voocel/litellm"
@@ -23,15 +22,10 @@ const (
 	ProviderOptionCachedContent    = "cachedContent"
 )
 
+// providerOptions is sorted, as Capabilities lists it.
 var providerOptions = []string{
-	ProviderOptionSafetySettings, ProviderOptionGenerationConfig,
-	ProviderOptionToolConfig, ProviderOptionCachedContent,
-}
-
-func sortedOptions() []string {
-	out := slices.Clone(providerOptions)
-	slices.Sort(out)
-	return out
+	ProviderOptionCachedContent, ProviderOptionGenerationConfig,
+	ProviderOptionSafetySettings, ProviderOptionToolConfig,
 }
 
 func buildRequest(req *litellm.Request, provider string) ([]byte, error) {
@@ -60,9 +54,7 @@ func buildRequest(req *litellm.Request, provider string) ([]byte, error) {
 	if len(system) > 0 {
 		out.SystemInstruction = &content{Parts: system}
 	}
-	if out.GenerationConfig, err = convertGenerationConfig(req); err != nil {
-		return nil, err
-	}
+	out.GenerationConfig = convertGenerationConfig(req)
 	if offered := req.OfferedTools(); len(offered) > 0 {
 		declarations, strict, err := convertTools(offered)
 		if err != nil {
@@ -154,13 +146,9 @@ func convertBlocks(blocks []litellm.Block, names map[string]string, provider str
 				out = append(out, part{Text: new(b.Text), Thought: true, ThoughtSignature: sig})
 			}
 		case litellm.ToolUseBlock:
-			args := json.RawMessage("{}")
-			if b.Arguments != "" {
-				var object map[string]json.RawMessage
-				if json.Unmarshal([]byte(b.Arguments), &object) != nil || object == nil {
-					return nil, fmt.Errorf("tool use %q (%s) arguments are not a JSON object", b.ID, b.Name)
-				}
-				args = json.RawMessage(b.Arguments)
+			args, err := wire.ToolInput(b)
+			if err != nil {
+				return nil, err
 			}
 			names[b.ID] = b.Name
 			out = append(out, part{FunctionCall: &functionCall{ID: b.ID, Name: b.Name, Args: args}, ThoughtSignature: signature(b.State, provider)})
@@ -209,8 +197,7 @@ func toolResponse(result litellm.ToolResultBlock) (json.RawMessage, []functionRe
 		}
 	}
 	text := strings.Join(texts, "\n")
-	var object map[string]json.RawMessage
-	if json.Unmarshal([]byte(text), &object) == nil && object != nil {
+	if wire.IsObject(text) {
 		if result.IsError {
 			response, err := json.Marshal(map[string]json.RawMessage{"error": json.RawMessage(text)})
 			return response, media, err
@@ -244,7 +231,7 @@ func convertImage(block litellm.ImageBlock) (part, error) {
 	}
 }
 
-func convertGenerationConfig(req *litellm.Request) (*generationConfig, error) {
+func convertGenerationConfig(req *litellm.Request) *generationConfig {
 	out := &generationConfig{
 		Temperature:     req.Temperature,
 		MaxOutputTokens: req.MaxTokens,
@@ -254,7 +241,6 @@ func convertGenerationConfig(req *litellm.Request) (*generationConfig, error) {
 	}
 	if format := req.ResponseFormat; format != nil {
 		switch format.Type {
-		case "", litellm.ResponseFormatText:
 		case litellm.ResponseFormatJSONObject:
 			out.ResponseFormat = &responseFormatConfig{Text: textResponseFormat{MimeType: "APPLICATION_JSON"}}
 		case litellm.ResponseFormatJSONSchema:
@@ -262,15 +248,13 @@ func convertGenerationConfig(req *litellm.Request) (*generationConfig, error) {
 				MimeType: "APPLICATION_JSON",
 				Schema:   json.RawMessage(format.JSONSchema.Schema),
 			}}
-		default:
-			return nil, fmt.Errorf("unsupported response format %q", format.Type)
 		}
 	}
 	if out.Temperature == nil && out.MaxOutputTokens == nil && out.TopP == nil && len(out.StopSequences) == 0 &&
 		out.ThinkingConfig == nil && out.ResponseFormat == nil {
-		return nil, nil
+		return nil
 	}
-	return out, nil
+	return out
 }
 
 // convertThinking maps Effort to thinkingLevel, BudgetTokens to

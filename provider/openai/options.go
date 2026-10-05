@@ -1,7 +1,5 @@
 package openai
 
-import "slices"
-
 // ProviderOptions are native request fields of the selected API, copied into
 // the body as is. An option naming a generated object (such as Responses
 // "text" or "reasoning") is merged into it. Responses options that add output
@@ -49,27 +47,23 @@ const (
 	ProviderOptionReasoning = "reasoning"
 )
 
+// chatOptions and responsesOptions are sorted, as Capabilities lists them.
 var chatOptions = []string{
-	ProviderOptionFrequencyPenalty, ProviderOptionPresencePenalty, ProviderOptionLogitBias,
-	ProviderOptionLogprobs, ProviderOptionTopLogprobs, ProviderOptionStore,
-	ProviderOptionModeration, ProviderOptionStreamOptions, ProviderOptionPromptCacheKey,
-	ProviderOptionPromptCacheOptions, ProviderOptionPromptCacheRetention, ProviderOptionPrediction,
-	ProviderOptionMetadata, ProviderOptionServiceTier,
-	ProviderOptionSafetyIdentifier, ProviderOptionUser, ProviderOptionVerbosity,
-	ProviderOptionWebSearchOptions, ProviderOptionParallelToolCalls, ProviderOptionSeed,
+	ProviderOptionFrequencyPenalty, ProviderOptionLogitBias, ProviderOptionLogprobs,
+	ProviderOptionMetadata, ProviderOptionModeration, ProviderOptionParallelToolCalls,
+	ProviderOptionPrediction, ProviderOptionPresencePenalty, ProviderOptionPromptCacheKey,
+	ProviderOptionPromptCacheOptions, ProviderOptionPromptCacheRetention, ProviderOptionSafetyIdentifier,
+	ProviderOptionSeed, ProviderOptionServiceTier, ProviderOptionStore,
+	ProviderOptionStreamOptions, ProviderOptionTopLogprobs, ProviderOptionUser,
+	ProviderOptionVerbosity, ProviderOptionWebSearchOptions,
 }
 
 var responsesOptions = []string{
-	ProviderOptionStore, ProviderOptionModeration, ProviderOptionStreamOptions, ProviderOptionPromptCacheKey,
-	ProviderOptionPromptCacheOptions, ProviderOptionPromptCacheRetention, ProviderOptionMetadata,
-	ProviderOptionServiceTier, ProviderOptionSafetyIdentifier, ProviderOptionUser, ProviderOptionParallelToolCalls,
-	ProviderOptionTopLogprobs, ProviderOptionConversation, ProviderOptionInclude,
-	ProviderOptionTruncation, ProviderOptionBackground, ProviderOptionPrompt,
-	ProviderOptionText, ProviderOptionReasoning,
-}
-
-func sortedCopy(keys []string) []string {
-	out := slices.Clone(keys)
-	slices.Sort(out)
-	return out
+	ProviderOptionBackground, ProviderOptionConversation, ProviderOptionInclude,
+	ProviderOptionMetadata, ProviderOptionModeration, ProviderOptionParallelToolCalls,
+	ProviderOptionPrompt, ProviderOptionPromptCacheKey, ProviderOptionPromptCacheOptions,
+	ProviderOptionPromptCacheRetention, ProviderOptionReasoning, ProviderOptionSafetyIdentifier,
+	ProviderOptionServiceTier, ProviderOptionStore, ProviderOptionStreamOptions,
+	ProviderOptionText, ProviderOptionTopLogprobs, ProviderOptionTruncation,
+	ProviderOptionUser,
 }

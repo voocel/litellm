@@ -298,15 +298,6 @@ func TestObserverConcurrentCallsAndAttributes(t *testing.T) {
 	}
 }
 
-func TestObserverPanicIsolation(t *testing.T) {
-	observer, rec := newTestObserver(t, WithSpanAttributes(func(context.Context) []attribute.KeyValue { panic("resolver") }))
-	ctx := context.Background()
-	next, call := observer.Start(ctx, litellm.CallInfo{Request: &litellm.Request{Model: "m"}})
-	if next != ctx || call != nil || len(rec.Ended()) != 0 {
-		t.Fatal("panic corrupted context or leaked observation")
-	}
-}
-
 // Unreported counts are zero, so zero counts are omitted.
 func TestZeroUsageIsOmitted(t *testing.T) {
 	observer, rec := newTestObserver(t)

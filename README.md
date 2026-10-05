@@ -137,7 +137,7 @@ resp, err := client.Chat(ctx, litellm.Request{
 
 `ToolChoice` takes a `Mode` (`Auto`, `None`, `Required`) or a tool `Name`; nil leaves the vendor default.
 
-`ToolUseBlock.Arguments` is the text the model wrote. It is meant to be a JSON object but may not be one, as when the reply was cut off at the output limit; the Client then adds a `litellm.tool_arguments_invalid` warning, and providers whose wire format needs an object reject the call in history with a validation error naming it.
+`ToolUseBlock.Arguments` is the text the model wrote, `{}` for a call without arguments. It is meant to be a JSON object but may not be one, as when the reply was cut off at the output limit; the Client then adds a `litellm.tool_arguments_invalid` warning, and providers whose wire format needs an object reject the call in history with a validation error naming it.
 
 A tool result holds text, images and tool references on every provider. Where a tool result carries text only, as in Chat Completions, the images follow the turn's tool messages in a user message.
 
@@ -388,11 +388,11 @@ Names are the list's keys, whose vendor prefixes follow LiteLLM's provider names
 
 `ok == false` means the model is absent; `Pricing == nil` means its price is unknown. A non-nil `Pricing` with zero rates means usage is free.
 
-`Model.Reasoning` is `*bool`: nil means unknown, false means unsupported, and true means supported. Token limits of zero are unknown. `Set` and model-list loading validate names, limits and rates; a failed load leaves the catalog unchanged. Providers never consult the catalog to change requests.
+`Model.Reasoning` is `*bool`: nil means unknown, false means unsupported, and true means supported. Token limits of zero are unknown. `Set` and model-list loading validate names, limits and rates; a failed load leaves the catalog unchanged. `Cost` takes valid rates, so check `Pricing` built elsewhere with `Validate` first. Providers never consult the catalog to change requests.
 
 ## Custom Providers
 
-Implement the provider interface; `CapabilityProvider` is optional:
+Implement the provider interface; `CapabilityProvider` is optional. `Name` must not be empty: responses, errors and `ProviderState` carry it.
 
 ```go
 type Provider interface {

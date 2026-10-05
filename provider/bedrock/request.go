@@ -2,10 +2,8 @@ package bedrock
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/voocel/litellm"
@@ -25,16 +23,11 @@ const (
 	ProviderOptionRequestMetadata                   = "requestMetadata"
 )
 
+// providerOptions is sorted, as Capabilities lists it.
 var providerOptions = []string{
 	ProviderOptionAdditionalModelRequestFields, ProviderOptionAdditionalModelResponseFieldPaths,
 	ProviderOptionGuardrailConfig, ProviderOptionPerformanceConfig, ProviderOptionPromptVariables,
 	ProviderOptionRequestMetadata,
-}
-
-func sortedOptions() []string {
-	out := slices.Clone(providerOptions)
-	slices.Sort(out)
-	return out
 }
 
 // buildRequest maps Thinking in Anthropic's format through
@@ -54,8 +47,8 @@ func buildRequest(req *litellm.Request, provider string) ([]byte, error) {
 	}
 	if thinking := claude.Thinking(req.Thinking); thinking != nil {
 		out.AdditionalModelRequestFields = map[string]any{"thinking": thinking}
-		if thinking.Effort != "" {
-			out.AdditionalModelRequestFields["output_config"] = map[string]any{"effort": thinking.Effort}
+		if effort := req.Thinking.Effort; effort != "" {
+			out.AdditionalModelRequestFields["output_config"] = map[string]any{"effort": effort}
 		}
 	}
 	if out.OutputConfig, err = convertOutputConfig(req.ResponseFormat); err != nil {
@@ -83,11 +76,7 @@ func convertToolConfig(req *litellm.Request) (*toolConfig, error) {
 	}
 	out := &toolConfig{}
 	for _, t := range req.Tools {
-		spec := &toolSpec{Name: t.Name, Description: t.Description, InputSchema: inputSchema{JSON: json.RawMessage(`{"type":"object"}`)}}
-		if len(t.Parameters) > 0 {
-			spec.InputSchema.JSON = json.RawMessage(t.Parameters)
-		}
-		spec.Strict = t.Strict
+		spec := &toolSpec{Name: t.Name, Description: t.Description, InputSchema: inputSchema{JSON: wire.ToolParameters(t)}, Strict: t.Strict}
 		out.Tools = append(out.Tools, tool{ToolSpec: spec})
 	}
 	switch {
@@ -185,13 +174,9 @@ func convertBlocks(blocks []litellm.Block, provider, model string) ([]content, e
 				c.ReasoningContent = &reasoningContent{RedactedContent: state.RedactedContent}
 			}
 		case litellm.ToolUseBlock:
-			input := json.RawMessage("{}")
-			if b.Arguments != "" {
-				var object map[string]json.RawMessage
-				if json.Unmarshal([]byte(b.Arguments), &object) != nil || object == nil {
-					return nil, fmt.Errorf("tool use %q (%s) arguments are not a JSON object", b.ID, b.Name)
-				}
-				input = json.RawMessage(b.Arguments)
+			input, err := wire.ToolInput(b)
+			if err != nil {
+				return nil, err
 			}
 			c, cache = content{ToolUse: &toolUse{ToolUseID: claude.ToolUseID(b.ID), Name: b.Name, Input: input}}, b.Cache
 		case litellm.ToolResultBlock:
@@ -268,14 +253,11 @@ func convertOutputConfig(format *litellm.ResponseFormat) (*outputConfig, error) 
 		return nil, nil
 	}
 	switch format.Type {
-	case "", litellm.ResponseFormatText:
-		return nil, nil
 	case litellm.ResponseFormatJSONSchema:
 		schema := jsonSchema{Name: format.JSONSchema.Name, Description: format.JSONSchema.Description, Schema: string(format.JSONSchema.Schema)}
 		return &outputConfig{TextFormat: &textFormat{Type: "json_schema", Structure: textFormatStructure{JSONSchema: schema}}}, nil
 	case litellm.ResponseFormatJSONObject:
 		return nil, errors.New("response_format json_object has no Converse equivalent; use json_schema")
-	default:
-		return nil, fmt.Errorf("unsupported response format %q", format.Type)
 	}
+	return nil, nil
 }

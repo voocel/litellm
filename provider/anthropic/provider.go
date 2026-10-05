@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/voocel/litellm"
@@ -64,7 +65,7 @@ func (p *Provider) Name() string {
 
 // Capabilities reports the static protocol facts.
 func (p *Provider) Capabilities() litellm.Capabilities {
-	return litellm.Capabilities{MaxTokensRequired: true, ThinkingEffort: true, DisableThinking: true, DeferredTools: true, ProviderOptions: sortedOptions()}
+	return litellm.Capabilities{MaxTokensRequired: true, ThinkingEffort: true, DisableThinking: true, DeferredTools: true, ProviderOptions: slices.Clone(providerOptions)}
 }
 
 // Chat sends a Messages request.

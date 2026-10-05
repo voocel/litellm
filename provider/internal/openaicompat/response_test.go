@@ -76,15 +76,6 @@ func TestChatResponse(t *testing.T) {
 			},
 		},
 		{
-			name:  "argument-less tool call is an empty object, as streamed",
-			newFn: plain,
-			body:  `{"choices":[{"message":{"tool_calls":[{"id":"c","type":"function","function":{"name":"f","arguments":""}}]},"finish_reason":"tool_calls"}]}`,
-			want: &litellm.Response{
-				Blocks: []litellm.Block{litellm.ToolUseBlock{ID: "c", Name: "f", Arguments: `{}`}},
-				Model:  "m", Provider: "test", FinishReason: litellm.FinishReasonToolCall, FinishReasonRaw: "tool_calls",
-			},
-		},
-		{
 			name:  "cache usage",
 			newFn: plain,
 			body:  `{"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":1,"total_tokens":10,"prompt_tokens_details":{"cached_tokens":4,"cache_write_tokens":2}}}`,

@@ -53,11 +53,7 @@ func (p *Provider) convertResponse(resp *chatResponse, req *litellm.Request) (*l
 		}
 	}
 	for _, call := range choice.Message.ToolCalls {
-		out.Blocks = append(out.Blocks, litellm.ToolUseBlock{
-			ID:        call.ID,
-			Name:      call.Function.Name,
-			Arguments: cmp.Or(call.Function.Arguments, "{}"), // as streams deliver an argument-less call
-		})
+		out.Blocks = append(out.Blocks, litellm.ToolUseBlock{ID: call.ID, Name: call.Function.Name, Arguments: call.Function.Arguments})
 	}
 	return out, nil
 }

@@ -162,16 +162,8 @@ func responsesFormat(format *litellm.ResponseFormat) map[string]any {
 func responsesTools(tools []litellm.Tool) []any {
 	out := make([]any, 0, len(tools))
 	for _, tool := range tools {
-		fn := map[string]any{"type": "function", "name": tool.Name, "parameters": map[string]any{"type": "object"}}
-		if tool.Description != "" {
-			fn["description"] = tool.Description
-		}
-		if len(tool.Parameters) > 0 {
-			fn["parameters"] = json.RawMessage(tool.Parameters)
-		}
-		if tool.Strict != nil {
-			fn["strict"] = *tool.Strict
-		}
+		fn := openaicompat.Function(tool)
+		fn["type"] = "function"
 		out = append(out, fn)
 	}
 	return out

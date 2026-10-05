@@ -106,7 +106,7 @@ func TestCapabilities(t *testing.T) {
 	for api, want := range map[string][]string{APIChat: chatOptions, APIResponses: responsesOptions} {
 		p, _ := testProvider(t, Config{API: api}, "")
 		caps := p.Capabilities()
-		if caps.MaxTokensRequired || !caps.ThinkingEffort || !caps.DisableThinking || !slices.IsSorted(caps.ProviderOptions) || !reflect.DeepEqual(caps.ProviderOptions, sortedCopy(want)) {
+		if caps.MaxTokensRequired || !caps.ThinkingEffort || !caps.DisableThinking || !slices.IsSorted(caps.ProviderOptions) || !reflect.DeepEqual(caps.ProviderOptions, want) {
 			t.Fatalf("%s: capabilities = %+v", api, caps)
 		}
 		caps.ProviderOptions[0] = "mutated"

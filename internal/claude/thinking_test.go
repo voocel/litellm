@@ -17,7 +17,7 @@ func TestThinking(t *testing.T) {
 		{name: "nil", in: nil, want: nil},
 		{name: "disabled", in: &litellm.Thinking{Disabled: true}, want: &ThinkingConfig{Type: "disabled"}},
 		{name: "enabled", in: &litellm.Thinking{}, want: &ThinkingConfig{Type: "adaptive"}},
-		{name: "effort", in: &litellm.Thinking{Effort: "max"}, want: &ThinkingConfig{Type: "adaptive", Effort: "max"}},
+		{name: "effort", in: &litellm.Thinking{Effort: "max"}, want: &ThinkingConfig{Type: "adaptive"}},
 		{name: "budget", in: &litellm.Thinking{BudgetTokens: &budget}, want: &ThinkingConfig{Type: "enabled", BudgetTokens: &budget}},
 		{name: "include output", in: &litellm.Thinking{IncludeOutput: true}, want: &ThinkingConfig{Type: "adaptive", Display: "summarized"}},
 	} {

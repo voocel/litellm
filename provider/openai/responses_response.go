@@ -105,7 +105,7 @@ func convertResponsesResponse(resp *responsesResponse, provider, model string) *
 			}
 		case "function_call":
 			out.Blocks = append(out.Blocks, litellm.ToolUseBlock{
-				ID: item.CallID, Name: item.Name, Arguments: cmp.Or(item.Arguments, "{}"),
+				ID: item.CallID, Name: item.Name, Arguments: item.Arguments,
 				State: itemState{ID: item.ID}.state(provider, model),
 			})
 		case "reasoning":

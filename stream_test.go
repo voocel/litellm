@@ -271,7 +271,7 @@ func TestValidatedStreamStopsAtTerminalEvent(t *testing.T) {
 
 // Arguments warn unless they are a JSON object, as every protocol takes.
 func TestToolArgumentsMustBeAnObject(t *testing.T) {
-	for args, warns := range map[string]bool{`{"a":1}`: false, `{}`: false, ``: false, `null`: true, `[]`: true, `"x"`: true, `{"a":`: true} {
+	for args, warns := range map[string]bool{`{"a":1}`: false, `{}`: false, `null`: true, `[]`: true, `"x"`: true, `{"a":`: true} {
 		got := malformedToolArgumentWarnings([]Block{ToolUseBlock{ID: "c", Name: "t", Arguments: args}}, "p")
 		if (len(got) > 0) != warns {
 			t.Errorf("%q: warnings %+v", args, got)

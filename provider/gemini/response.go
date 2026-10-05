@@ -68,11 +68,7 @@ func partBlock(p part, provider, model string) litellm.Block {
 		if id == "" {
 			id = "call_" + rand.Text() // unique across processes, as persisted history needs
 		}
-		args := string(p.FunctionCall.Args)
-		if args == "" {
-			args = "{}" // args is optional on the wire
-		}
-		return litellm.ToolUseBlock{ID: id, Name: p.FunctionCall.Name, Arguments: args, State: signed(provider, model, p.ThoughtSignature)}
+		return litellm.ToolUseBlock{ID: id, Name: p.FunctionCall.Name, Arguments: string(p.FunctionCall.Args), State: signed(provider, model, p.ThoughtSignature)}
 	case p.Thought:
 		return litellm.ReasoningBlock{Text: text, State: signed(provider, model, p.ThoughtSignature)}
 	case text != "" || p.ThoughtSignature != "":

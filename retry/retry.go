@@ -75,7 +75,7 @@ func newTransport(base http.RoundTripper, policy *Policy) http.RoundTripper {
 	if policy == nil || policy.MaxAttempts <= 1 {
 		return base
 	}
-	return &transport{base: base, policy: normalizePolicy(*policy)}
+	return &transport{base: base, policy: *policy}
 }
 
 type transport struct {
@@ -129,21 +129,21 @@ func requestForAttempt(req *http.Request, attempt int) (*http.Request, error) {
 	return cloned, nil
 }
 
+// normalizePolicy gives the unset durations and multiplier of policy the
+// DefaultPolicy values.
 func normalizePolicy(policy Policy) Policy {
-	if policy.MaxAttempts <= 0 {
-		policy.MaxAttempts = 1
-	}
+	defaults := DefaultPolicy()
 	if policy.InitialDelay <= 0 {
-		policy.InitialDelay = 200 * time.Millisecond
+		policy.InitialDelay = defaults.InitialDelay
 	}
 	if policy.MaxDelay <= 0 {
-		policy.MaxDelay = 2 * time.Second
+		policy.MaxDelay = defaults.MaxDelay
 	}
 	if policy.Multiplier <= 0 {
-		policy.Multiplier = 2
+		policy.Multiplier = defaults.Multiplier
 	}
 	if policy.MaxRetryAfter <= 0 {
-		policy.MaxRetryAfter = time.Minute
+		policy.MaxRetryAfter = defaults.MaxRetryAfter
 	}
 	return policy
 }

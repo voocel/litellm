@@ -121,9 +121,6 @@ type validatedStream struct {
 }
 
 func newValidatedStream(provider, model string, stream Stream) Stream {
-	if stream == nil {
-		return nil
-	}
 	state := newCollector()
 	state.provider, state.model = provider, model
 	return &validatedStream{provider: provider, inner: stream, state: state}
@@ -307,8 +304,15 @@ func (c *collector) Apply(event Event) (Event, bool, error) {
 			c.model = e.Model
 		}
 		// The reply is checked before it counts as complete, so that a stream
-		// failing here never reads as done.
-		if err := validateResponse(&Response{Blocks: c.blocks, Provider: c.provider, Model: c.model}, c.provider, c.model); err != nil {
+		// failing here never reads as done. An external stream names its
+		// provider and model only here.
+		if c.provider == "" {
+			return nil, false, NewError("", ErrorTypeInternal, "response missing provider", nil)
+		}
+		if c.model == "" {
+			return nil, false, NewError(c.provider, ErrorTypeInternal, "response missing model", nil)
+		}
+		if err := validateToolCalls(c.blocks, c.provider); err != nil {
 			return nil, false, err
 		}
 		c.done = true
@@ -363,11 +367,7 @@ func (c *collector) end(e BlockEnd) (Block, error) {
 		}
 		block = merged
 	}
-	// An argument-less call streams no deltas; keep its arguments valid JSON.
-	if tool, ok := block.(ToolUseBlock); ok && tool.Arguments == "" {
-		tool.Arguments = "{}"
-		block = tool
-	}
+	block = withArguments(block)
 	c.blocks[e.Index] = block
 	delete(c.builders, e.Index)
 	c.closed[e.Index] = true

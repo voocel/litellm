@@ -188,7 +188,7 @@ A `ToolResultBlock` holds text, images and tool references on every provider:
 
 A tool reference sent as text reads `Tool <name> is now available.`; the tool must be among the request's tools.
 
-A `Deferred` tool goes to Anthropic from the first request on with `defer_loading: true`, and the API loads it once a `tool_reference` names it ([Tool search](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool)); Bedrock's Converse cannot defer one and receives it from the start; the other adapters send it from the request whose history references it.
+A `Deferred` tool goes to Anthropic from the first request on with `defer_loading: true`, and the API loads it once a `tool_reference` names it ([Tool search](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool)); Bedrock's Converse cannot defer one and receives it from the start; the other adapters send it from the request whose history references it. For Claude on Bedrock, the Anthropic adapter with `BaseURL` `https://bedrock-mantle.{region}.api.aws/anthropic` and a Bedrock API key as `APIKey` speaks Bedrock's Messages API, which takes Anthropic's request format and defers tools ([Claude in Amazon Bedrock](https://platform.claude.com/docs/en/build-with-claude/claude-in-amazon-bedrock)).
 
 `ToolUseBlock.Arguments` is the text the model wrote. Anthropic, Bedrock and Gemini need a JSON object on the wire and return a validation error naming the call when the arguments are not one; the Chat Completions and Responses adapters send the text as it is.
 

@@ -83,8 +83,9 @@ type ReasoningBlock struct {
 }
 
 // ToolUseBlock is a tool call from the assistant. Arguments is the text the
-// model produced, which is meant to be a JSON object but may not be one, as
-// when the response was cut off at the output limit.
+// model produced, {} in a Client's reply for a call without arguments. It
+// is meant to be a JSON object but may not be one, as when the response was
+// cut off at the output limit.
 type ToolUseBlock struct {
 	ID        string         `json:"id"`
 	Name      string         `json:"name"`
@@ -292,6 +293,37 @@ type JSONSchema struct {
 	Description string `json:"description,omitempty"`
 	Schema      Schema `json:"schema,omitempty"`
 	Strict      *bool  `json:"strict,omitempty"`
+}
+
+// validate reports whether f is well formed. A nil format is valid.
+func (f *ResponseFormat) validate() error {
+	if f == nil {
+		return nil
+	}
+	switch f.Type {
+	case "", ResponseFormatText, ResponseFormatJSONObject:
+		return nil
+	case ResponseFormatJSONSchema:
+	default:
+		return NewError("", ErrorTypeValidation, fmt.Sprintf("unsupported response format %q", f.Type), nil)
+	}
+	schema := f.JSONSchema
+	if schema == nil {
+		return NewError("", ErrorTypeValidation, "json schema response format requires schema", nil)
+	}
+	if schema.Name == "" {
+		return NewError("", ErrorTypeValidation, "json schema response format requires name", nil)
+	}
+	if !utf8.ValidString(schema.Name) {
+		return NewError("", ErrorTypeValidation, "json schema response format name must be valid UTF-8", nil)
+	}
+	if !utf8.ValidString(schema.Description) {
+		return NewError("", ErrorTypeValidation, "json schema response format description must be valid UTF-8", nil)
+	}
+	if len(schema.Schema) > 0 && !json.Valid(schema.Schema) {
+		return NewError("", ErrorTypeValidation, "json schema response format schema must be valid JSON", nil)
+	}
+	return nil
 }
 
 // Thinking configures model reasoning; a nil *Thinking leaves it to the
@@ -527,12 +559,10 @@ func (o ProviderOptions) validate() error {
 	return nil
 }
 
-// Decode gives a provider an independent JSON tree. Numbers remain json.Number
-// to preserve integer precision until the provider validates its wire type.
+// Decode gives a provider an independent JSON tree of the options, which the
+// Client validated. Numbers remain json.Number to preserve integer precision
+// until the provider validates its wire type.
 func (o ProviderOptions) Decode() (map[string]any, error) {
-	if err := o.validate(); err != nil {
-		return nil, err
-	}
 	if o == nil {
 		return nil, nil
 	}
