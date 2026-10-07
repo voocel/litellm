@@ -544,3 +544,22 @@ func mustOptions(t *testing.T, values map[string]any) litellm.ProviderOptions {
 	}
 	return o
 }
+
+// Only the models that generate content are listed, by their bare ids.
+func TestListModels(t *testing.T) {
+	p, err := New(Config{APIKey: "k", HTTPClient: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() != "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000" || req.Header.Get("x-goog-api-key") != "k" {
+			t.Errorf("%s with %v", req.URL, req.Header)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"models":[
+			{"name":"models/gemini-pro","displayName":"Gemini Pro","supportedGenerationMethods":["generateContent","countTokens"]},
+			{"name":"models/text-embedding","displayName":"Embedding","supportedGenerationMethods":["embedContent"]}]}`))}, nil
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.ListModels(context.Background())
+	if err != nil || !reflect.DeepEqual(got, []litellm.ModelInfo{{ID: "gemini-pro", Name: "Gemini Pro"}}) {
+		t.Fatalf("%+v, %v", got, err)
+	}
+}

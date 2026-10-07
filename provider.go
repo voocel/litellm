@@ -3,6 +3,7 @@ package litellm
 import (
 	"context"
 	"net/http"
+	"time"
 )
 
 // Provider adapts one vendor protocol. Name identifies it in responses,
@@ -18,4 +19,21 @@ type Provider interface {
 // HTTPClient sends provider requests; *http.Client satisfies it.
 type HTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
+}
+
+// ModelLister is implemented by providers that list the models their
+// credentials reach, which also checks the credentials: a rejected key fails
+// with ErrorTypeAuth.
+type ModelLister interface {
+	ListModels(context.Context) ([]ModelInfo, error)
+}
+
+// ModelInfo is a model as the vendor lists it, in the vendor's order.
+type ModelInfo struct {
+	ID string
+	// Name is the vendor's display name; empty when it gives none.
+	Name string
+	// Created is when the vendor released or listed the model; zero when it
+	// does not say.
+	Created time.Time
 }

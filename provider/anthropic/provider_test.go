@@ -194,3 +194,27 @@ func fixtureResponse(t *testing.T, name string) *http.Response {
 	body := testgolden.ReadFixture(t, "../../testdata/anthropic/"+name)
 	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(body)))}
 }
+
+// Models come newest first with their display names; an unknown release date
+// is no date.
+func TestListModels(t *testing.T) {
+	p, err := New(Config{APIKey: "k", BaseURL: "https://example.test/", HTTPClient: doFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodGet || req.URL.String() != "https://example.test/v1/models?limit=1000" || req.Header.Get("x-api-key") != "k" || req.Header.Get("anthropic-version") != "2023-06-01" {
+			t.Errorf("%s %s with %v", req.Method, req.URL, req.Header)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[
+			{"id":"claude-new","display_name":"Claude New","created_at":"2026-07-24T00:00:00Z"},
+			{"id":"claude-old","display_name":"Claude Old","created_at":"1970-01-01T00:00:00Z"}],"has_more":false}`))}, nil
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.ListModels(context.Background())
+	want := []litellm.ModelInfo{
+		{ID: "claude-new", Name: "Claude New", Created: time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC)},
+		{ID: "claude-old", Name: "Claude Old"},
+	}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("%+v, %v", got, err)
+	}
+}

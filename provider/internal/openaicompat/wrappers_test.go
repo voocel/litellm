@@ -1,10 +1,14 @@
 package openaicompat_test
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/voocel/litellm"
 	"github.com/voocel/litellm/internal/testgolden"
@@ -222,4 +226,32 @@ func TestWrapperDialects(t *testing.T) {
 		body := compattest.Body(t, minimax.New, &litellm.Request{Model: "m", Messages: []litellm.Message{msg}}, false)
 		compattest.AssertJSON(t, body["messages"], `[{"role": "assistant", "content": "ok", "reasoning_content": "t"}]`)
 	})
+}
+
+// Every dialect lists its models with the key, OpenRouter from the list that
+// takes it, and a rejected key is an auth error.
+func TestListModels(t *testing.T) {
+	for _, w := range wrappers {
+		path := "/v1/models"
+		if w.name == "openrouter" {
+			path = "/v1/models/user"
+		}
+		p := compattest.Provider(t, w.newFn, compattest.Doer(func(req *http.Request) (*http.Response, error) {
+			if req.Method != http.MethodGet || req.URL.Path != path || req.Header.Get("Authorization") != "Bearer key" {
+				t.Errorf("%s: %s %s with %q", w.name, req.Method, req.URL, req.Header.Get("Authorization"))
+			}
+			return compattest.Response(`{"object":"list","data":[{"id":"a","created":1750000000},{"id":"b","name":"Model B"}]}`), nil
+		}))
+		got, err := p.ListModels(context.Background())
+		want := []litellm.ModelInfo{{ID: "a", Created: time.Unix(1750000000, 0).UTC()}, {ID: "b", Name: "Model B"}}
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: %+v, %v", w.name, got, err)
+		}
+	}
+	p := compattest.Provider(t, compat.New, compattest.Doer(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusUnauthorized, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"bad key"}}`))}, nil
+	}))
+	if _, err := p.ListModels(context.Background()); litellm.ErrorTypeOf(err) != litellm.ErrorTypeAuth {
+		t.Errorf("a rejected key: %v", err)
+	}
 }

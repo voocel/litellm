@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/voocel/litellm"
 	"github.com/voocel/litellm/internal/wire"
@@ -106,19 +107,60 @@ func (p *Provider) post(ctx context.Context, req *litellm.Request, stream bool) 
 	if err != nil {
 		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeInternal, "create request", err)
 	}
-	key, err := wire.APIKey(ctx, p.cfg.APIKey, p.cfg.APIKeyFunc, true)
-	if err != nil {
-		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
-	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("User-Agent", p.cfg.UserAgent)
-	httpReq.Header.Set("x-api-key", key)
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
 	if stream {
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}
-	if err := wire.SetHeaders(httpReq.Header, p.cfg.Headers); err != nil {
+	if err := p.setHeaders(ctx, httpReq); err != nil {
 		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
 	}
 	return wire.Do(p.cfg.HTTPClient, httpReq, p.Name(), "request")
+}
+
+func (p *Provider) setHeaders(ctx context.Context, req *http.Request) error {
+	key, err := wire.APIKey(ctx, p.cfg.APIKey, p.cfg.APIKeyFunc, true)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", p.cfg.UserAgent)
+	req.Header.Set("x-api-key", key)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	return wire.SetHeaders(req.Header, p.cfg.Headers)
+}
+
+// ListModels lists the models of GET /v1/models, newest first. The vendor
+// has far fewer than the 1000 one page holds.
+func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(p.cfg.BaseURL, "/")+"/v1/models?limit=1000", nil)
+	if err != nil {
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeInternal, "create request", err)
+	}
+	if err := p.setHeaders(ctx, httpReq); err != nil {
+		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
+	}
+	resp, err := wire.Do(p.cfg.HTTPClient, httpReq, p.Name(), "list models")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var list struct {
+		Data []struct {
+			ID          string    `json:"id"`
+			DisplayName string    `json:"display_name"`
+			CreatedAt   time.Time `json:"created_at"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeProvider, "decode model list", err)
+	}
+	out := make([]litellm.ModelInfo, 0, len(list.Data))
+	for _, m := range list.Data {
+		info := litellm.ModelInfo{ID: m.ID, Name: m.DisplayName}
+		// An unknown release date comes as the epoch.
+		if m.CreatedAt.Unix() > 0 {
+			info.Created = m.CreatedAt
+		}
+		out = append(out, info)
+	}
+	return out, nil
 }

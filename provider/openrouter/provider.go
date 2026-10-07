@@ -34,6 +34,7 @@ func New(cfg Config) (*Provider, error) {
 		Name:            "openrouter",
 		BaseURL:         "https://openrouter.ai/api/v1",
 		APIKeyRequired:  true,
+		ModelsPath:      "/models/user", // /models is public; this takes the key
 		Thinking:        mapThinking,
 		Options:         []string{ProviderOptionCacheControl, ProviderOptionSessionID, ProviderOptionRouting},
 		Cache:           map[string]any{"cache_control": map[string]any{"type": "ephemeral"}},

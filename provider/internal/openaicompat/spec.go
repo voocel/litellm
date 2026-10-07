@@ -37,6 +37,9 @@ type Spec struct {
 	Name           string
 	BaseURL        string // used when Config.BaseURL is empty
 	APIKeyRequired bool
+	// ModelsPath lists the models; empty means /models. It must take the
+	// API key, so that listing checks it.
+	ModelsPath string
 
 	// MaxTokensField names the output limit field; empty means max_tokens.
 	MaxTokensField string

@@ -250,6 +250,14 @@ names := provider.Names() // "anthropic"、"bedrock"、"compat"……
 
 `client.Capabilities()` 报告适配器的协议事实：是否必须设置 `MaxTokens`，能否发送 `Thinking.Effort` 与 `Thinking.Disabled`，以及可接受的选项键。它按 Provider 静态固定，未声明的 Provider（例如网关）`ok` 为 false。哪些模型支持推理属于模型数据，见[模型目录](#用量与模型目录)；模型是否接受请求由厂商裁决。
 
+除 `bedrock` 和网关外，内置 Provider 都实现了 `litellm.ModelLister`：`ListModels` 按厂商给出的顺序返回这组凭据能用的模型，厂商提供时带上显示名和发布时间。它顺带校验 key，被拒绝时返回 `ErrorTypeAuth`，适合用在配置界面里。
+
+```go
+if lister, ok := p.(litellm.ModelLister); ok {
+	models, err := lister.ListModels(ctx)
+}
+```
+
 ### OpenAI Responses
 
 设置 `openai.Config.API = openai.APIResponses`，即可让 `Chat` 与 `Stream` 走 Responses API，请求与响应类型不变。Responses 原生字段通过 provider option 传入；使用另一种 API 的选项会报错。托管工具和服务端压缩的输出 litellm 不建模，因此不提供这些选项；也不提供 `previous_response_id`：历史总是完整发送。
@@ -392,7 +400,7 @@ if err != nil {
 
 ## 自定义 Provider
 
-实现 Provider 接口即可；`CapabilityProvider` 可选。`Name` 不能为空：响应、错误和 `ProviderState` 都带着它。
+实现 Provider 接口即可；`CapabilityProvider` 和 `ModelLister` 可选。`Name` 不能为空：响应、错误和 `ProviderState` 都带着它。
 
 ```go
 type Provider interface {

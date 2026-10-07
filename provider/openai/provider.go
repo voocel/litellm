@@ -121,6 +121,11 @@ func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.St
 	return p.chat.Stream(ctx, req)
 }
 
+// ListModels lists the models of GET /models, whichever API is selected.
+func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) {
+	return p.chat.ListModels(ctx)
+}
+
 // checkOptions points options of the other API to the Config.API that accepts
 // them.
 func (p *Provider) checkOptions(req *litellm.Request) error {

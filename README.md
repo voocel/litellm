@@ -250,6 +250,14 @@ Each provider's `Config.Name`, or `provider.Config.Name`, renames it: responses,
 
 `client.Capabilities()` reports the protocol facts of the adapter: whether `MaxTokens` is required, whether it sends `Thinking.Effort` and `Thinking.Disabled`, and the accepted option keys. It is static per provider, and `ok` is false for a provider that declares nothing, such as a gateway. Which models think is model data, in the [catalog](#usage-and-model-catalog); whether a model honors a request is the vendor's call.
 
+Every built-in provider but `bedrock` and the gateway implements `litellm.ModelLister`: `ListModels` returns the models the credentials reach, in the vendor's order, with the display name and release date where the vendor gives them. It checks the key on the way, a rejected one failing with `ErrorTypeAuth`, which suits a setup screen.
+
+```go
+if lister, ok := p.(litellm.ModelLister); ok {
+	models, err := lister.ListModels(ctx)
+}
+```
+
 ### OpenAI Responses
 
 Set `openai.Config.API = openai.APIResponses` to route `Chat` and `Stream` through the Responses API with the same request and response types. Native Responses fields are provider options; using an option of the other API is an error. Hosted tools and server-side compaction are not offered, since litellm does not model their output, nor is `previous_response_id`: history is sent whole.
@@ -392,7 +400,7 @@ Names are the list's keys, whose vendor prefixes follow LiteLLM's provider names
 
 ## Custom Providers
 
-Implement the provider interface; `CapabilityProvider` is optional. `Name` must not be empty: responses, errors and `ProviderState` carry it.
+Implement the provider interface; `CapabilityProvider` and `ModelLister` are optional. `Name` must not be empty: responses, errors and `ProviderState` carry it.
 
 ```go
 type Provider interface {

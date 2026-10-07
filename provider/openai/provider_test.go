@@ -232,3 +232,20 @@ func TestChatStream(t *testing.T) {
 		t.Fatalf("response = %#v\nwant %#v", resp, want)
 	}
 }
+
+// Models are listed from /models whichever API is selected.
+func TestListModels(t *testing.T) {
+	p, err := New(Config{API: APIResponses, APIKey: "key", HTTPClient: httpFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() != "https://api.openai.com/v1/models" || req.Header.Get("Authorization") != "Bearer key" {
+			t.Errorf("%s with %q", req.URL, req.Header.Get("Authorization"))
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"gpt-x","created":1750000000}]}`))}, nil
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models, err := p.ListModels(context.Background())
+	if err != nil || len(models) != 1 || models[0].ID != "gpt-x" {
+		t.Fatalf("%+v, %v", models, err)
+	}
+}

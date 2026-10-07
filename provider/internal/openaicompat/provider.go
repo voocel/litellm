@@ -5,12 +5,14 @@ package openaicompat
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/voocel/litellm"
 	"github.com/voocel/litellm/internal/wire"
@@ -110,6 +112,41 @@ func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.St
 		return nil, err
 	}
 	return newStream(resp, req, p.Name(), p.spec), nil
+}
+
+// ListModels lists the models of the vendor's GET models endpoint.
+func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.url(cmp.Or(p.spec.ModelsPath, "/models")), nil)
+	if err != nil {
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeInternal, "create request", err)
+	}
+	if err := p.setHeaders(ctx, httpReq, false); err != nil {
+		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
+	}
+	resp, err := wire.Do(p.cfg.HTTPClient, httpReq, p.Name(), "list models")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var list struct {
+		Data []struct {
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Created int64  `json:"created"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeProvider, "decode model list", err)
+	}
+	out := make([]litellm.ModelInfo, 0, len(list.Data))
+	for _, m := range list.Data {
+		info := litellm.ModelInfo{ID: m.ID, Name: m.Name}
+		if m.Created > 0 {
+			info.Created = time.Unix(m.Created, 0).UTC()
+		}
+		out = append(out, info)
+	}
+	return out, nil
 }
 
 func (p *Provider) post(ctx context.Context, body []byte, stream bool) (*http.Response, error) {

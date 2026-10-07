@@ -121,6 +121,40 @@ func (p *Provider) post(ctx context.Context, req *litellm.Request, stream bool) 
 	return wire.Do(p.cfg.HTTPClient, httpReq, p.Name(), "request")
 }
 
+// ListModels lists the models of GET /v1beta/models that generate content.
+// The vendor has far fewer than the 1000 one page holds.
+func (p *Provider) ListModels(ctx context.Context) ([]litellm.ModelInfo, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(p.cfg.BaseURL, "/")+"/v1beta/models?pageSize=1000", nil)
+	if err != nil {
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeInternal, "create request", err)
+	}
+	if err := p.setHeaders(ctx, httpReq); err != nil {
+		return nil, litellm.WrapError(p.Name(), litellm.ErrorTypeValidation, err)
+	}
+	resp, err := wire.Do(p.cfg.HTTPClient, httpReq, p.Name(), "list models")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var list struct {
+		Models []struct {
+			Name        string   `json:"name"`
+			DisplayName string   `json:"displayName"`
+			Methods     []string `json:"supportedGenerationMethods"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		return nil, litellm.NewError(p.Name(), litellm.ErrorTypeProvider, "decode model list", err)
+	}
+	var out []litellm.ModelInfo
+	for _, m := range list.Models {
+		if slices.Contains(m.Methods, "generateContent") {
+			out = append(out, litellm.ModelInfo{ID: strings.TrimPrefix(m.Name, "models/"), Name: m.DisplayName})
+		}
+	}
+	return out, nil
+}
+
 func (p *Provider) setHeaders(ctx context.Context, req *http.Request) error {
 	key, err := wire.APIKey(ctx, p.cfg.APIKey, p.cfg.APIKeyFunc, true)
 	if err != nil {
