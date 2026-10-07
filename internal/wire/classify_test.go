@@ -138,6 +138,7 @@ func TestHTTPErrorClassifiesVendorRejections(t *testing.T) {
 		{"xai", `{"code":"Client specified an invalid argument","error":"This model's maximum prompt length is 131072 but the request contains 140000 tokens."}`, litellm.ErrorTypeContextOverflow},
 		{"content filter", `{"error":{"code":"content_filter","message":"blocked"}}`, litellm.ErrorTypeContentFilter},
 		{"gemini invalid key", `{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT"}}`, litellm.ErrorTypeAuth},
+		{"xai invalid key", `{"code":"invalid-argument","error":"Incorrect API key provided. You can obtain an API key from https://console.x.ai."}`, litellm.ErrorTypeAuth},
 		{"glm code substring", `{"error":{"code":"1214","message":"request 1261 invalid"}}`, litellm.ErrorTypeValidation},
 		{"max tokens", `{"error":{"type":"invalid_request_error","message":"max_tokens is too large"}}`, litellm.ErrorTypeValidation},
 	} {

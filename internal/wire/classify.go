@@ -237,10 +237,12 @@ var quotaTokens = []string{
 }
 
 // authTokens are invalid-key rejections sent without 401/403: Gemini answers
-// 400 with a fixed message and reason API_KEY_INVALID.
+// 400 with a fixed message and reason API_KEY_INVALID, xAI 400 with
+// "Incorrect API key provided".
 var authTokens = []string{
 	"api key not valid",
 	"api_key_invalid",
+	"incorrect api key",
 }
 
 func containsAny(haystack string, tokens []string) bool {
