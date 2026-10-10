@@ -12,7 +12,8 @@ type Option func(*Observer)
 
 // WithCaptureContent controls whether input and output messages are recorded
 // on the span. Content capture is disabled by default because messages may
-// contain sensitive information.
+// contain sensitive information. An inline image is recorded as a note of
+// its type and size.
 func WithCaptureContent(capture bool) Option {
 	return func(h *Observer) { h.captureContent = capture }
 }

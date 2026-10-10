@@ -53,6 +53,7 @@ func TestSemanticConventionMessageEncoding(t *testing.T) {
 		litellm.User(
 			litellm.Text("weather?"),
 			litellm.ImageURL("https://example.test/image.png"),
+			litellm.ImageBlock{MIME: "image/png", Data: make([]byte, 2048)},
 		),
 		litellm.Assistant(
 			litellm.ReasoningBlock{Text: "check weather"},
@@ -67,7 +68,7 @@ func TestSemanticConventionMessageEncoding(t *testing.T) {
 	}
 	assertJSONEqual(t, got, `[
 		{"role":"system","parts":[{"type":"text","content":"be concise"}]},
-		{"role":"user","parts":[{"type":"text","content":"weather?"},{"type":"uri","modality":"image","uri":"https://example.test/image.png"}]},
+		{"role":"user","parts":[{"type":"text","content":"weather?"},{"type":"uri","modality":"image","uri":"https://example.test/image.png"},{"type":"text","content":"[image/png of 2048 bytes, not recorded]"}]},
 		{"role":"assistant","parts":[{"type":"reasoning","content":"check weather"},{"type":"tool_call","id":"call_1","name":"weather","arguments":{"city":"Paris"}}]},
 		{"role":"tool","parts":[{"type":"tool_call_response","id":"call_1","response":"sunny"}]}
 	]`)

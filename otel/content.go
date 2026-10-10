@@ -1,8 +1,9 @@
 package otel
 
 import (
-	"encoding/base64"
+	"cmp"
 	"encoding/json"
+	"fmt"
 
 	"github.com/voocel/litellm"
 )
@@ -26,13 +27,6 @@ type genAITextPart struct {
 type genAIReasoningPart struct {
 	Type    string `json:"type"`
 	Content string `json:"content"`
-}
-
-type genAIBlobPart struct {
-	Type     string `json:"type"`
-	MIMEType string `json:"mime_type,omitempty"`
-	Modality string `json:"modality"`
-	Content  string `json:"content"`
 }
 
 type genAIURIPart struct {
@@ -115,14 +109,11 @@ func genAIParts(blocks []litellm.Block) []any {
 	return parts
 }
 
+// genAIImagePart notes an inline image rather than record its bytes, which
+// would repeat in every later call of a conversation.
 func genAIImagePart(image litellm.ImageBlock) any {
 	if len(image.Data) > 0 {
-		return genAIBlobPart{
-			Type:     "blob",
-			MIMEType: image.MIME,
-			Modality: "image",
-			Content:  base64.StdEncoding.EncodeToString(image.Data),
-		}
+		return genAITextPart{Type: "text", Content: fmt.Sprintf("[%s of %d bytes, not recorded]", cmp.Or(image.MIME, "image"), len(image.Data))}
 	}
 	uri := image.FileURI
 	if uri == "" {
