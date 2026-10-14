@@ -79,6 +79,10 @@ func New(cfg Config) (*Provider, error) {
 		MaxTokensField: "max_completion_tokens",
 		Options:        chatOptions,
 		Cache:          promptCacheBreakpoint,
+		// Gateways and servers that speak Chat Completions return reasoning
+		// in these fields, which OpenAI's own API does not define.
+		ReasoningFields:   []string{"reasoning_content", "reasoning"},
+		ReasoningReadOnly: true,
 	})
 	if err != nil {
 		return nil, err

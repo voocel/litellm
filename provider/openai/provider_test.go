@@ -233,6 +233,39 @@ func TestChatStream(t *testing.T) {
 	}
 }
 
+// Gateways and servers that speak Chat Completions return reasoning in
+// fields OpenAI's own API does not define; Chat reads either and sends
+// neither back, which that API may reject.
+func TestChatReadsReasoningOnly(t *testing.T) {
+	p, got := testProvider(t, Config{}, `{"model":"m","choices":[{"message":{"content":"ok","reasoning_content":"thought"},"finish_reason":"stop"}]}`)
+	resp, err := p.Chat(context.Background(), &litellm.Request{Model: "m", Messages: []litellm.Message{
+		litellm.UserText("hi"),
+		litellm.Assistant(litellm.ReasoningBlock{Text: "earlier"}, litellm.Text("hello")),
+		litellm.UserText("again"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Reasoning() != "thought" {
+		t.Errorf("reasoning = %q", resp.Reasoning())
+	}
+	assertJSON(t, got.body, `{"model":"m","messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"hello"},{"role":"user","content":"again"}]}`)
+
+	p, _ = testProvider(t, Config{}, "data: {\"model\":\"m\",\"choices\":[{\"delta\":{\"reasoning\":\"thought\"}}]}\n\n"+
+		"data: {\"model\":\"m\",\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	stream, err := p.Stream(context.Background(), &litellm.Request{Model: "m", Messages: []litellm.Message{litellm.UserText("hi")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if resp, err = litellm.Collect(stream); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Reasoning() != "thought" || resp.Text() != "ok" {
+		t.Errorf("streamed reasoning %q, text %q", resp.Reasoning(), resp.Text())
+	}
+}
+
 // Models are listed from /models whichever API is selected.
 func TestListModels(t *testing.T) {
 	p, err := New(Config{API: APIResponses, APIKey: "key", HTTPClient: httpFunc(func(req *http.Request) (*http.Response, error) {

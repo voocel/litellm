@@ -62,6 +62,10 @@ type Spec struct {
 	// replayed verbatim to this provider; history text is sent in the first
 	// other field.
 	ReasoningFields []string
+	// ReasoningReadOnly reads ReasoningFields but sends no reasoning back,
+	// for a protocol that defines no reasoning field: endpoints compatible
+	// with it return one, while its own may reject one sent.
+	ReasoningReadOnly bool
 	// StringContentRoles requires string content for these roles. Text blocks
 	// are concatenated without separators; images are rejected.
 	StringContentRoles []litellm.Role

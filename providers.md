@@ -44,6 +44,7 @@ Reasoning is returned as `ReasoningBlock`. Adapters read these fields, in priori
 | Provider | Source |
 | --- | --- |
 | OpenAI Responses | `reasoning` items (summary, or `reasoning_text` content) |
+| OpenAI Chat | `reasoning_content`, `reasoning`, which gateways and servers speaking the protocol return; OpenAI's own API defines neither |
 | Anthropic, Bedrock | thinking and redacted thinking blocks |
 | Gemini | `thought` parts |
 | compat | `reasoning_content`, `reasoning` |
@@ -67,6 +68,7 @@ The replay rule is the same for every adapter: portable content (text, reasoning
 | Gemini | `{"thoughtSignature":…}` on text, thought and function call blocks | sent as an unsigned thought |
 | OpenAI Responses | reasoning: the `reasoning` item; text: `{"id":…,"phase":…}`; tool calls: `{"id":…}` | dropped: an input reasoning item needs its API-assigned id |
 | MiniMax, OpenRouter | reasoning: the merged `reasoning_details` array | `Text` goes to the text reasoning field |
+| OpenAI Chat | none | dropped, as is its own: OpenAI's API defines no reasoning field |
 | other Chat Completions | none | `Text` goes to the first reasoning field above |
 
 - **OpenAI Responses** pairs a reasoning item with the ids of the items after it, and only the model that produced the reasoning accepts it. An assistant message holding reasoning from the requested model (`State.Model == Request.Model`) is replayed whole, reasoning and ids included; any other is sent as plain content without reasoning or ids. A message's `phase` is always kept.

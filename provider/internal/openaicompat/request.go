@@ -248,11 +248,14 @@ func (p *Provider) withCache(part map[string]any, cache *litellm.CacheControl) m
 	return part
 }
 
-// putReasoning replays a ReasoningBlock. reasoning_details this provider
-// produced are appended verbatim and supersede the text field; otherwise Text,
-// whatever its origin, goes to the first other field the spec names. Blocks
-// with neither are dropped.
+// putReasoning replays a ReasoningBlock, unless the spec reads reasoning
+// only. reasoning_details this provider produced are appended verbatim and
+// supersede the text field; otherwise Text, whatever its origin, goes to the
+// first other field the spec names. Blocks with neither are dropped.
 func (p *Provider) putReasoning(message map[string]any, block litellm.ReasoningBlock) {
+	if p.spec.ReasoningReadOnly {
+		return
+	}
 	var field string
 	for _, name := range p.spec.ReasoningFields {
 		if name != "reasoning_details" {
