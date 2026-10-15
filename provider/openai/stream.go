@@ -17,8 +17,21 @@ type stream struct {
 	pending          []litellm.Event
 	done             bool
 	model            string
-	toolIDs          map[int]string
-	finish           litellm.FinishReason
+	// tools holds the calls by number; callAt numbers the call at each
+	// vendor index.
+	tools  map[int]*streamCall
+	callAt map[int]int
+	finish litellm.FinishReason
+}
+
+// streamCall is one streamed call. OpenAI sends its id and name once, on the
+// opening chunk; some gateways repeat them on every chunk or send the name
+// later. The call starts once its name is known; arguments that come before
+// wait in args.
+type streamCall struct {
+	id, name string
+	started  bool
+	args     string
 }
 
 func newStream(resp *http.Response, req *litellm.Request) *stream {
@@ -30,7 +43,8 @@ func newStream(resp *http.Response, req *litellm.Request) *stream {
 		scanner:          scanner,
 		includeReasoning: thinkingEnabled(req),
 		model:            req.Model,
-		toolIDs:          make(map[int]string),
+		tools:            make(map[int]*streamCall),
+		callAt:           make(map[int]int),
 	}
 }
 
@@ -60,7 +74,12 @@ func (s *stream) Next() (litellm.Event, error) {
 		}
 		if data == "[DONE]" {
 			s.done = true
-			return litellm.DoneEvent{FinishReason: s.finish, Provider: "openai", Model: s.model}, nil
+			// A call whose name never came starts nameless, to fail downstream
+			// rather than vanish.
+			events := s.startUnnamed()
+			events = append(events, litellm.DoneEvent{FinishReason: s.finish, Provider: "openai", Model: s.model})
+			s.pending = append(s.pending, events[1:]...)
+			return events[0], nil
 		}
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
@@ -115,34 +134,69 @@ func (s *stream) events(chunk streamChunk) []litellm.Event {
 			}
 		}
 		for _, call := range choice.Delta.ToolCalls {
-			index := call.Index
-			id := call.ID
-			if id != "" {
-				s.toolIDs[index] = id
-			} else {
-				id = s.toolIDs[index]
-			}
-			if call.ID != "" || (call.Function != nil && call.Function.Name != "") {
-				start := litellm.ToolUseStart{
-					ID:    id,
-					Name:  "",
-					Index: &index,
-				}
-				if call.Function != nil {
-					start.Name = call.Function.Name
-				}
-				events = append(events, start)
-			}
-			if call.Function != nil && call.Function.Arguments != "" {
-				events = append(events, litellm.ToolUseDelta{
-					ID:             id,
-					Index:          &index,
-					ArgumentsDelta: []byte(call.Function.Arguments),
-				})
-			}
+			events = s.tool(events, call)
 		}
 		if choice.FinishReason != "" {
 			s.finish = litellm.NormalizeFinishReason(choice.FinishReason)
+		}
+	}
+	return events
+}
+
+func (s *stream) tool(events []litellm.Event, call toolCallDelta) []litellm.Event {
+	var name, args string
+	if call.Function != nil {
+		name, args = call.Function.Name, call.Function.Arguments
+	}
+	n, ok := s.callAt[call.Index]
+	// Another id at the same index starts another call: Ollama sends each
+	// parallel call whole, all at index 0.
+	if ok && call.ID != "" && s.tools[n].id != "" && call.ID != s.tools[n].id {
+		ok = false
+	}
+	if !ok {
+		if call.ID == "" && name == "" && args == "" {
+			return events
+		}
+		n = len(s.tools)
+		s.callAt[call.Index] = n
+		s.tools[n] = &streamCall{}
+	}
+	tc := s.tools[n]
+	if tc.id == "" {
+		tc.id = call.ID
+	}
+	if tc.name == "" {
+		tc.name = name
+	}
+	if !tc.started {
+		tc.args += args
+		if tc.name == "" {
+			return events
+		}
+		return s.start(events, n, tc)
+	}
+	if args != "" {
+		events = append(events, litellm.ToolUseDelta{ID: tc.id, Index: litellm.IntPtr(n), ArgumentsDelta: []byte(args)})
+	}
+	return events
+}
+
+func (s *stream) start(events []litellm.Event, n int, tc *streamCall) []litellm.Event {
+	tc.started = true
+	events = append(events, litellm.ToolUseStart{ID: tc.id, Name: tc.name, Index: litellm.IntPtr(n)})
+	if tc.args != "" {
+		events = append(events, litellm.ToolUseDelta{ID: tc.id, Index: litellm.IntPtr(n), ArgumentsDelta: []byte(tc.args)})
+		tc.args = ""
+	}
+	return events
+}
+
+func (s *stream) startUnnamed() []litellm.Event {
+	var events []litellm.Event
+	for n := range len(s.tools) {
+		if tc := s.tools[n]; !tc.started {
+			events = s.start(events, n, tc)
 		}
 	}
 	return events

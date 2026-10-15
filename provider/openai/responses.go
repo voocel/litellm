@@ -464,17 +464,15 @@ func (p *Provider) buildResponsesRequest(req *ResponsesRequest, stream bool) (*r
 		if out.Input != nil && len(messages) > 0 {
 			return nil, fmt.Errorf("openai: responses request cannot set Input and non-system Messages together")
 		}
+		// Input is always a list: the API also takes a string, but Codex
+		// gateways reject one.
 		if out.Input == nil {
-			if text, ok := responsesInputString(messages); ok {
-				out.Input = text
-			} else {
-				items, err := responsesInputItems(messages)
-				if err != nil {
-					return nil, err
-				}
-				if len(items) > 0 {
-					out.Input = items
-				}
+			items, err := responsesInputItems(messages)
+			if err != nil {
+				return nil, err
+			}
+			if len(items) > 0 {
+				out.Input = items
 			}
 		}
 	} else {
@@ -698,17 +696,6 @@ func blocksHaveCacheBreakpoint(blocks []litellm.Block) bool {
 		}
 	}
 	return false
-}
-
-func responsesInputString(messages []litellm.Message) (string, bool) {
-	if len(messages) != 1 || messages[0].Role != litellm.RoleUser {
-		return "", false
-	}
-	if len(messages[0].Blocks) != 1 {
-		return "", false
-	}
-	text, ok := messages[0].Blocks[0].(litellm.TextBlock)
-	return text.Text, ok && text.Text != "" && text.Cache == nil
 }
 
 func responsesInputItems(messages []litellm.Message) ([]responsesInputItem, error) {

@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -60,7 +61,7 @@ func TestResponsesBuildRequestMapsCoreFields(t *testing.T) {
 	if wire.Instructions != "Be concise.\nFollow the contract." {
 		t.Fatalf("instructions = %q", wire.Instructions)
 	}
-	if wire.Input != "Search and summarize." {
+	if items, ok := wire.Input.([]responsesInputItem); !ok || len(items) != 1 || items[0].Content[0].Text != "Search and summarize." {
 		t.Fatalf("input = %#v", wire.Input)
 	}
 	if wire.PreviousResponseID != "resp_previous" {
@@ -600,7 +601,7 @@ func TestResponsesAPIChatRoutesToResponsesEndpoint(t *testing.T) {
 	if capturedPath != "/v1/responses" {
 		t.Fatalf("path = %q, want /v1/responses", capturedPath)
 	}
-	if capturedBody["input"] != "hi" || capturedBody["instructions"] != "Follow instructions." {
+	if fmt.Sprint(capturedBody["input"]) != "[map[content:[map[text:hi type:input_text]] role:user type:message]]" || capturedBody["instructions"] != "Follow instructions." {
 		t.Fatalf("input/instructions = %#v/%#v", capturedBody["input"], capturedBody["instructions"])
 	}
 	if capturedBody["max_output_tokens"] != float64(maxTokens) {
@@ -928,7 +929,7 @@ func TestResponsesSendsRequestToEndpoint(t *testing.T) {
 	if capturedPath != "/v1/responses" {
 		t.Fatalf("path = %q", capturedPath)
 	}
-	if capturedBody["input"] != "hello" {
+	if fmt.Sprint(capturedBody["input"]) != "[map[content:[map[text:hello type:input_text]] role:user type:message]]" {
 		t.Fatalf("body = %#v", capturedBody)
 	}
 	if resp.Text() != "ok" || resp.Usage.TotalTokens != 3 {
