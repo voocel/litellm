@@ -2,7 +2,9 @@ package gemini
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"fmt"
+	"strings"
 
 	"github.com/voocel/litellm"
 	"github.com/voocel/litellm/internal/wire"
@@ -10,7 +12,7 @@ import (
 
 // convertResponse maps the first candidate. A blocked prompt or candidate is
 // a Response with its finish reason, not an error.
-func convertResponse(resp *response, provider, model string) *litellm.Response {
+func convertResponse(resp *response, provider, model string) (*litellm.Response, error) {
 	out := &litellm.Response{Provider: provider, Model: model}
 	if resp.UsageMetadata != nil {
 		out.Usage = convertUsage(resp.UsageMetadata)
@@ -19,11 +21,15 @@ func convertResponse(resp *response, provider, model string) *litellm.Response {
 		if resp.PromptFeedback != nil && resp.PromptFeedback.BlockReason != "" {
 			out.FinishReason, out.FinishReasonRaw = wire.FinishReason(resp.PromptFeedback.BlockReason), resp.PromptFeedback.BlockReason
 		}
-		return out
+		return out, nil
 	}
 	candidate := resp.Candidates[0]
 	for _, p := range candidate.Content.Parts {
-		switch b := partBlock(p, provider, model).(type) {
+		block, err := partBlock(p, provider, model)
+		if err != nil {
+			return nil, err
+		}
+		switch b := block.(type) {
 		case litellm.TextBlock:
 			if last, ok := lastBlock[litellm.TextBlock](out.Blocks); ok && last.State == nil && b.State == nil {
 				last.Text += b.Text
@@ -43,39 +49,53 @@ func convertResponse(resp *response, provider, model string) *litellm.Response {
 				out.Warnings = append(out.Warnings, generatedIDWarning(provider, b))
 			}
 			out.Blocks = append(out.Blocks, b)
+		case litellm.ImageBlock:
+			out.Blocks = append(out.Blocks, b)
 		}
 	}
 	out.FinishReason, out.FinishReasonRaw = wire.FinishReason(candidate.FinishReason), candidate.FinishReason
 	if candidate.FinishMessage != "" {
 		out.Warnings = append(out.Warnings, finishMessageWarning(provider, candidate.FinishMessage))
 	}
-	return out
+	return out, nil
 }
 
 // partBlock maps one part for the requested model; its thought signature
-// becomes the block's State, of provider. Callers merge adjacent text or thought parts into
-// one block only when neither carries a signature: signed parts must retain
-// their original boundaries when replayed.
-// A function call without an id gets a generated one.
-func partBlock(p part, provider, model string) litellm.Block {
+// becomes the block's State, of provider. A function call without an id gets
+// a generated one. A part with no block, such as a thought image, is nil.
+// Callers merge adjacent text or thought parts into one block only when
+// neither carries a signature: signed parts must retain their original
+// boundaries when replayed.
+func partBlock(p part, provider, model string) (litellm.Block, error) {
 	var text string
 	if p.Text != nil {
 		text = *p.Text
 	}
 	switch {
+	case p.InlineData != nil:
+		// Thought images are unsigned drafts of the final image; inline data
+		// other than an image has no block.
+		if p.Thought || !strings.HasPrefix(p.InlineData.MimeType, "image/") {
+			return nil, nil
+		}
+		data, err := base64.StdEncoding.DecodeString(p.InlineData.Data)
+		if err != nil {
+			return nil, fmt.Errorf("decode inline image: %w", err)
+		}
+		return litellm.ImageBlock{Data: data, MIME: p.InlineData.MimeType, State: signed(provider, model, p.ThoughtSignature)}, nil
 	case p.FunctionCall != nil:
 		id := p.FunctionCall.ID
 		if id == "" {
 			id = "call_" + rand.Text() // unique across processes, as persisted history needs
 		}
-		return litellm.ToolUseBlock{ID: id, Name: p.FunctionCall.Name, Arguments: string(p.FunctionCall.Args), State: signed(provider, model, p.ThoughtSignature)}
+		return litellm.ToolUseBlock{ID: id, Name: p.FunctionCall.Name, Arguments: string(p.FunctionCall.Args), State: signed(provider, model, p.ThoughtSignature)}, nil
 	case p.Thought:
-		return litellm.ReasoningBlock{Text: text, State: signed(provider, model, p.ThoughtSignature)}
+		return litellm.ReasoningBlock{Text: text, State: signed(provider, model, p.ThoughtSignature)}, nil
 	case text != "" || p.ThoughtSignature != "":
 		// Streams may send a text run's signature in an empty text part.
-		return litellm.TextBlock{Text: text, State: signed(provider, model, p.ThoughtSignature)}
+		return litellm.TextBlock{Text: text, State: signed(provider, model, p.ThoughtSignature)}, nil
 	}
-	return nil
+	return nil, nil
 }
 
 // signatureState is the ProviderState of a part Gemini signed.

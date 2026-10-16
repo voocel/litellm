@@ -44,16 +44,26 @@ func (r *Response) Text() string {
 
 // ToolCalls returns the tool use blocks in order.
 func (r *Response) ToolCalls() []ToolUseBlock {
+	return blocksOf[ToolUseBlock](r)
+}
+
+// Images returns the image blocks in order, such as the images a model
+// generated.
+func (r *Response) Images() []ImageBlock {
+	return blocksOf[ImageBlock](r)
+}
+
+func blocksOf[T Block](r *Response) []T {
 	if r == nil {
 		return nil
 	}
-	var calls []ToolUseBlock
+	var out []T
 	for _, block := range r.Blocks {
-		if call, ok := block.(ToolUseBlock); ok {
-			calls = append(calls, call)
+		if b, ok := block.(T); ok {
+			out = append(out, b)
 		}
 	}
-	return calls
+	return out
 }
 
 // Reasoning concatenates the reasoning block texts.

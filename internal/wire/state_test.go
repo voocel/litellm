@@ -2,6 +2,7 @@ package wire
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/voocel/litellm"
@@ -29,5 +30,20 @@ func TestState(t *testing.T) {
 		if _, ok := ReadState[sig](state, "q"); ok {
 			t.Errorf("%s state was read", name)
 		}
+	}
+}
+
+func TestWithoutAssistantImages(t *testing.T) {
+	img := litellm.ImageBlock{Data: []byte("png"), MIME: "image/png"}
+	assistant := litellm.Assistant(litellm.Text("a"), img, litellm.Text("b"))
+	got := WithoutAssistantImages(assistant)
+	if want := []litellm.Block{litellm.Text("a"), litellm.Text("b")}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("blocks %#v", got)
+	}
+	if _, ok := assistant.Blocks[1].(litellm.ImageBlock); !ok {
+		t.Error("the message's own blocks were changed")
+	}
+	if user := litellm.User(img); len(WithoutAssistantImages(user)) != 1 {
+		t.Error("a user's image was dropped")
 	}
 }

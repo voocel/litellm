@@ -29,6 +29,7 @@ func history() []Message {
 				Logprobs:    json.RawMessage(`[{"token":"see"}]`),
 				State:       state,
 			},
+			ImageBlock{Data: []byte{0x89, 'P', 'N', 'G'}, MIME: "image/png", State: &ProviderState{Provider: "gemini", Model: "gemini-image", Data: json.RawMessage(`{"thoughtSignature":"sig"}`)}},
 			ToolUseBlock{ID: "call_1", Name: "read", Arguments: `{"path":"a.go"}`, State: state, Cache: cache},
 		),
 		{Role: RoleTool, Blocks: []Block{ToolResultBlock{

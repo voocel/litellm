@@ -58,7 +58,7 @@ Provider 可在多个 Client 间共享。`litellm.New` 接受 `WithObservers`、
 
 ## 核心模型
 
-消息与响应由有序的 `Block` 组成：`TextBlock`、`ImageBlock`、`ReasoningBlock`、`ToolUseBlock`、`ToolResultBlock`、`ToolReferenceBlock`。`Response.Blocks` 是权威内容；`Text()`、`Reasoning()`、`ToolCalls()` 只是视图。
+消息与响应由有序的 `Block` 组成：`TextBlock`、`ImageBlock`、`ReasoningBlock`、`ToolUseBlock`、`ToolResultBlock`、`ToolReferenceBlock`。`Response.Blocks` 是权威内容；`Text()`、`Reasoning()`、`ToolCalls()`、`Images()` 只是视图。模型生成的图片以 `ImageBlock` 返回：Gemini 在 `ProviderOptions` 把 `generationConfig` 设为 `{"responseModalities": ["TEXT", "IMAGE"]}` 时返回图片（[详见](providers.md#gemini-request-formats)）。
 
 ```go
 msgs := []litellm.Message{
@@ -83,7 +83,7 @@ msgs = append(msgs,
 
 ## 流式
 
-流是一串块。`BlockStart` 打开 `Index` 处的块，`Index` 即它在 `Response.Blocks` 中的位置；`TextDelta`、`ReasoningDelta`、`ToolUseDelta` 追加内容；`BlockEnd` 以完整块（含 `State` 等后到的元数据）关闭它。块可以交错，但都在 `DoneEvent` 之前结束。`UsageEvent`、`WarningEvent` 与 `ProviderEvent`（无类型对应的原生事件）承载其余信息。
+流是一串块。`BlockStart` 打开 `Index` 处的块，`Index` 即它在 `Response.Blocks` 中的位置；`TextDelta`、`ReasoningDelta`、`ToolUseDelta` 追加内容，图片则由 `BlockStart` 一次带全；`BlockEnd` 以完整块（含 `State` 等后到的元数据）关闭它。块可以交错，但都在 `DoneEvent` 之前结束。`UsageEvent`、`WarningEvent` 与 `ProviderEvent`（无类型对应的原生事件）承载其余信息。
 
 `Handle` 聚合流并把每个事件交给回调；`Collect` 只聚合。失败时两者都返回部分响应和错误。
 

@@ -18,7 +18,8 @@ func TestMessageFormats(t *testing.T) {
 		litellm.User(litellm.Text("Look"), litellm.ImageBlock{FileURI: "file-api-image"},
 			litellm.ImageBlock{URL: "https://example.com/image.png", Detail: "original"},
 			litellm.ImageBlock{Data: []byte("png"), MIME: "image/png", Detail: "low"}),
-		litellm.Assistant(litellm.ReasoningBlock{Text: "reasoning"}, litellm.Text("Hello "), litellm.Text("world")),
+		// Assistant images, such as Gemini's generated ones, are dropped.
+		litellm.Assistant(litellm.ReasoningBlock{Text: "reasoning"}, litellm.Text("Hello "), litellm.ImageBlock{FileURI: "file-api-image"}, litellm.Text("world")),
 		litellm.Assistant(litellm.ReasoningBlock{Text: "unfinished reasoning"}),
 	}}
 	for _, streaming := range []bool{false, true} {
@@ -57,7 +58,6 @@ func TestUnsupportedRequests(t *testing.T) {
 		want string
 	}{
 		{"system image", litellm.Request{Messages: []litellm.Message{{Role: litellm.RoleSystem, Blocks: []litellm.Block{litellm.ImageURL("https://example.com/image.png")}}}}, "system messages do not support images"},
-		{"assistant file", litellm.Request{Messages: []litellm.Message{litellm.Assistant(litellm.ImageBlock{FileURI: "file-api-image"})}}, "assistant messages do not support images"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

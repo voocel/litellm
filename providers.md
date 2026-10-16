@@ -65,7 +65,7 @@ The replay rule is the same for every adapter: portable content (text, reasoning
 | --- | --- | --- |
 | Anthropic | thinking: `{"type":"thinking","signature":…}`, redacted: `{"type":"redacted_thinking","data":…}` | dropped: thinking needs a Claude signature |
 | Bedrock | `{"signature":…}` or `{"redactedContent":…}`, `{}` when unsigned | dropped, as is reasoning from another Bedrock model: model families reject each other's |
-| Gemini | `{"thoughtSignature":…}` on text, thought and function call blocks | sent as an unsigned thought |
+| Gemini | `{"thoughtSignature":…}` on text, thought, function call and image blocks | sent as an unsigned thought |
 | OpenAI Responses | reasoning: the `reasoning` item; text: `{"id":…,"phase":…}`; tool calls: `{"id":…}` | dropped: an input reasoning item needs its API-assigned id |
 | MiniMax, OpenRouter | reasoning: the merged `reasoning_details` array | `Text` goes to the text reasoning field |
 | OpenAI Chat | none | dropped, as is its own: OpenAI's API defines no reasoning field |
@@ -75,6 +75,7 @@ The replay rule is the same for every adapter: portable content (text, reasoning
 - **Gemini** requires a signature on the first function call of each model turn. A turn whose first call has none, such as one from another provider, gets the documented placeholder `skip_thought_signature_validator`, sent as that literal string. Signed text and thought parts retain their boundaries and never merge with neighboring parts, including a stream's trailing empty signature part. See [Thought signatures](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures).
 - **DeepSeek** requires the full `reasoning_content` of all previous assistant turns whenever a request carries `tools`, including turns without tool calls. Append `litellm.Assistant(resp.Blocks...)` to history after both `Chat` and collected streams. Without tools, DeepSeek ignores replayed reasoning. See [Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode/).
 - **MiniMax, OpenRouter** stream `reasoning_details` in fragments; they are merged into the entries a non-streaming response returns.
+- **Images in assistant messages**, such as those Gemini generates, are sent only by Gemini, with their signatures; the other adapters drop them, as their assistant turns carry no images.
 - Empty text is not sent, and a message left with nothing to send, such as one holding only reasoning the target cannot carry, is omitted.
 - A `ProviderState` with an empty `Provider` or invalid JSON `Data` fails validation.
 
@@ -96,11 +97,13 @@ Prompting is best effort, including with `Strict` set: JSON mode constrains JSON
 
 The adapter uses `generateContent` and `streamGenerateContent`. JSON output maps to `generationConfig.responseFormat.text.mimeType: "APPLICATION_JSON"`; JSON Schema also sets `responseFormat.text.schema`, preserving the schema document. The MIME value follows the enum in the [REST reference](https://ai.google.dev/api/generate-content#TextResponseFormat), rather than the string used by legacy `responseMimeType`.
 
-`generationConfig.candidateCount` in `ProviderOptions` must be 1 when supplied: `litellm.Response` represents one output. Tool results marked `IsError` always go under `functionResponse.response.error`, including JSON objects.
+`generationConfig.candidateCount` in `ProviderOptions` must be 1 when supplied: `litellm.Response` represents one output.
+
+Image models return images when `generationConfig.responseModalities` in `ProviderOptions` includes `"IMAGE"`. Each `inlineData` image becomes an `ImageBlock` with the decoded `Data`, its `MIME` and its signature in `State`; thought images, unsigned drafts of the final one, are dropped ([Image generation](https://ai.google.dev/gemini-api/docs/generate-content/image-generation)). A stream is taken to deliver each image part whole, which the API reference does not state. Tool results marked `IsError` always go under `functionResponse.response.error`, including JSON objects.
 
 ## DeepSeek Request Formats
 
-The default example model is `deepseek-flash`. Per the [Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/), system and assistant text blocks are concatenated without separators into a string; images in those roles are rejected. User messages support text and images. URL and inline images use `image_url`; set `ImageBlock.FileURI` to an uploaded `file-api-...` ID to send a `file` part with `file_id` (see [Vision](https://api-docs.deepseek.com/guides/vision/)). File upload itself is outside this provider's API.
+The default example model is `deepseek-flash`. Per the [Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/), system and assistant text blocks are concatenated without separators into a string; images are rejected in system messages and, as elsewhere, dropped from assistant ones. User messages support text and images. URL and inline images use `image_url`; set `ImageBlock.FileURI` to an uploaded `file-api-...` ID to send a `file` part with `file_id` (see [Vision](https://api-docs.deepseek.com/guides/vision/)). File upload itself is outside this provider's API.
 
 The API supports `text` and `json_object`; the SDK maps `json_schema` to the prompt fallback described above. When using `json_object` directly, also instruct the model to produce JSON in a system or user message.
 
@@ -161,7 +164,8 @@ adds it whenever the total says so.
 
 DeepSeek, Gemini, GLM, OpenRouter and Qwen are checked against their recorded responses in
 `provider/testdata/live`. `LITELLM_LIVE=1 LITELLM_RECORD=1 go test ./provider
--run TestLive` calls the vendors whose key is set and records them again.
+-run TestLive` calls the vendors whose key is set and records them again; the
+Gemini image scenario also needs `LITELLM_GEMINI_IMAGE_MODEL`, the model to ask.
 
 ## OpenAI Response Metadata
 

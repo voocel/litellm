@@ -85,7 +85,8 @@ func (p *Provider) Stream(ctx context.Context, req *litellm.Request) (litellm.St
 }
 
 // events streams reply the way a vendor would: each block opened, grown by
-// one delta and closed with its provider state, then usage and done.
+// one delta and closed with its provider state, an image opened whole and
+// closed, then usage and done.
 func events(reply Reply, model string) []litellm.Event {
 	var out []litellm.Event
 	finish := litellm.FinishReasonStop
@@ -101,6 +102,9 @@ func events(reply Reply, model string) []litellm.Event {
 			finish = litellm.FinishReasonToolCall
 			out = append(out, litellm.BlockStart{Index: i, Block: litellm.ToolUseBlock{ID: b.ID, Name: b.Name}}, litellm.ToolUseDelta{Index: i, Arguments: b.Arguments})
 			out = append(out, litellm.BlockEnd{Index: i, Block: litellm.ToolUseBlock{State: b.State}})
+		case litellm.ImageBlock:
+			// An image has no deltas: its start carries all of it.
+			out = append(out, litellm.BlockStart{Index: i, Block: b}, litellm.BlockEnd{Index: i})
 		default:
 			panic(fmt.Sprintf("litellmtest: a reply cannot hold %T", block))
 		}

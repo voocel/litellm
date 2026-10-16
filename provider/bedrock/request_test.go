@@ -207,6 +207,16 @@ func TestBuildRequest(t *testing.T) {
 			wantErr: `messages[0]: image MIME "text/plain" must be image/<format>`,
 		},
 		{
+			// Generated images, such as Gemini's, are dropped, and so is a turn left empty.
+			name: "assistant images are dropped",
+			req: func(r *litellm.Request) {
+				r.Messages = []litellm.Message{litellm.UserText("draw"),
+					litellm.Assistant(litellm.ImageBlock{Data: []byte("png"), MIME: "image/png", State: &litellm.ProviderState{Provider: "gemini", Data: json.RawMessage(`{"thoughtSignature":"g"}`)}}),
+					litellm.Assistant(litellm.Text("done"), litellm.ImageURL("https://x.test/a.png"))}
+			},
+			want: map[string]string{"messages": `[{"role":"user","content":[{"text":"draw"}]},{"role":"assistant","content":[{"text":"done"}]}]`},
+		},
+		{
 			name: "own reasoning is replayed, foreign reasoning dropped",
 			req: func(r *litellm.Request) {
 				r.Messages = []litellm.Message{litellm.UserText("hi"), litellm.Assistant(

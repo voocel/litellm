@@ -22,7 +22,10 @@ func TestStreamCollectMatchesCompleteResponse(t *testing.T) {
 	}`), &complete); err != nil {
 		t.Fatal(err)
 	}
-	want := convertResponse(&complete, "gemini", "m")
+	want, err := convertResponse(&complete, "gemini", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
 	stream := newStream(streamResponse(testgolden.ReadFixtureString(t, "../../testdata/gemini/stream.jsonl")), "gemini", "m")
 	defer stream.Close()
 	got, err := litellm.Collect(stream)
@@ -95,13 +98,35 @@ func TestStreamSignaturesMatchCompleteResponse(t *testing.T) {
 			`{"candidates":[{"content":{"parts":[{"text":"c"}]},"finishReason":"STOP"}]}`,
 		},
 		want: []litellm.Block{litellm.Text("ab"), litellm.TextBlock{State: signed("gemini", "m", "sig")}, litellm.Text("c")},
+	}, {
+		name: "generated images keep their signatures",
+		complete: `{"candidates":[{"content":{"parts":[
+			{"text":"Here","thoughtSignature":"s1"},
+			{"inlineData":{"mimeType":"image/png","data":"cG5n"},"thoughtSignature":"s2"},
+			{"text":"and"},
+			{"inlineData":{"mimeType":"image/jpeg","data":"anBn"},"thoughtSignature":"s3"}]},"finishReason":"STOP"}]}`,
+		chunks: []string{
+			`{"candidates":[{"content":{"parts":[{"text":"Here","thoughtSignature":"s1"}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"cG5n"},"thoughtSignature":"s2"}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"text":"and"}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/jpeg","data":"anBn"},"thoughtSignature":"s3"}]},"finishReason":"STOP"}]}`,
+		},
+		want: []litellm.Block{
+			litellm.TextBlock{Text: "Here", State: signed("gemini", "m", "s1")},
+			litellm.ImageBlock{Data: []byte("png"), MIME: "image/png", State: signed("gemini", "m", "s2")},
+			litellm.Text("and"),
+			litellm.ImageBlock{Data: []byte("jpg"), MIME: "image/jpeg", State: signed("gemini", "m", "s3")},
+		},
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			var complete response
 			if err := json.Unmarshal([]byte(tc.complete), &complete); err != nil {
 				t.Fatal(err)
 			}
-			want := convertResponse(&complete, "gemini", "m")
+			want, err := convertResponse(&complete, "gemini", "m")
+			if err != nil {
+				t.Fatal(err)
+			}
 			if !reflect.DeepEqual(want.Blocks, tc.want) {
 				t.Fatalf("complete blocks = %#v", want.Blocks)
 			}
@@ -124,5 +149,41 @@ func TestStreamSignaturesMatchCompleteResponse(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Thought images, unsigned drafts of the final one, have no block, nor has
+// inline data other than an image.
+func TestThoughtImagesAreDropped(t *testing.T) {
+	parts := []string{
+		`{"text":"plan","thought":true}`,
+		`{"inlineData":{"mimeType":"image/png","data":"ZHJhZnQ="},"thought":true}`,
+		`{"text":" more","thought":true}`,
+		`{"inlineData":{"mimeType":"image/png","data":"cG5n"},"thoughtSignature":"s"}`,
+		`{"inlineData":{"mimeType":"audio/L16","data":"cGNt"}}`,
+	}
+	var complete response
+	if err := json.Unmarshal([]byte(`{"candidates":[{"content":{"parts":[`+strings.Join(parts, ",")+`]},"finishReason":"STOP"}]}`), &complete); err != nil {
+		t.Fatal(err)
+	}
+	want, err := convertResponse(&complete, "gemini", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := []litellm.Block{
+		litellm.ReasoningBlock{Text: "plan more"},
+		litellm.ImageBlock{Data: []byte("png"), MIME: "image/png", State: signed("gemini", "m", "s")},
+	}
+	if !reflect.DeepEqual(want.Blocks, blocks) {
+		t.Fatalf("complete blocks = %#v", want.Blocks)
+	}
+	var chunks []string
+	for _, p := range parts {
+		chunks = append(chunks, `data: {"candidates":[{"content":{"parts":[`+p+`]}}]}`)
+	}
+	chunks = append(chunks, `data: {"candidates":[{"content":{"parts":[]},"finishReason":"STOP"}]}`)
+	got, err := litellm.Collect(newStream(streamResponse(strings.Join(chunks, "\n")), "gemini", "m"))
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("stream=%#v, %v\ncomplete=%#v", got, err, want)
 	}
 }

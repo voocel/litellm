@@ -188,7 +188,7 @@ func responsesInput(messages []litellm.Message, provider, model string) (string,
 		case litellm.RoleUser:
 			items, err = appendMessage(items, "user", msg.Blocks)
 		case litellm.RoleAssistant:
-			items, err = appendAssistant(items, msg.Blocks, provider, model)
+			items, err = appendAssistant(items, wire.WithoutAssistantImages(msg), provider, model)
 		case litellm.RoleTool:
 			items, err = appendToolResults(items, msg.Blocks)
 		}

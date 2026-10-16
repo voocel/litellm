@@ -14,9 +14,10 @@ import (
 func TestScriptedReplies(t *testing.T) {
 	state := &litellm.ProviderState{Provider: "test", Data: json.RawMessage(`{"sig":"s"}`)}
 	call := litellm.ToolUseBlock{ID: "c1", Name: "read", Arguments: `{"path":"a"}`, State: state}
+	image := litellm.ImageBlock{Data: []byte("png"), MIME: "image/png", State: state}
 	p := litellmtest.New(
-		litellmtest.Reply{Blocks: []litellm.Block{litellm.ReasoningBlock{Text: "hm", State: state}, call}, Usage: litellm.Usage{InputTokens: 3}},
-		litellmtest.Text("done"),
+		litellmtest.Reply{Blocks: []litellm.Block{litellm.ReasoningBlock{Text: "hm", State: state}, image, call}, Usage: litellm.Usage{InputTokens: 3}},
+		litellmtest.Respond(litellm.Text("done"), image),
 		litellmtest.Fail(litellm.NewError("test", litellm.ErrorTypeRateLimit, "slow down", nil)),
 	)
 	client, err := litellm.New(p)
@@ -34,13 +35,13 @@ func TestScriptedReplies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []litellm.Block{litellm.ReasoningBlock{Text: "hm", State: state}, call}
+	want := []litellm.Block{litellm.ReasoningBlock{Text: "hm", State: state}, image, call}
 	if !reflect.DeepEqual(resp.Blocks, want) || resp.FinishReason != litellm.FinishReasonToolCall || resp.Usage.InputTokens != 3 {
 		t.Fatalf("first reply = %#v", resp)
 	}
 
 	resp, err = client.Chat(ctx, litellm.Request{Model: "m", Messages: []litellm.Message{litellm.UserText("again")}})
-	if err != nil || resp.Text() != "done" || resp.FinishReason != litellm.FinishReasonStop {
+	if err != nil || resp.Text() != "done" || resp.FinishReason != litellm.FinishReasonStop || !reflect.DeepEqual(resp.Images(), []litellm.ImageBlock{image}) {
 		t.Fatalf("second reply = %#v, %v", resp, err)
 	}
 

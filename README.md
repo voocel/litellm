@@ -58,7 +58,7 @@ A provider is safe to share across clients. `litellm.New` accepts `ClientOption`
 
 ## Core Model
 
-Messages and responses use ordered `Block` values: `TextBlock`, `ImageBlock`, `ReasoningBlock`, `ToolUseBlock`, `ToolResultBlock` and `ToolReferenceBlock`. `Response.Blocks` is the canonical content; `Text()`, `Reasoning()` and `ToolCalls()` are views.
+Messages and responses use ordered `Block` values: `TextBlock`, `ImageBlock`, `ReasoningBlock`, `ToolUseBlock`, `ToolResultBlock` and `ToolReferenceBlock`. `Response.Blocks` is the canonical content; `Text()`, `Reasoning()`, `ToolCalls()` and `Images()` are views. Images a model generates arrive as `ImageBlock`s, from Gemini when `ProviderOptions` set `generationConfig` to `{"responseModalities": ["TEXT", "IMAGE"]}` ([details](providers.md#gemini-request-formats)).
 
 ```go
 msgs := []litellm.Message{
@@ -83,7 +83,7 @@ Raw provider response bodies are kept only with `litellm.WithCaptureRawResponse(
 
 ## Streaming
 
-A stream is a sequence of blocks. `BlockStart` opens the block at `Index`, the position it takes in `Response.Blocks`; `TextDelta`, `ReasoningDelta` and `ToolUseDelta` grow it; `BlockEnd` closes it with the completed block, including metadata that arrives late, such as `State`. Blocks may interleave, and all end before `DoneEvent`. `UsageEvent`, `WarningEvent` and `ProviderEvent` (native events without a typed equivalent) carry the rest.
+A stream is a sequence of blocks. `BlockStart` opens the block at `Index`, the position it takes in `Response.Blocks`; `TextDelta`, `ReasoningDelta` and `ToolUseDelta` grow it, while an image arrives whole in its `BlockStart`; `BlockEnd` closes it with the completed block, including metadata that arrives late, such as `State`. Blocks may interleave, and all end before `DoneEvent`. `UsageEvent`, `WarningEvent` and `ProviderEvent` (native events without a typed equivalent) carry the rest.
 
 `Handle` aggregates a stream and passes each event to a callback; `Collect` only aggregates. On failure both return the partial response with the error.
 

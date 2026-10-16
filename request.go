@@ -63,14 +63,17 @@ type TextBlock struct {
 }
 
 // ImageBlock is an image. Set one source: URL, Data with MIME, or FileURI, a
-// vendor file reference. Detail is sent where the wire format has it.
+// vendor file reference. Detail is sent where the wire format has it. A
+// response holds an image the model generated, such as Gemini's, as Data with
+// MIME, and its State.
 type ImageBlock struct {
-	URL     string        `json:"url,omitempty"`
-	Data    []byte        `json:"data,omitempty"`
-	MIME    string        `json:"mime,omitempty"`
-	FileURI string        `json:"file_uri,omitempty"`
-	Detail  string        `json:"detail,omitempty"`
-	Cache   *CacheControl `json:"cache,omitempty"`
+	URL     string         `json:"url,omitempty"`
+	Data    []byte         `json:"data,omitempty"`
+	MIME    string         `json:"mime,omitempty"`
+	FileURI string         `json:"file_uri,omitempty"`
+	Detail  string         `json:"detail,omitempty"`
+	State   *ProviderState `json:"state,omitempty"`
+	Cache   *CacheControl  `json:"cache,omitempty"`
 }
 
 // ReasoningBlock is model reasoning. Summary marks Text as a summary rather
@@ -450,6 +453,7 @@ func cloneBlock(block Block) Block {
 		return b
 	case ImageBlock:
 		b.Data = cloneBytes(b.Data)
+		b.State = cloneState(b.State)
 		return b
 	case ReasoningBlock:
 		b.State = cloneState(b.State)

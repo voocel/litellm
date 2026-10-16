@@ -121,7 +121,7 @@ func convertMessages(out *request, messages []litellm.Message, provider, model s
 			}
 			continue
 		}
-		blocks, err := convertBlocks(msg.Blocks, provider, model)
+		blocks, err := convertBlocks(wire.WithoutAssistantImages(msg), provider, model)
 		if err != nil {
 			return fmt.Errorf("messages[%d]: %w", i, err)
 		}

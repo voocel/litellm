@@ -18,9 +18,9 @@ type Event interface {
 // opened by BlockStart, extended only by deltas of its own kind and closed by
 // BlockEnd before DoneEvent. Blocks may interleave.
 
-// BlockStart opens a TextBlock, ReasoningBlock or ToolUseBlock. Block carries
-// the metadata known up front, such as a tool's ID and Name, and may carry
-// initial text.
+// BlockStart opens a TextBlock, ReasoningBlock, ToolUseBlock or ImageBlock.
+// Block carries the metadata known up front, such as a tool's ID and Name, and
+// may carry initial text. An image has no deltas: Block carries all of it.
 type BlockStart struct {
 	Index int
 	Block Block
@@ -46,9 +46,9 @@ type ToolUseDelta struct {
 
 // BlockEnd closes a block. Providers set Block only to deliver metadata that
 // arrives late (State, annotations, logprobs, a tool's id and name): its
-// non-empty metadata fields replace the started ones, while its text and
-// arguments are ignored. Streams read through Handle, Collect or a Client
-// deliver the completed block instead.
+// non-empty metadata fields replace the started ones, while its text,
+// arguments and image are ignored. Streams read through Handle, Collect or a
+// Client deliver the completed block instead.
 type BlockEnd struct {
 	Index int
 	Block Block
@@ -429,6 +429,8 @@ func blockKind(block Block) string {
 		return "reasoning"
 	case ToolUseBlock:
 		return "tool_use"
+	case ImageBlock:
+		return "image"
 	default:
 		return ""
 	}
@@ -484,6 +486,15 @@ func mergeBlockMetadata(block, final Block) (Block, error) {
 		}
 		if f.Name != "" {
 			b.Name = f.Name
+		}
+		if f.State != nil {
+			b.State = f.State
+		}
+		return b, nil
+	case ImageBlock:
+		f, ok := final.(ImageBlock)
+		if !ok {
+			break
 		}
 		if f.State != nil {
 			b.State = f.State

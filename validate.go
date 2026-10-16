@@ -88,6 +88,9 @@ func validateMessages(messages []Message) error {
 				if err := validateImageUTF8(i, b); err != nil {
 					return err
 				}
+				if err := validateState(i, b.State); err != nil {
+					return err
+				}
 			case ReasoningBlock:
 				if msg.Role != RoleAssistant {
 					return NewError("", ErrorTypeValidation, fmt.Sprintf("messages[%d]: reasoning block requires assistant role", i), nil)

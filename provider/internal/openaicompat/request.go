@@ -134,7 +134,7 @@ func (p *Provider) convertMessage(msg litellm.Message) (map[string]any, error) {
 	out := map[string]any{"role": string(msg.Role)}
 	parts := make([]map[string]any, 0, len(msg.Blocks))
 	var toolCalls []map[string]any
-	for _, block := range msg.Blocks {
+	for _, block := range wire.WithoutAssistantImages(msg) {
 		switch b := block.(type) {
 		case litellm.TextBlock:
 			if b.Text == "" {

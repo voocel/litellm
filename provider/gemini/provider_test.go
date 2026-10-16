@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -198,6 +199,7 @@ func TestBuildRequestReplaysSignatures(t *testing.T) {
 			litellm.ReasoningBlock{State: signed("gemini", "m", "r")},
 			litellm.TextBlock{Text: "answer", State: signed("gemini", "m", "t")},
 			litellm.TextBlock{State: signed("gemini", "m", "e")},
+			litellm.ImageBlock{Data: []byte("png"), MIME: "image/png", State: signed("gemini", "m", "i")},
 			litellm.ToolUseBlock{ID: "a", Name: "f", State: signed("gemini", "m", "c")},
 		),
 		litellm.ToolResultText("a", "ok"),
@@ -205,6 +207,7 @@ func TestBuildRequestReplaysSignatures(t *testing.T) {
 			litellm.ReasoningBlock{Text: "foreign", State: foreign},
 			litellm.ReasoningBlock{State: foreign},
 			litellm.TextBlock{Text: "x", State: foreign},
+			litellm.ImageBlock{Data: []byte("png"), MIME: "image/png", State: foreign},
 			litellm.ToolUseBlock{ID: "b", Name: "f", State: foreign},
 		),
 	}})
@@ -217,15 +220,34 @@ func TestBuildRequestReplaysSignatures(t *testing.T) {
 			{"text":"","thought":true,"thoughtSignature":"r"},
 			{"text":"answer","thoughtSignature":"t"},
 			{"text":"","thoughtSignature":"e"},
+			{"inlineData":{"mimeType":"image/png","data":"cG5n"},"thoughtSignature":"i"},
 			{"functionCall":{"id":"a","name":"f","args":{}},"thoughtSignature":"c"}
 		]},
 		{"role":"user","parts":[{"functionResponse":{"id":"a","name":"f","response":{"result":"ok"}}}]},
 		{"role":"model","parts":[
 			{"text":"foreign","thought":true},
 			{"text":"x"},
+			{"inlineData":{"mimeType":"image/png","data":"cG5n"}},
 			{"functionCall":{"id":"b","name":"f","args":{}},"thoughtSignature":"skip_thought_signature_validator"}
 		]}
 	]`)
+}
+
+// Inline image data that is not base64 fails the reply, as a body that does
+// not decode does.
+func TestInvalidInlineImage(t *testing.T) {
+	const body = `{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"not base64!"}}]},"finishReason":"STOP"}]}`
+	provider := testProvider(t, func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, body), nil
+	})
+	_, chatErr := provider.Chat(context.Background(), &litellm.Request{Model: "m"})
+	_, streamErr := litellm.Collect(newStream(streamResponse("data: "+body), "gemini", "m"))
+	for _, err := range []error{chatErr, streamErr} {
+		var corrupt base64.CorruptInputError
+		if litellm.ErrorTypeOf(err) != litellm.ErrorTypeProvider || !errors.As(err, &corrupt) {
+			t.Fatalf("err = %v", err)
+		}
+	}
 }
 
 func TestBuildRequestErrors(t *testing.T) {

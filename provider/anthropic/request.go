@@ -184,7 +184,7 @@ func convertMessages(messages []litellm.Message, provider string) (any, []messag
 	var system []content
 	out := make([]message, 0, len(messages))
 	for i, msg := range messages {
-		blocks, err := convertBlocks(msg.Blocks, provider)
+		blocks, err := convertBlocks(wire.WithoutAssistantImages(msg), provider)
 		if err != nil {
 			return nil, nil, fmt.Errorf("messages[%d]: %w", i, err)
 		}

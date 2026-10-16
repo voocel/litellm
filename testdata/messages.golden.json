@@ -75,6 +75,18 @@
         }
       },
       {
+        "type": "image",
+        "data": "iVBORw==",
+        "mime": "image/png",
+        "state": {
+          "provider": "gemini",
+          "model": "gemini-image",
+          "data": {
+            "thoughtSignature": "sig"
+          }
+        }
+      },
+      {
         "type": "tool_use",
         "id": "call_1",
         "name": "read",

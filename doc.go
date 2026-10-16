@@ -54,10 +54,11 @@ produced it.
 # Streaming
 
 A stream is a sequence of blocks. BlockStart opens the block at Index, the
-position it takes in Response.Blocks; deltas of the same kind grow it; BlockEnd
-closes it with the completed block. Blocks may interleave, and all end before
-DoneEvent. Handle aggregates the stream and passes each event to a callback;
-Collect only aggregates. Stream is for single-goroutine consumption.
+position it takes in Response.Blocks; deltas of the same kind grow it, while an
+image arrives whole in its BlockStart; BlockEnd closes it with the completed
+block. Blocks may interleave, and all end before DoneEvent. Handle aggregates
+the stream and passes each event to a callback; Collect only aggregates.
+Stream is for single-goroutine consumption.
 
 	stream, err := client.Stream(ctx, req)
 	if err != nil {

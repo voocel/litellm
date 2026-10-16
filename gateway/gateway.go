@@ -82,8 +82,8 @@ func toEvent(ev litellm.Event) event {
 	panic(fmt.Sprintf("gateway: unknown event %T", ev))
 }
 
-// metadata returns the completed block b without the content its deltas
-// already carried.
+// metadata returns the completed block b without the content its start or
+// deltas already carried.
 func metadata(b litellm.Block) litellm.Block {
 	switch b := b.(type) {
 	case litellm.TextBlock:
@@ -95,6 +95,8 @@ func metadata(b litellm.Block) litellm.Block {
 	case litellm.ToolUseBlock:
 		b.Arguments = ""
 		return b
+	case litellm.ImageBlock:
+		return litellm.ImageBlock{State: b.State}
 	}
 	return b
 }

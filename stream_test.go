@@ -64,20 +64,28 @@ func TestBlockEndMergesMetadataOnly(t *testing.T) {
 		BlockEnd{Index: 2, Block: ToolUseBlock{ID: "call", Arguments: `"ignored"`, State: testState(`"s"`)}},
 		BlockStart{Index: 3, Block: ToolUseBlock{ID: "empty", Name: "noop"}},
 		BlockEnd{Index: 3},
+		// An image arrives whole in its start.
+		BlockStart{Index: 4, Block: ImageBlock{Data: []byte("png"), MIME: "image/png", State: testState(`"early"`)}},
+		BlockEnd{Index: 4, Block: ImageBlock{Data: []byte("ignored"), State: testState(`"late"`)}},
 		DoneEvent{Provider: "test", Model: "m"},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	image := ImageBlock{Data: []byte("png"), MIME: "image/png", State: testState(`"late"`)}
 	want := []Block{
 		TextBlock{Text: "hello", Annotations: []Annotation{{Type: "url", URL: "u"}}, Logprobs: json.RawMessage(`[]`), State: testState(`"t"`)},
 		ReasoningBlock{Text: "r", Summary: true, State: testState(`"late"`)},
 		ToolUseBlock{ID: "call", Name: "lookup", Arguments: `{}`, State: testState(`"s"`)},
 		// An argument-less call keeps valid JSON arguments.
 		ToolUseBlock{ID: "empty", Name: "noop", Arguments: `{}`},
+		image,
 	}
 	if !reflect.DeepEqual(resp.Blocks, want) {
 		t.Fatalf("blocks = %#v\nwant %#v", resp.Blocks, want)
+	}
+	if !reflect.DeepEqual(resp.Images(), []ImageBlock{image}) {
+		t.Fatalf("images = %#v", resp.Images())
 	}
 }
 
@@ -91,9 +99,10 @@ func TestCollectorRejectsLifecycleViolations(t *testing.T) {
 	}{
 		{"start out of order", []Event{BlockStart{Index: 1, Block: TextBlock{}}}, "started out of order"},
 		{"start twice", []Event{start, start}, "started out of order"},
-		{"unsupported block", []Event{BlockStart{Index: 0, Block: ImageBlock{}}}, "does not support"},
+		{"unsupported block", []Event{BlockStart{Index: 0, Block: ToolResultBlock{}}}, "does not support"},
 		{"delta before start", []Event{TextDelta{Index: 0, Text: "x"}}, "was not started"},
 		{"wrong delta kind", []Event{start, ReasoningDelta{Index: 0, Text: "x"}}, "is text, not reasoning"},
+		{"image delta", []Event{BlockStart{Index: 0, Block: ImageBlock{}}, TextDelta{Index: 0, Text: "x"}}, "is image, not text"},
 		{"delta after end", []Event{start, BlockEnd{Index: 0}, TextDelta{Index: 0, Text: "x"}}, "already ended"},
 		{"end twice", []Event{start, BlockEnd{Index: 0}, BlockEnd{Index: 0}}, "already ended"},
 		{"end kind mismatch", []Event{start, BlockEnd{Index: 0, Block: ReasoningBlock{}}}, "does not match"},

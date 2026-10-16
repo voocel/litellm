@@ -61,6 +61,7 @@ func TestCallThroughTheGateway(t *testing.T) {
 	blocks := []litellm.Block{
 		litellm.ReasoningBlock{Text: "let me look", State: state},
 		litellm.TextBlock{Text: "reading", State: state},
+		litellm.ImageBlock{Data: []byte("png"), MIME: "image/png", State: state},
 		litellm.ToolUseBlock{ID: "c1", Name: "read", Arguments: `{"path":"a.go"}`, State: state},
 	}
 	upstream := litellmtest.New(litellmtest.Reply{Blocks: blocks, Usage: litellm.Usage{InputTokens: 10, OutputTokens: 4}})

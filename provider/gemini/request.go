@@ -139,6 +139,8 @@ func convertBlocks(blocks []litellm.Block, names map[string]string, provider str
 			if err != nil {
 				return nil, err
 			}
+			// A generated image goes back with its signature.
+			converted.ThoughtSignature = signature(b.State, provider)
 			out = append(out, converted)
 		case litellm.ReasoningBlock:
 			// Reasoning from elsewhere is sent as an unsigned thought.

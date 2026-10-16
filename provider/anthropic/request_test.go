@@ -109,6 +109,16 @@ func TestBuildRequest(t *testing.T) {
 				{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"anBn"}}]}]`},
 		},
 		{
+			// Generated images, such as Gemini's, are dropped, and so is a turn left empty.
+			name: "assistant images are dropped",
+			req: withMessages(litellm.UserText("draw"),
+				litellm.Assistant(litellm.ImageBlock{Data: []byte("png"), MIME: "image/png", State: &litellm.ProviderState{Provider: "gemini", Data: json.RawMessage(`{"thoughtSignature":"g"}`)}}),
+				litellm.Assistant(litellm.Text("done"), litellm.ImageBlock{FileURI: "gs://b/a.png"})),
+			want: map[string]string{"messages": `[
+				{"role":"user","content":[{"type":"text","text":"draw"}]},
+				{"role":"assistant","content":[{"type":"text","text":"done"}]}]`},
+		},
+		{
 			name:    "inline image without MIME",
 			req:     withMessages(litellm.User(litellm.ImageBlock{Data: []byte("png")})),
 			wantErr: "messages[0]: inline image requires MIME",

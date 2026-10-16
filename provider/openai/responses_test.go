@@ -142,6 +142,17 @@ func TestBuildResponsesRequest(t *testing.T) {
 				{"type":"input_text","text":"a.png"},
 				{"type":"input_image","image_url":"data:image/png;base64,cG5n"}]},
 			{"type":"function_call_output","call_id":"c2","output":[{"type":"input_text","text":"Tool grep is now available."}]}]}`,
+	}, {
+		// Generated images, such as Gemini's, are dropped, and so is a turn left empty.
+		name: "assistant images are dropped",
+		req: litellm.Request{Model: "m", Messages: []litellm.Message{
+			litellm.UserText("draw"),
+			litellm.Assistant(litellm.ImageBlock{Data: []byte("png"), MIME: "image/png", State: &litellm.ProviderState{Provider: "gemini", Data: json.RawMessage(`{"thoughtSignature":"g"}`)}}),
+			litellm.Assistant(litellm.Text("done"), litellm.ImageBlock{FileURI: "file-1"}),
+		}},
+		want: `{"model":"m","input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"draw"}]},
+			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}`,
 	}}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

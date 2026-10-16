@@ -39,22 +39,30 @@ func (s *stream) read(events []litellm.Event) ([]litellm.Event, error) {
 	if err := wire.ErrorField(s.name, chunk.Error); err != nil {
 		return nil, err
 	}
-	return s.events(events, chunk), nil
+	events, err = s.events(events, chunk)
+	if err != nil {
+		return nil, litellm.NewError(s.name, litellm.ErrorTypeProvider, "parse stream chunk", err)
+	}
+	return events, nil
 }
 
-func (s *stream) events(events []litellm.Event, chunk response) []litellm.Event {
+func (s *stream) events(events []litellm.Event, chunk response) ([]litellm.Event, error) {
 	if chunk.UsageMetadata != nil {
 		events = append(events, litellm.UsageEvent{Usage: convertUsage(chunk.UsageMetadata)})
 	}
 	if len(chunk.Candidates) == 0 {
 		if chunk.PromptFeedback != nil && chunk.PromptFeedback.BlockReason != "" {
-			return s.finish(events, chunk.PromptFeedback.BlockReason, wire.FinishReason(chunk.PromptFeedback.BlockReason))
+			return s.finish(events, chunk.PromptFeedback.BlockReason, wire.FinishReason(chunk.PromptFeedback.BlockReason)), nil
 		}
-		return events
+		return events, nil
 	}
 	candidate := chunk.Candidates[0]
 	for _, p := range candidate.Content.Parts {
-		switch b := partBlock(p, s.name, s.model).(type) {
+		block, err := partBlock(p, s.name, s.model)
+		if err != nil {
+			return nil, err
+		}
+		switch b := block.(type) {
 		case litellm.TextBlock:
 			events = s.extendRun(events, "text", b.Text, p.ThoughtSignature)
 		case litellm.ReasoningBlock:
@@ -69,15 +77,22 @@ func (s *stream) events(events []litellm.Event, chunk response) []litellm.Event 
 			events, index = s.blocks.Open(events, s.run, litellm.ToolUseBlock{ID: b.ID, Name: b.Name, State: b.State})
 			events = append(events, litellm.ToolUseDelta{Index: index, Arguments: b.Arguments})
 			events = s.blocks.Close(events, s.run, nil)
+		case litellm.ImageBlock:
+			// An image part is taken to arrive whole, its start carrying all
+			// of it: the API reference does not say whether a stream splits one.
+			events = s.endRun(events)
+			s.run++
+			events, _ = s.blocks.Open(events, s.run, b)
+			events = s.blocks.Close(events, s.run, nil)
 		}
 	}
 	if candidate.FinishMessage != "" {
 		events = append(events, litellm.WarningEvent{Warning: finishMessageWarning(s.name, candidate.FinishMessage)})
 	}
 	if candidate.FinishReason != "" {
-		return s.finish(events, candidate.FinishReason, wire.FinishReason(candidate.FinishReason))
+		return s.finish(events, candidate.FinishReason, wire.FinishReason(candidate.FinishReason)), nil
 	}
-	return events
+	return events, nil
 }
 
 // extendRun joins unsigned deltas, preserving every signed part's boundaries,

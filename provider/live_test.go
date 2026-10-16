@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/voocel/litellm"
+	"github.com/voocel/litellm/provider/gemini"
 	"github.com/voocel/litellm/retry"
 )
 
@@ -37,6 +39,9 @@ func TestLive(t *testing.T) {
 			}
 			for _, sc := range scenarios {
 				t.Run(sc.name, func(t *testing.T) {
+					if sc.env != "" && os.Getenv(sc.env) == "" {
+						t.Skipf("%s is not set", sc.env)
+					}
 					rec := &recorder{}
 					sc.run(t, newClient(t, tg.provider, Config{APIKey: key, BaseURL: os.Getenv(tg.urlEnv), HTTPClient: rec}), tg)
 					if record && !t.Failed() {
@@ -81,17 +86,24 @@ var targets = []target{
 	{provider: "qwen", model: "qwen3.8-max-0902", keyEnv: "QWEN_API_KEY", urlEnv: "QWEN_BASE_URL"},
 }
 
+// scenarios run against every target. A live run of one with env needs that
+// variable set; a replay does not.
 var scenarios = []struct {
 	name string
 	run  func(*testing.T, *litellm.Client, target)
+	env  string
 }{
-	{"chat", testChat},
-	{"stream", testStream},
-	{"tools", testTools},
-	{"cache", testCache},
-	{"thinking", testThinking},
-	{"structured", testStructured},
+	{"chat", testChat, ""},
+	{"stream", testStream, ""},
+	{"tools", testTools, ""},
+	{"cache", testCache, ""},
+	{"thinking", testThinking, ""},
+	{"structured", testStructured, ""},
+	{"image", testImage, imageModelEnv},
 }
+
+// imageModelEnv names the Gemini model the image scenario asks live.
+const imageModelEnv = "LITELLM_GEMINI_IMAGE_MODEL"
 
 func testChat(t *testing.T, c *litellm.Client, tg target) {
 	resp, err := c.Chat(callContext(t), request(tg, userText("Reply with the single word: pong")))
@@ -237,6 +249,38 @@ func testStructured(t *testing.T, c *litellm.Client, tg target) {
 	if err := json.Unmarshal([]byte(resp.Text()), &out); err != nil || out.Word == "" {
 		t.Fatalf("answer %q: %v", resp.Text(), err)
 	}
+}
+
+// testImage asks Gemini for an image through its native generationConfig
+// field, and checks the reply holds one. A replay answers any model.
+func testImage(t *testing.T, c *litellm.Client, tg target) {
+	if tg.provider != "gemini" {
+		t.Skip("only Gemini returns images")
+	}
+	options, err := litellm.NewProviderOptions(map[string]any{
+		gemini.ProviderOptionGenerationConfig: map[string]any{"responseModalities": []string{"TEXT", "IMAGE"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := request(tg, userText("Draw a red circle on a white background."))
+	req.Model = cmp.Or(os.Getenv(imageModelEnv), tg.model)
+	req.MaxTokens = nil // an image may take more output tokens than the scenarios' cap
+	req.ProviderOptions = options
+	resp, err := c.Chat(callContext(t), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	images := resp.Images()
+	if len(images) == 0 {
+		t.Fatalf("no image: finish %q, text %q", resp.FinishReason, resp.Text())
+	}
+	for _, image := range images {
+		if !strings.HasPrefix(image.MIME, "image/") || len(image.Data) == 0 {
+			t.Fatalf("image MIME %q, %d bytes", image.MIME, len(image.Data))
+		}
+	}
+	checkUsage(t, resp.Usage)
 }
 
 func checkAnswer(t *testing.T, resp *litellm.Response) {
