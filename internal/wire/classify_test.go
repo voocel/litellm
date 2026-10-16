@@ -55,7 +55,11 @@ func TestHTTPErrorTemporary(t *testing.T) {
 		{503, "busy", true},
 		{408, "timeout", true},
 		{529, "busy", true},
+		{520, "<!DOCTYPE html><title>origin error</title>", true}, // Cloudflare in front of a relay
+		{524, "timeout", true},
+		{526, "invalid SSL certificate", false},
 		{501, "unsupported", false},
+		{505, "http version", false},
 		{400, "bad input", false},
 		{503, `{"error":{"code":"content_filter","message":"blocked"}}`, false},
 	} {
@@ -112,6 +116,9 @@ func TestHTTPErrorCode(t *testing.T) {
 			"test: ServiceQuotaExceededException: Too many tokens per day (HTTP 400)", litellm.ErrorTypeQuota},
 		{"top-level code", 401, nil, `{"code":"InvalidApiKey","message":"Invalid API-key provided."}`,
 			"test: InvalidApiKey: Invalid API-key provided. (HTTP 401)", litellm.ErrorTypeAuth},
+		{"cdn error page", 520, nil, "<!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js\"> <![endif]-->\n<head>\n<title>relay.example | 520: Web server is\n returning an unknown error</title>\n</head><body>…</body></html>",
+			"test: relay.example | 520: Web server is returning an unknown error (HTTP 520)", litellm.ErrorTypeProvider},
+		{"plain text", 500, nil, "upstream failed", "test: upstream failed (HTTP 500)", litellm.ErrorTypeProvider},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := HTTPError("test", tc.status, tc.header, tc.body)

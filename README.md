@@ -326,7 +326,7 @@ provider, err := openai.New(openai.Config{
 })
 ```
 
-- Retried: complete 408, 429, 500, 502, 503, 504 and 529 responses, unless the body shows exhausted quota, an auth failure, content filtering or context overflow.
+- Retried: complete 408, 429 and 5xx responses but 501, 505 and Cloudflare's 525 and 526, unless the body shows exhausted quota, an auth failure, content filtering or context overflow.
 - Not retried, returning the original response or error: network failures, interrupted streams, requests whose body cannot be resent, and a `Retry-After` beyond `MaxRetryAfter` (60s by default).
 - Bedrock: the retried request reuses its SigV4 signature, which stays valid for five minutes.
 

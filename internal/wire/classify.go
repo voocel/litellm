@@ -3,7 +3,9 @@ package wire
 import (
 	"cmp"
 	"encoding/json"
+	"html"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -73,7 +75,7 @@ func parseHTTPErrorMessage(body string) (string, string) {
 	body = strings.TrimSpace(body)
 	var payload map[string]any
 	if json.Unmarshal([]byte(body), &payload) != nil {
-		return "", body
+		return "", pageTitle(body)
 	}
 
 	switch e := payload["error"].(type) {
@@ -106,6 +108,21 @@ func parseHTTPErrorMessage(body string) (string, string) {
 	default:
 		return "", body
 	}
+}
+
+var titleTag = regexp.MustCompile(`(?is)^<(?:!doctype\s+html|html).*?<title[^>]*>(.*?)</title>`)
+
+// pageTitle shortens an HTML page, the error a proxy or CDN serves in front
+// of a provider, to its title; any other body is returned as is.
+func pageTitle(body string) string {
+	m := titleTag.FindStringSubmatch(body)
+	if m == nil {
+		return body
+	}
+	if title := strings.Join(strings.Fields(html.UnescapeString(m[1])), " "); title != "" {
+		return title
+	}
+	return body
 }
 
 func stringField(m map[string]any, key string) string {
@@ -282,13 +299,15 @@ func isTemporaryHTTPError(status int, kind litellm.ErrorType) bool {
 		return false
 	}
 	switch status {
-	case http.StatusRequestTimeout, http.StatusTooManyRequests,
-		http.StatusInternalServerError, http.StatusBadGateway,
-		http.StatusServiceUnavailable, http.StatusGatewayTimeout, 529:
+	case http.StatusRequestTimeout, http.StatusTooManyRequests:
 		return true
-	default:
+	case http.StatusNotImplemented, http.StatusHTTPVersionNotSupported,
+		525, 526: // Cloudflare's failed TLS handshake and invalid origin certificate
 		return false
 	}
+	// Server faults, also those of a proxy or CDN in front of the provider,
+	// such as Cloudflare's 520–524 when the origin fails or times out.
+	return status >= 500 && status < 600
 }
 
 // FinishReason maps a vendor stop reason. An unrecognized value is

@@ -39,7 +39,8 @@ type Policy struct {
 
 // DefaultPolicy returns a conservative retry policy for complete retryable HTTP
 // responses. It does not retry network write/read errors because a POST may
-// already have been processed by the provider.
+// already have been processed by the provider. Its MaxRetryAfter of a minute
+// gives up on Cloudflare's origin timeouts (504, 521–524), which ask for two.
 func DefaultPolicy() *Policy {
 	return &Policy{
 		MaxAttempts:   3,
@@ -52,13 +53,14 @@ func DefaultPolicy() *Policy {
 
 // NewHTTPClient returns a shallow copy of base, http.DefaultClient when nil,
 // whose Transport retries, according to policy, complete responses that
-// providers report as temporary errors: 408, 429, 500, 502, 503, 504 and 529
-// statuses, except those the body shows to be exhausted quota,
-// authentication, content filter or context overflow failures. A nil policy
-// or MaxAttempts <= 1 disables retries. Only replayable request bodies are
-// resent; replayable means the bytes can be resent, not that the operation is
-// idempotent. Transport failures and response-body errors, including
-// interrupted successful streams, are never retried.
+// providers report as temporary errors: 408, 429 and 5xx statuses but 501,
+// 505 and Cloudflare's 525 and 526, except those the body shows to be
+// exhausted quota, authentication, content filter or context overflow
+// failures. A nil policy or MaxAttempts <= 1 disables retries. Only
+// replayable request bodies are resent; replayable means the bytes can be
+// resent, not that the operation is idempotent. Transport failures and
+// response-body errors, including interrupted successful streams, are never
+// retried.
 func NewHTTPClient(base *http.Client, policy *Policy) *http.Client {
 	if base == nil {
 		base = http.DefaultClient
