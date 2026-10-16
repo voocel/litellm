@@ -153,8 +153,8 @@ func TestStreamSignaturesMatchCompleteResponse(t *testing.T) {
 }
 
 // Thought images, unsigned drafts of the final one, have no block, nor has
-// inline data other than an image.
-func TestThoughtImagesAreDropped(t *testing.T) {
+// inline data other than an image, which is reported instead.
+func TestInlineDataWithoutBlock(t *testing.T) {
 	parts := []string{
 		`{"text":"plan","thought":true}`,
 		`{"inlineData":{"mimeType":"image/png","data":"ZHJhZnQ="},"thought":true}`,
@@ -177,11 +177,46 @@ func TestThoughtImagesAreDropped(t *testing.T) {
 	if !reflect.DeepEqual(want.Blocks, blocks) {
 		t.Fatalf("complete blocks = %#v", want.Blocks)
 	}
+	warnings := []litellm.Warning{{Code: "gemini.unsupported_part", Provider: "gemini", Message: `dropped inline data of type "audio/L16", which litellm does not model`}}
+	if !reflect.DeepEqual(want.Warnings, warnings) {
+		t.Fatalf("complete warnings = %#v", want.Warnings)
+	}
 	var chunks []string
 	for _, p := range parts {
 		chunks = append(chunks, `data: {"candidates":[{"content":{"parts":[`+p+`]}}]}`)
 	}
 	chunks = append(chunks, `data: {"candidates":[{"content":{"parts":[]},"finishReason":"STOP"}]}`)
+	got, err := litellm.Collect(newStream(streamResponse(strings.Join(chunks, "\n")), "gemini", "m"))
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("stream=%#v, %v\ncomplete=%#v", got, err, want)
+	}
+}
+
+// An empty unsigned thought part has no block, and a STOP needs no warning
+// for its message, as an Antigravity proxy sends both.
+func TestEmptyThoughtAndStopMessage(t *testing.T) {
+	parts := []string{
+		`{"thought":true,"text":""}`,
+		`{"functionCall":{"id":"c","name":"f","args":{}},"thoughtSignature":"s"}`,
+	}
+	const finish = `"finishReason":"STOP","finishMessage":"Model generated function call(s)."`
+	var complete response
+	if err := json.Unmarshal([]byte(`{"candidates":[{"content":{"parts":[`+strings.Join(parts, ",")+`]},`+finish+`}]}`), &complete); err != nil {
+		t.Fatal(err)
+	}
+	want, err := convertResponse(&complete, "gemini", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := []litellm.Block{litellm.ToolUseBlock{ID: "c", Name: "f", Arguments: "{}", State: signed("gemini", "m", "s")}}
+	if !reflect.DeepEqual(want.Blocks, blocks) || want.Warnings != nil {
+		t.Fatalf("complete blocks = %#v, warnings = %#v", want.Blocks, want.Warnings)
+	}
+	var chunks []string
+	for _, p := range parts {
+		chunks = append(chunks, `data: {"candidates":[{"content":{"parts":[`+p+`]}}]}`)
+	}
+	chunks = append(chunks, `data: {"candidates":[{"content":{"parts":[]},`+finish+`}]}`)
 	got, err := litellm.Collect(newStream(streamResponse(strings.Join(chunks, "\n")), "gemini", "m"))
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("stream=%#v, %v\ncomplete=%#v", got, err, want)

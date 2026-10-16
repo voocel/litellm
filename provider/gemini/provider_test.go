@@ -141,7 +141,7 @@ func TestBuildRequestPreservesRawJSON(t *testing.T) {
 		`"args":{"n":12345678901234567890}`,
 		`"response":{"ok":true}`,
 		`"parametersJsonSchema":` + schema,
-		`"responseFormat":{"text":{"mimeType":"APPLICATION_JSON","schema":` + schema,
+		`"responseMimeType":"application/json","responseJsonSchema":` + schema,
 	} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("body missing %s:\n%s", want, data)

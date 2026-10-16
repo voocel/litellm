@@ -58,7 +58,8 @@ func DefaultPolicy() *Policy {
 // exhausted quota, authentication, content filter or context overflow
 // failures. A nil policy or MaxAttempts <= 1 disables retries. Only
 // replayable request bodies are resent; replayable means the bytes can be
-// resent, not that the operation is idempotent. Transport failures and
+// resent, not that the operation is idempotent. A wait that would reach the
+// request's deadline returns the response instead. Transport failures and
 // response-body errors, including interrupted successful streams, are never
 // retried.
 func NewHTTPClient(base *http.Client, policy *Policy) *http.Client {
@@ -105,7 +106,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return resp, nil
 		}
 		delay, ok := policy.Delay(attempt, retryAfter)
-		if !ok {
+		if !ok || outlasts(req.Context(), delay) {
 			return resp, nil
 		}
 		discard(resp)
@@ -192,6 +193,13 @@ func temporary(resp *http.Response) (bool, time.Duration) {
 	}
 	e := wire.HTTPError("", resp.StatusCode, resp.Header, string(data))
 	return e.Temporary, e.RetryAfter
+}
+
+// outlasts reports whether waiting delay reaches the deadline of ctx: the
+// wait would only trade the response in hand for a deadline error.
+func outlasts(ctx context.Context, delay time.Duration) bool {
+	deadline, ok := ctx.Deadline()
+	return ok && time.Until(deadline) <= delay
 }
 
 func sleep(ctx context.Context, delay time.Duration) error {

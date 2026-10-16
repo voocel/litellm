@@ -311,7 +311,7 @@ case litellm.ErrorTypeCanceled:
 }
 ```
 
-`IsTemporaryError` reports a failure that a fresh request may avoid: rate limits, overload, network failures, a stream cut off before its end, and server faults, whether an HTTP 5xx or reported inside a stream. The HTTP status decides the type and the vendor's error code fills `Code`; messages render as `provider: code: message`. Context overflow, content filtering and exhausted quota are detected from vendor codes and messages even when a proxy rewrites the status; they are never marked temporary. `ErrorTypeTimeout` is the caller's own deadline, the context's or the HTTP client's; a server that timed out is a temporary provider error.
+`IsTemporaryError` reports a failure that a fresh request may avoid: rate limits, overload, network failures, a stream cut off before its end, and server faults, whether an HTTP 5xx or reported inside a stream. The HTTP status decides the type and the vendor's error code fills `Code`; messages render as `provider: code: message`. The error page or RFC 9457 problem document of a proxy or CDN in front of the provider gives its title, with the problem's detail, as the message. Context overflow, content filtering and exhausted quota are detected from vendor codes and messages even when a proxy rewrites the status; they are never marked temporary. `ErrorTypeTimeout` is the caller's own deadline, the context's or the HTTP client's; a server that timed out is a temporary provider error.
 
 ## Retry
 
@@ -327,7 +327,7 @@ provider, err := openai.New(openai.Config{
 ```
 
 - Retried: complete 408, 429 and 5xx responses but 501, 505 and Cloudflare's 525 and 526, unless the body shows exhausted quota, an auth failure, content filtering or context overflow.
-- Not retried, returning the original response or error: network failures, interrupted streams, requests whose body cannot be resent, and a `Retry-After` beyond `MaxRetryAfter` (60s by default).
+- Not retried, returning the original response or error: network failures, interrupted streams, requests whose body cannot be resent, a `Retry-After` beyond `MaxRetryAfter` (60s by default), and a wait that would reach the request context's deadline.
 - Bedrock: the retried request reuses its SigV4 signature, which stays valid for five minutes.
 
 A caller retrying at another layer, such as a whole stream that broke off, can pace its retries with the same `Policy`: `Policy.Delay` returns the wait before the next attempt, or reports that the server's `Retry-After` ends retrying.

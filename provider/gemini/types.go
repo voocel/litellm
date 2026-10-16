@@ -55,22 +55,15 @@ type functionResponsePart struct {
 }
 
 type generationConfig struct {
-	Temperature     *float64              `json:"temperature,omitempty"`
-	MaxOutputTokens *int                  `json:"maxOutputTokens,omitempty"`
-	TopP            *float64              `json:"topP,omitempty"`
-	StopSequences   []string              `json:"stopSequences,omitempty"`
-	ResponseFormat  *responseFormatConfig `json:"responseFormat,omitempty"`
-	ThinkingConfig  *thinkingConfig       `json:"thinkingConfig,omitempty"`
-}
-
-type responseFormatConfig struct {
-	Text textResponseFormat `json:"text"`
-}
-
-type textResponseFormat struct {
-	// The REST schema defines an enum here, unlike the legacy MIME string.
-	MimeType string          `json:"mimeType"`
-	Schema   json.RawMessage `json:"schema,omitempty"`
+	Temperature     *float64 `json:"temperature,omitempty"`
+	MaxOutputTokens *int     `json:"maxOutputTokens,omitempty"`
+	TopP            *float64 `json:"topP,omitempty"`
+	StopSequences   []string `json:"stopSequences,omitempty"`
+	// JSON output uses these rather than the newer responseFormat, which
+	// Gemini-compatible endpoints may reject.
+	ResponseMimeType   string          `json:"responseMimeType,omitempty"`
+	ResponseJSONSchema json.RawMessage `json:"responseJsonSchema,omitempty"`
+	ThinkingConfig     *thinkingConfig `json:"thinkingConfig,omitempty"`
 }
 
 type thinkingConfig struct {

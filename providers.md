@@ -95,11 +95,11 @@ Prompting is best effort, including with `Strict` set: JSON mode constrains JSON
 
 ## Gemini Request Formats
 
-The adapter uses `generateContent` and `streamGenerateContent`. JSON output maps to `generationConfig.responseFormat.text.mimeType: "APPLICATION_JSON"`; JSON Schema also sets `responseFormat.text.schema`, preserving the schema document. The MIME value follows the enum in the [REST reference](https://ai.google.dev/api/generate-content#TextResponseFormat), rather than the string used by legacy `responseMimeType`.
+The adapter uses `generateContent` and `streamGenerateContent`. JSON output maps to `generationConfig.responseMimeType: "application/json"`; JSON Schema also sets `responseJsonSchema`, preserving the schema document. Both fields are current in the [REST reference](https://ai.google.dev/api/generate-content#v1beta.GenerationConfig); the newer `responseFormat` is not used, since Gemini-compatible endpoints, such as proxies in front of Google's internal APIs, may reject it.
 
 `generationConfig.candidateCount` in `ProviderOptions` must be 1 when supplied: `litellm.Response` represents one output.
 
-Image models return images when `generationConfig.responseModalities` in `ProviderOptions` includes `"IMAGE"`. Each `inlineData` image becomes an `ImageBlock` with the decoded `Data`, its `MIME` and its signature in `State`; thought images, unsigned drafts of the final one, are dropped ([Image generation](https://ai.google.dev/gemini-api/docs/generate-content/image-generation)). A stream is taken to deliver each image part whole, which the API reference does not state. Tool results marked `IsError` always go under `functionResponse.response.error`, including JSON objects.
+Image models return images when `generationConfig.responseModalities` in `ProviderOptions` includes `"IMAGE"`. Each `inlineData` image becomes an `ImageBlock` with the decoded `Data`, its `MIME` and its signature in `State`; thought images, unsigned drafts of the final one, are dropped ([Image generation](https://ai.google.dev/gemini-api/docs/generate-content/image-generation)). Other inline data, such as a speech model's audio, is dropped with a `gemini.unsupported_part` warning. A stream is taken to deliver each image part whole, which the API reference does not state. Tool results marked `IsError` always go under `functionResponse.response.error`, including JSON objects.
 
 ## DeepSeek Request Formats
 

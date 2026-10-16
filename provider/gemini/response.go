@@ -51,11 +51,15 @@ func convertResponse(resp *response, provider, model string) (*litellm.Response,
 			out.Blocks = append(out.Blocks, b)
 		case litellm.ImageBlock:
 			out.Blocks = append(out.Blocks, b)
+		case nil:
+			if w, ok := unsupportedData(provider, p); ok {
+				out.Warnings = append(out.Warnings, w)
+			}
 		}
 	}
 	out.FinishReason, out.FinishReasonRaw = wire.FinishReason(candidate.FinishReason), candidate.FinishReason
-	if candidate.FinishMessage != "" {
-		out.Warnings = append(out.Warnings, finishMessageWarning(provider, candidate.FinishMessage))
+	if w, ok := finishMessage(provider, candidate); ok {
+		out.Warnings = append(out.Warnings, w)
 	}
 	return out, nil
 }
@@ -89,13 +93,15 @@ func partBlock(p part, provider, model string) (litellm.Block, error) {
 			id = "call_" + rand.Text() // unique across processes, as persisted history needs
 		}
 		return litellm.ToolUseBlock{ID: id, Name: p.FunctionCall.Name, Arguments: string(p.FunctionCall.Args), State: signed(provider, model, p.ThoughtSignature)}, nil
+	case text == "" && p.ThoughtSignature == "":
+		// An empty unsigned thought or text part carries nothing.
+		return nil, nil
 	case p.Thought:
 		return litellm.ReasoningBlock{Text: text, State: signed(provider, model, p.ThoughtSignature)}, nil
-	case text != "" || p.ThoughtSignature != "":
+	default:
 		// Streams may send a text run's signature in an empty text part.
 		return litellm.TextBlock{Text: text, State: signed(provider, model, p.ThoughtSignature)}, nil
 	}
-	return nil, nil
 }
 
 // signatureState is the ProviderState of a part Gemini signed.
@@ -126,10 +132,24 @@ func lastBlock[T litellm.Block](blocks []litellm.Block) (T, bool) {
 	return last, ok
 }
 
-// finishMessageWarning keeps the vendor's explanation of the finish reason,
-// such as the rejected call of MALFORMED_FUNCTION_CALL.
-func finishMessageWarning(provider, message string) litellm.Warning {
-	return litellm.Warning{Code: "gemini.finish_message", Provider: provider, Message: message}
+// finishMessage keeps the vendor's explanation of a finish other than STOP,
+// such as the rejected call of MALFORMED_FUNCTION_CALL. A STOP needs none,
+// whatever its message, such as "Model generated function call(s)."
+func finishMessage(provider string, c candidate) (litellm.Warning, bool) {
+	if c.FinishMessage == "" || c.FinishReason == "STOP" {
+		return litellm.Warning{}, false
+	}
+	return litellm.Warning{Code: "gemini.finish_message", Provider: provider, Message: c.FinishMessage}, true
+}
+
+// unsupportedData reports the inline data of a part that has no block, such
+// as a speech model's audio. A thought image, a draft of the final one, is
+// dropped without a warning.
+func unsupportedData(provider string, p part) (litellm.Warning, bool) {
+	if p.InlineData == nil || p.Thought {
+		return litellm.Warning{}, false
+	}
+	return litellm.Warning{Code: "gemini.unsupported_part", Provider: provider, Message: fmt.Sprintf("dropped inline data of type %q, which litellm does not model", p.InlineData.MimeType)}, true
 }
 
 func generatedIDWarning(provider string, tool litellm.ToolUseBlock) litellm.Warning {

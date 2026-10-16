@@ -133,6 +133,8 @@ func TestTransportWaitsAsGoogleBodySuggests(t *testing.T) {
 	}
 }
 
+// A wait the deadline would cut short ends retrying with the response, whose
+// error says more than the deadline's would; a cancelled wait is cancelled.
 func TestTransportRetryAfterRespectsContext(t *testing.T) {
 	var attempts int
 	transport := newTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -141,20 +143,35 @@ func TestTransportRetryAfterRespectsContext(t *testing.T) {
 		resp.Header.Set("Retry-After", "30")
 		return resp, nil
 	}), &Policy{MaxAttempts: 2, InitialDelay: time.Hour})
+	send := func(ctx context.Context) (*http.Response, error) {
+		attempts = 0
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://example.test", nil)
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		return transport.RoundTrip(req)
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://example.test", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
-	_, err = transport.RoundTrip(req)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("err = %v, want context deadline", err)
-	}
-	if attempts != 1 {
-		t.Fatalf("attempts = %d, want 1", attempts)
-	}
+	t.Run("deadline", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		resp, err := send(ctx)
+		if err != nil {
+			t.Fatalf("RoundTrip: %v", err)
+		}
+		defer resp.Body.Close()
+		if attempts != 1 || resp.StatusCode != http.StatusTooManyRequests {
+			t.Fatalf("attempts/status = %d/%d", attempts, resp.StatusCode)
+		}
+	})
+	t.Run("cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(10*time.Millisecond, cancel)
+		_, err := send(ctx)
+		if !errors.Is(err, context.Canceled) || attempts != 1 {
+			t.Fatalf("err = %v, attempts = %d; want cancellation after 1", err, attempts)
+		}
+	})
 }
 
 func TestTransportReturnsResponseForNonReplayableBody(t *testing.T) {

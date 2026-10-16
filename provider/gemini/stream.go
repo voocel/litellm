@@ -84,10 +84,14 @@ func (s *stream) events(events []litellm.Event, chunk response) ([]litellm.Event
 			s.run++
 			events, _ = s.blocks.Open(events, s.run, b)
 			events = s.blocks.Close(events, s.run, nil)
+		case nil:
+			if w, ok := unsupportedData(s.name, p); ok {
+				events = append(events, litellm.WarningEvent{Warning: w})
+			}
 		}
 	}
-	if candidate.FinishMessage != "" {
-		events = append(events, litellm.WarningEvent{Warning: finishMessageWarning(s.name, candidate.FinishMessage)})
+	if w, ok := finishMessage(s.name, candidate); ok {
+		events = append(events, litellm.WarningEvent{Warning: w})
 	}
 	if candidate.FinishReason != "" {
 		return s.finish(events, candidate.FinishReason, wire.FinishReason(candidate.FinishReason)), nil

@@ -84,8 +84,8 @@ func parseHTTPErrorMessage(body string) (string, string) {
 	case map[string]any:
 		meta, _ := e["metadata"].(map[string]any)
 		// OpenRouter uses a numeric code and names the failure in metadata;
-		// Anthropic names it in type alone.
-		code := cmp.Or(stringField(e, "code"), stringField(meta, "error_type"), stringField(e, "type"))
+		// Anthropic names it in type alone, Google in status.
+		code := cmp.Or(stringField(e, "code"), stringField(meta, "error_type"), stringField(e, "type"), stringField(e, "status"))
 		msg := stringField(e, "message")
 		// Aggregator gateways (OpenRouter) wrap the upstream provider's real
 		// error under error.metadata: message is a generic "Provider returned
@@ -104,7 +104,7 @@ func parseHTTPErrorMessage(body string) (string, string) {
 		}
 		return code, cmp.Or(msg, body)
 	case nil:
-		return stringField(payload, "code"), cmp.Or(stringField(payload, "message"), stringField(payload, "Message"), body)
+		return stringField(payload, "code"), cmp.Or(stringField(payload, "message"), stringField(payload, "Message"), problemMessage(payload), body)
 	default:
 		return "", body
 	}
@@ -123,6 +123,17 @@ func pageTitle(body string) string {
 		return title
 	}
 	return body
+}
+
+// problemMessage is the message of an RFC 9457 problem document, its title
+// and the detail of this occurrence, such as the JSON a CDN serves for its own
+// errors when JSON is accepted; empty for any other body.
+func problemMessage(payload map[string]any) string {
+	title, detail := stringField(payload, "title"), stringField(payload, "detail")
+	if title != "" && detail != "" {
+		return title + " — " + detail
+	}
+	return cmp.Or(title, detail)
 }
 
 func stringField(m map[string]any, key string) string {

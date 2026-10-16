@@ -244,16 +244,14 @@ func convertGenerationConfig(req *litellm.Request) *generationConfig {
 	if format := req.ResponseFormat; format != nil {
 		switch format.Type {
 		case litellm.ResponseFormatJSONObject:
-			out.ResponseFormat = &responseFormatConfig{Text: textResponseFormat{MimeType: "APPLICATION_JSON"}}
+			out.ResponseMimeType = "application/json"
 		case litellm.ResponseFormatJSONSchema:
-			out.ResponseFormat = &responseFormatConfig{Text: textResponseFormat{
-				MimeType: "APPLICATION_JSON",
-				Schema:   json.RawMessage(format.JSONSchema.Schema),
-			}}
+			out.ResponseMimeType = "application/json"
+			out.ResponseJSONSchema = json.RawMessage(format.JSONSchema.Schema)
 		}
 	}
 	if out.Temperature == nil && out.MaxOutputTokens == nil && out.TopP == nil && len(out.StopSequences) == 0 &&
-		out.ThinkingConfig == nil && out.ResponseFormat == nil {
+		out.ThinkingConfig == nil && out.ResponseMimeType == "" {
 		return nil
 	}
 	return out

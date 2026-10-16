@@ -114,10 +114,15 @@ func TestHTTPErrorCode(t *testing.T) {
 			"test: AccessDeniedException: Not authorized (HTTP 403)", litellm.ErrorTypeAuth},
 		{"bedrock quota", 400, aws("aws.bedrock#ServiceQuotaExceededException"), `{"message":"Too many tokens per day"}`,
 			"test: ServiceQuotaExceededException: Too many tokens per day (HTTP 400)", litellm.ErrorTypeQuota},
+		{"google", 429, nil, `{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}`,
+			"test: RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota). (HTTP 429)", litellm.ErrorTypeRateLimit},
 		{"top-level code", 401, nil, `{"code":"InvalidApiKey","message":"Invalid API-key provided."}`,
 			"test: InvalidApiKey: Invalid API-key provided. (HTTP 401)", litellm.ErrorTypeAuth},
 		{"cdn error page", 520, nil, "<!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js\"> <![endif]-->\n<head>\n<title>relay.example | 520: Web server is\n returning an unknown error</title>\n</head><body>…</body></html>",
 			"test: relay.example | 520: Web server is returning an unknown error (HTTP 520)", litellm.ErrorTypeProvider},
+		{"cdn problem document", 522, nil, `{"type":"https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-522/","title":"Error 522: Connection timed out","status":522,"detail":"Cloudflare could not establish a TCP connection to the origin server.","error_code":522,"error_name":"connection_timeout","retryable":true,"retry_after":120}`,
+			"test: Error 522: Connection timed out — Cloudflare could not establish a TCP connection to the origin server. (HTTP 522)", litellm.ErrorTypeProvider},
+		{"problem title", 502, nil, `{"type":"about:blank","title":"Bad Gateway","status":502}`, "test: Bad Gateway (HTTP 502)", litellm.ErrorTypeProvider},
 		{"plain text", 500, nil, "upstream failed", "test: upstream failed (HTTP 500)", litellm.ErrorTypeProvider},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
