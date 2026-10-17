@@ -58,7 +58,7 @@ Provider 可在多个 Client 间共享。`litellm.New` 接受 `WithObservers`、
 
 ## 核心模型
 
-消息与响应由有序的 `Block` 组成：`TextBlock`、`ImageBlock`、`ReasoningBlock`、`ToolUseBlock`、`ToolResultBlock`、`ToolReferenceBlock`。`Response.Blocks` 是权威内容；`Text()`、`Reasoning()`、`ToolCalls()`、`Images()` 只是视图。模型生成的图片以 `ImageBlock` 返回：Gemini 在 `ProviderOptions` 把 `generationConfig` 设为 `{"responseModalities": ["TEXT", "IMAGE"]}` 时返回图片（[详见](providers.md#gemini-request-formats)）。
+消息与响应由有序的 `Block` 组成：`TextBlock`、`ImageBlock`、`ReasoningBlock`、`ToolUseBlock`、`ToolResultBlock`、`ToolReferenceBlock`。`Response.Blocks` 是权威内容；`Text()`、`Reasoning()`、`ToolCalls()`、`Images()` 只是视图。模型生成的图片以 `ImageBlock` 返回：Gemini 在 `ProviderOptions` 把 `generationConfig` 设为 `{"responseModalities": ["TEXT", "IMAGE"]}` 时返回图片（[详见](providers.md#gemini-request-formats)），OpenAI Responses 在 `ProviderOptions` 把 `tools` 设为 `[{"type": "image_generation"}]` 时返回图片（[详见](providers.md#openai-image-generation)）。
 
 ```go
 msgs := []litellm.Message{

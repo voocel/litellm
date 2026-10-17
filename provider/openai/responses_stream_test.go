@@ -220,3 +220,50 @@ func TestResponsesStreamContentMetadataWithoutItemDone(t *testing.T) {
 	}
 	assertJSON(t, block.State.Data, `{"id":"msg_1","phase":"commentary"}`)
 }
+
+// A generated image arrives whole when its item is done, as a complete
+// response has it, with state only when response.created says the response
+// is stored; partial images pass as provider events, and a failed call warns.
+func TestResponsesStreamGeneratedImages(t *testing.T) {
+	const (
+		image  = `{"id":"ig_1","type":"image_generation_call","status":"completed","output_format":"webp","result":"cG5n"}`
+		failed = `{"id":"ig_2","type":"image_generation_call","status":"failed","error":{"message":"blocked"}}`
+		output = `[` + image + `,` + failed + `]`
+	)
+	for _, store := range []string{"true", "false"} {
+		t.Run("store "+store, func(t *testing.T) {
+			var complete responsesResponse
+			if err := json.Unmarshal([]byte(`{"status":"completed","store":`+store+`,"output":`+output+`}`), &complete); err != nil {
+				t.Fatal(err)
+			}
+			want := convertResponsesResponse(&complete, "openai", "m")
+			stream := newResponsesStream(sseBody(
+				`{"type":"response.created","sequence_number":1,"response":{"status":"in_progress","store":`+store+`,"output":[]}}`,
+				`{"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"ig_1","type":"image_generation_call","status":"in_progress"}}`,
+				`{"type":"response.image_generation_call.partial_image","sequence_number":3,"output_index":0,"item_id":"ig_1","partial_image_index":0,"partial_image_b64":"cA=="}`,
+				`{"type":"response.output_item.done","sequence_number":4,"output_index":0,"item":`+image+`}`,
+				`{"type":"response.output_item.done","sequence_number":5,"output_index":1,"item":`+failed+`}`,
+				`{"type":"response.completed","sequence_number":6,"response":{"status":"completed","store":`+store+`,"output":`+output+`}}`,
+			), "openai", "m")
+			var native []string
+			got, err := litellm.Handle(stream, func(event litellm.Event) error {
+				if e, ok := event.(litellm.ProviderEvent); ok {
+					native = append(native, e.Name)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, want) || len(want.Blocks) != 1 || len(want.Warnings) != 1 {
+				t.Fatalf("stream response:\n%#v\ncomplete response:\n%#v", got, want)
+			}
+			if stored := want.Blocks[0].(litellm.ImageBlock).State != nil; stored != (store == "true") {
+				t.Fatalf("image state %v with store %s", stored, store)
+			}
+			if !reflect.DeepEqual(native, []string{"response.created", "response.output_item.added", "response.image_generation_call.partial_image"}) {
+				t.Fatalf("provider events = %q", native)
+			}
+		})
+	}
+}

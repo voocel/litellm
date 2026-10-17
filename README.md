@@ -58,7 +58,7 @@ A provider is safe to share across clients. `litellm.New` accepts `ClientOption`
 
 ## Core Model
 
-Messages and responses use ordered `Block` values: `TextBlock`, `ImageBlock`, `ReasoningBlock`, `ToolUseBlock`, `ToolResultBlock` and `ToolReferenceBlock`. `Response.Blocks` is the canonical content; `Text()`, `Reasoning()`, `ToolCalls()` and `Images()` are views. Images a model generates arrive as `ImageBlock`s, from Gemini when `ProviderOptions` set `generationConfig` to `{"responseModalities": ["TEXT", "IMAGE"]}` ([details](providers.md#gemini-request-formats)).
+Messages and responses use ordered `Block` values: `TextBlock`, `ImageBlock`, `ReasoningBlock`, `ToolUseBlock`, `ToolResultBlock` and `ToolReferenceBlock`. `Response.Blocks` is the canonical content; `Text()`, `Reasoning()`, `ToolCalls()` and `Images()` are views. Images a model generates arrive as `ImageBlock`s: from Gemini when `ProviderOptions` set `generationConfig` to `{"responseModalities": ["TEXT", "IMAGE"]}` ([details](providers.md#gemini-request-formats)), and from OpenAI Responses when they set `tools` to `[{"type": "image_generation"}]` ([details](providers.md#openai-image-generation)).
 
 ```go
 msgs := []litellm.Message{

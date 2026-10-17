@@ -49,6 +49,7 @@ type responsesStream struct {
 	streamed  map[int]bool // function calls whose arguments arrived as deltas
 	summaries map[int]int  // last summary index per reasoning item
 	refused   bool
+	stored    bool // whether the API keeps the response, as response.created says
 	sequence  int
 }
 
@@ -63,6 +64,7 @@ func newResponsesStream(resp *http.Response, name, model string) *responsesStrea
 		tools:     make(map[int]litellm.ToolUseBlock),
 		streamed:  make(map[int]bool),
 		summaries: make(map[int]int),
+		stored:    true,
 	}
 	s.Stream = wire.NewStream(resp.Body, s.read)
 	return s
@@ -90,6 +92,10 @@ func (s *responsesStream) read(events []litellm.Event) ([]litellm.Event, error) 
 
 func (s *responsesStream) events(events []litellm.Event, e responsesEvent, raw json.RawMessage) ([]litellm.Event, error) {
 	switch e.Type {
+	case "response.created":
+		if e.Response != nil {
+			s.stored = e.Response.stored()
+		}
 	case "response.output_item.added":
 		if e.Item != nil {
 			switch e.Item.Type {
@@ -128,6 +134,17 @@ func (s *responsesStream) events(events []litellm.Event, e responsesEvent, raw j
 				block := reasoningBlock(*e.Item, s.name, s.requested)
 				events, _ = s.blocks.Open(events, itemKey(e.OutputIndex), litellm.ReasoningBlock{Summary: block.Summary})
 				return s.blocks.Close(events, itemKey(e.OutputIndex), litellm.ReasoningBlock{State: block.State}), nil
+			case "image_generation_call":
+				// The image arrives whole with its done item; the partial
+				// images before it pass as provider events.
+				if image, ok := generatedImage(*e.Item, s.name, s.requested, s.stored); ok {
+					events, _ = s.blocks.Open(events, itemKey(e.OutputIndex), image)
+					return s.blocks.Close(events, itemKey(e.OutputIndex), nil), nil
+				}
+				if e.Item.Status == "failed" {
+					return append(events, litellm.WarningEvent{Warning: imageFailure(s.name, *e.Item)}), nil
+				}
+				return events, nil
 			}
 		}
 	case "response.content_part.added":

@@ -143,7 +143,7 @@ func TestBuildResponsesRequest(t *testing.T) {
 				{"type":"input_image","image_url":"data:image/png;base64,cG5n"}]},
 			{"type":"function_call_output","call_id":"c2","output":[{"type":"input_text","text":"Tool grep is now available."}]}]}`,
 	}, {
-		// Generated images, such as Gemini's, are dropped, and so is a turn left empty.
+		// Images from elsewhere, such as Gemini's, are dropped, and so is a turn left empty.
 		name: "assistant images are dropped",
 		req: litellm.Request{Model: "m", Messages: []litellm.Message{
 			litellm.UserText("draw"),
@@ -153,6 +153,35 @@ func TestBuildResponsesRequest(t *testing.T) {
 		want: `{"model":"m","input":[
 			{"type":"message","role":"user","content":[{"type":"input_text","text":"draw"}]},
 			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}`,
+	}, {
+		// Image generation follows the function tools; its images go back as
+		// their calls, by id.
+		name: "image generation",
+		req: litellm.Request{
+			Model: "gpt-5.1", Tools: []litellm.Tool{{Name: "ping"}},
+			Messages: []litellm.Message{
+				litellm.UserText("draw"),
+				litellm.Assistant(litellm.ImageBlock{Data: []byte("png"), MIME: "image/png", State: own(`{"id":"ig_1"}`)}, litellm.Text("done")),
+			},
+			ProviderOptions: providerOptions(t, map[string]any{ProviderOptionTools: []any{map[string]any{"type": "image_generation", "quality": "low"}}}),
+		},
+		want: `{"model":"gpt-5.1","input":[
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"draw"}]},
+				{"type":"image_generation_call","id":"ig_1"},
+				{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}],
+			"tools":[{"type":"function","name":"ping","parameters":{"type":"object"}},{"type":"image_generation","quality":"low"}]}`,
+	}, {
+		// Whether an image can be found by id depends on its own response, not
+		// on the store of this request: a stored image goes back, while one from
+		// a response not stored has no id to send.
+		name: "image replay follows its own response's store",
+		req: litellm.Request{Model: "gpt-5.1", Messages: []litellm.Message{
+			litellm.Assistant(litellm.ImageBlock{Data: []byte("png"), MIME: "image/png", State: own(`{"id":"ig_1"}`)}),
+			litellm.Assistant(litellm.ImageBlock{Data: []byte("png"), MIME: "image/png"}, litellm.Text("done")),
+		}, ProviderOptions: providerOptions(t, map[string]any{ProviderOptionStore: false})},
+		want: `{"model":"gpt-5.1","store":false,"input":[
+				{"type":"image_generation_call","id":"ig_1"},
+				{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}`,
 	}}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -174,8 +203,8 @@ func TestBuildResponsesRequestErrors(t *testing.T) {
 		{"budget", "budget_tokens is not supported", litellm.Request{Thinking: &litellm.Thinking{BudgetTokens: new(1024)}}},
 		{"inline tool result image without MIME", `tool result "call_1": inline image requires MIME`, litellm.Request{Messages: []litellm.Message{litellm.ToolResult("call_1", litellm.ImageBlock{Data: []byte("png")})}}},
 		{"nested option conflict", `provider option "reasoning.summary" conflicts`, litellm.Request{Thinking: &litellm.Thinking{IncludeOutput: true}, ProviderOptions: providerOptions(t, map[string]any{ProviderOptionReasoning: map[string]any{"summary": "detailed"}})}},
-		// Hosted tools produce items litellm drops.
-		{"hosted tool option", `unsupported provider option "tools"`, litellm.Request{ProviderOptions: providerOptions(t, map[string]any{"tools": []any{map[string]any{"type": "web_search"}}})}},
+		// Hosted tools other than image generation produce items litellm drops.
+		{"hosted tool option", `hosted tool web_search is not supported`, litellm.Request{ProviderOptions: providerOptions(t, map[string]any{ProviderOptionTools: []any{map[string]any{"type": "image_generation"}, map[string]any{"type": "web_search"}}})}},
 		{"previous response option", `unsupported provider option "previous_response_id"`, litellm.Request{ProviderOptions: providerOptions(t, map[string]any{"previous_response_id": "resp_1"})}},
 	}
 	for _, test := range tests {
@@ -224,6 +253,30 @@ func TestConvertResponsesResponse(t *testing.T) {
 			Blocks:       []litellm.Block{litellm.ReasoningBlock{Text: "raw", State: state(rawText)}, litellm.TextBlock{Text: "no"}},
 			Model:        "req-model",
 			FinishReason: litellm.FinishReasonSafety, FinishReasonRaw: "completed",
+		},
+	}, {
+		name: "generated images",
+		body: `{"status":"completed","output":[
+			{"id":"ig_1","type":"image_generation_call","status":"completed","output_format":"webp","result":"cG5n","revised_prompt":"a cat"},
+			{"id":"ig_2","type":"image_generation_call","status":"failed","error":{"code":"moderation_blocked","message":"blocked"}},
+			{"id":"ig_3","type":"image_generation_call","status":"completed","result":"anBn"}]}`,
+		want: litellm.Response{
+			Blocks: []litellm.Block{
+				litellm.ImageBlock{Data: []byte("png"), MIME: "image/webp", State: state(`{"id":"ig_1"}`)},
+				litellm.ImageBlock{Data: []byte("jpg"), MIME: "image/png", State: state(`{"id":"ig_3"}`)},
+			},
+			Warnings:     []litellm.Warning{{Code: "openai.image_generation_failed", Provider: "openai", Message: "image generation failed: blocked"}},
+			Model:        "req-model",
+			FinishReason: litellm.FinishReasonStop, FinishReasonRaw: "completed",
+		},
+	}, {
+		// Replay could not find it by id.
+		name: "image of a response not stored has no state",
+		body: `{"status":"completed","store":false,"output":[{"id":"ig_1","type":"image_generation_call","status":"completed","result":"cG5n"}]}`,
+		want: litellm.Response{
+			Blocks:       []litellm.Block{litellm.ImageBlock{Data: []byte("png"), MIME: "image/png"}},
+			Model:        "req-model",
+			FinishReason: litellm.FinishReasonStop, FinishReasonRaw: "completed",
 		},
 	}, {
 		name: "incomplete",

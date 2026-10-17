@@ -13,6 +13,7 @@ import (
 type responsesResponse struct {
 	Model             string                `json:"model"`
 	Status            string                `json:"status"`
+	Store             *bool                 `json:"store"`
 	Output            []responsesOutputItem `json:"output"`
 	Usage             responsesUsage        `json:"usage"`
 	IncompleteDetails *struct {
@@ -27,6 +28,7 @@ type responsesResponse struct {
 type responsesOutputItem struct {
 	ID        string                 `json:"id"`
 	Type      string                 `json:"type"`
+	Status    string                 `json:"status"`
 	Phase     string                 `json:"phase"`
 	CallID    string                 `json:"call_id"`
 	Name      string                 `json:"name"`
@@ -35,13 +37,21 @@ type responsesOutputItem struct {
 	Summary   []struct {
 		Text string `json:"text"`
 	} `json:"summary"`
-	// Raw is the item as received, the State of reasoning items.
+	// Result is the image of an image generation call, in its OutputFormat;
+	// Error explains a failed call.
+	Result       []byte `json:"result"`
+	OutputFormat string `json:"output_format"`
+	Error        *struct {
+		Message string `json:"message"`
+	} `json:"error"`
+	// Raw is the item as received, kept for reasoning items, whose State it
+	// is.
 	Raw json.RawMessage `json:"-"`
 }
 
-// itemState is the State of text and function calls: the id of their output
-// item, which replay pairs with the reasoning before it, and a message's
-// phase.
+// itemState is the State of text, function calls and generated images: the
+// id of their output item, which replay pairs with the reasoning before it or,
+// for an image, sends alone, and a message's phase.
 type itemState struct {
 	ID    string `json:"id,omitempty"`
 	Phase string `json:"phase,omitempty"`
@@ -56,12 +66,20 @@ func (s itemState) state(provider, model string) *litellm.ProviderState {
 	return wire.NewState(provider, model, s)
 }
 
+// stored reports whether the API keeps the response, as it does unless it
+// says otherwise: store defaults to true.
+func (r *responsesResponse) stored() bool {
+	return r.Store == nil || *r.Store
+}
+
 func (i *responsesOutputItem) UnmarshalJSON(data []byte) error {
 	type plain responsesOutputItem
 	if err := json.Unmarshal(data, (*plain)(i)); err != nil {
 		return err
 	}
-	i.Raw = append(json.RawMessage(nil), data...)
+	if i.Type == "reasoning" {
+		i.Raw = append(json.RawMessage(nil), data...)
+	}
 	return nil
 }
 
@@ -110,6 +128,12 @@ func convertResponsesResponse(resp *responsesResponse, provider, model string) *
 			})
 		case "reasoning":
 			out.Blocks = append(out.Blocks, reasoningBlock(item, provider, model))
+		case "image_generation_call":
+			if image, ok := generatedImage(item, provider, model, resp.stored()); ok {
+				out.Blocks = append(out.Blocks, image)
+			} else if item.Status == "failed" {
+				out.Warnings = append(out.Warnings, imageFailure(provider, item))
+			}
 		}
 	}
 	reason := ""
@@ -137,6 +161,30 @@ func reasoningBlock(item responsesOutputItem, provider, model string) litellm.Re
 		return litellm.ReasoningBlock{Text: strings.Join(texts, ""), State: state}
 	}
 	return litellm.ReasoningBlock{Text: strings.Join(summaries, "\n"), Summary: true, State: state}
+}
+
+// generatedImage maps the image of an image generation call; a call without
+// one, such as a failed call, has none. The call's id is its State only when
+// the API stored the response, where replay finds the image by that id.
+func generatedImage(item responsesOutputItem, provider, model string, stored bool) (litellm.ImageBlock, bool) {
+	if len(item.Result) == 0 {
+		return litellm.ImageBlock{}, false
+	}
+	image := litellm.ImageBlock{Data: item.Result, MIME: "image/" + cmp.Or(item.OutputFormat, "png")}
+	if stored {
+		image.State = itemState{ID: item.ID}.state(provider, model)
+	}
+	return image, true
+}
+
+// imageFailure reports an image generation call that failed, such as one
+// moderation blocked.
+func imageFailure(provider string, item responsesOutputItem) litellm.Warning {
+	message := "image generation failed"
+	if item.Error != nil {
+		message += ": " + item.Error.Message
+	}
+	return litellm.Warning{Code: "openai.image_generation_failed", Provider: provider, Message: message}
 }
 
 func contentPartBlock(part responsesContentPart) (litellm.TextBlock, bool, bool) {

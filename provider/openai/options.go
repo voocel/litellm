@@ -3,10 +3,11 @@ package openai
 // ProviderOptions are native request fields of the selected API, copied into
 // the body as is. An option naming a generated object (such as Responses
 // "text" or "reasoning") is merged into it. Responses options that add output
-// litellm does not model, hosted tools and server-side compaction, are not
-// offered, as their items would drop out of the conversation; nor is
-// previous_response_id, as a Response carries no id. Results reported beside
-// the output, such as moderation scores, are in Response.Raw when captured.
+// litellm does not model, hosted tools other than image generation and
+// server-side compaction, are not offered, as their items would drop out of
+// the conversation; nor is previous_response_id, as a Response carries no id.
+// Results reported beside the output, such as moderation scores, are in
+// Response.Raw when captured.
 const (
 	ProviderOptionFrequencyPenalty     = "frequency_penalty"
 	ProviderOptionPresencePenalty      = "presence_penalty"
@@ -45,6 +46,10 @@ const (
 	// ProviderOptionReasoning is merged into the generated reasoning object,
 	// e.g. {"summary": "auto"}.
 	ProviderOptionReasoning = "reasoning"
+	// ProviderOptionTools adds hosted tools after the function tools. Only
+	// image generation is accepted, e.g. [{"type": "image_generation"}]: its
+	// images arrive as ImageBlocks.
+	ProviderOptionTools = "tools"
 )
 
 // chatOptions and responsesOptions are sorted, as Capabilities lists them.
@@ -64,6 +69,6 @@ var responsesOptions = []string{
 	ProviderOptionPrompt, ProviderOptionPromptCacheKey, ProviderOptionPromptCacheOptions,
 	ProviderOptionPromptCacheRetention, ProviderOptionReasoning, ProviderOptionSafetyIdentifier,
 	ProviderOptionServiceTier, ProviderOptionStore, ProviderOptionStreamOptions,
-	ProviderOptionText, ProviderOptionTopLogprobs, ProviderOptionTruncation,
-	ProviderOptionUser,
+	ProviderOptionText, ProviderOptionTools, ProviderOptionTopLogprobs,
+	ProviderOptionTruncation, ProviderOptionUser,
 }

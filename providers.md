@@ -66,7 +66,7 @@ The replay rule is the same for every adapter: portable content (text, reasoning
 | Anthropic | thinking: `{"type":"thinking","signature":…}`, redacted: `{"type":"redacted_thinking","data":…}` | dropped: thinking needs a Claude signature |
 | Bedrock | `{"signature":…}` or `{"redactedContent":…}`, `{}` when unsigned | dropped, as is reasoning from another Bedrock model: model families reject each other's |
 | Gemini | `{"thoughtSignature":…}` on text, thought, function call and image blocks | sent as an unsigned thought |
-| OpenAI Responses | reasoning: the `reasoning` item; text: `{"id":…,"phase":…}`; tool calls: `{"id":…}` | dropped: an input reasoning item needs its API-assigned id |
+| OpenAI Responses | reasoning: the `reasoning` item; text: `{"id":…,"phase":…}`; tool calls and generated images: `{"id":…}` | dropped: an input reasoning item needs its API-assigned id |
 | MiniMax, OpenRouter | reasoning: the merged `reasoning_details` array | `Text` goes to the text reasoning field |
 | OpenAI Chat | none | dropped, as is its own: OpenAI's API defines no reasoning field |
 | other Chat Completions | none | `Text` goes to the first reasoning field above |
@@ -75,7 +75,7 @@ The replay rule is the same for every adapter: portable content (text, reasoning
 - **Gemini** requires a signature on the first function call of each model turn. A turn whose first call has none, such as one from another provider, gets the documented placeholder `skip_thought_signature_validator`, sent as that literal string. Signed text and thought parts retain their boundaries and never merge with neighboring parts, including a stream's trailing empty signature part. See [Thought signatures](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures).
 - **DeepSeek** requires the full `reasoning_content` of all previous assistant turns whenever a request carries `tools`, including turns without tool calls. Append `litellm.Assistant(resp.Blocks...)` to history after both `Chat` and collected streams. Without tools, DeepSeek ignores replayed reasoning. See [Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode/).
 - **MiniMax, OpenRouter** stream `reasoning_details` in fragments; they are merged into the entries a non-streaming response returns.
-- **Images in assistant messages**, such as those Gemini generates, are sent only by Gemini, with their signatures; the other adapters drop them, as their assistant turns carry no images.
+- **Images in assistant messages** go back only to the vendor that generated them: Gemini sends them inline with their signatures, and OpenAI Responses by the id of their image generation call ([details](#openai-image-generation)). The other adapters drop them, as their assistant turns carry no images.
 - Empty text is not sent, and a message left with nothing to send, such as one holding only reasoning the target cannot carry, is omitted.
 - A `ProviderState` with an empty `Provider` or invalid JSON `Data` fails validation.
 
@@ -180,6 +180,23 @@ known, so replay state matches non-streaming replies.
 completed reply and rejects background jobs before sending a request; the SDK
 does not expose background job polling or stream resumption.
 
+## OpenAI Image Generation
+
+With `APIResponses`, the `tools` option adds the `image_generation` tool after
+the function tools, e.g. `[{"type": "image_generation", "quality": "low"}]`;
+other hosted tools are refused. Each completed `image_generation_call` becomes
+an `ImageBlock` with the decoded `Data` and a `MIME` from `output_format`
+(`image/png` when absent); a failed call, such as one moderation blocked,
+gives an `openai.image_generation_failed` warning instead. A stream delivers
+each image whole when its item is done; partial images, which the tool's
+`partial_images` asks for, pass as `ProviderEvent`s. Replay sends a generated
+image as its `image_generation_call` with the id alone, as the guide's
+multi-turn editing does, and the API finds the image in the stored response.
+So the id is the image's `State` only when the response that generated it
+was stored, as its `store` field reports (stored unless `store: false`); an
+image without it is dropped from replay, whatever the `store` of the
+replaying request. See [Image generation](https://developers.openai.com/api/docs/guides/tools-image-generation).
+
 ## Tool Results
 
 A `ToolResultBlock` holds text, images and tool references on every provider:
@@ -206,4 +223,4 @@ A stream that ends before the vendor's terminal event (`message_stop`, a finish 
 
 `ProviderOptions` carry native wire fields: each key is a top-level field of the vendor's request body. Keys are checked against the adapter's list and rejected when unknown, except in `compat`, which passes every key through. When a key names a field the adapter also generates, an object is merged into it and an array is appended to it; any other collision is an error. Generated JSON outside the merged objects is sent byte for byte, so schema property order is kept. The constants in each provider package name the accepted keys.
 
-Options whose output litellm drops are not offered: Anthropic server tools (`tools`), `mcp_servers`, `container` and `context_management`; OpenAI Responses hosted tools (`tools`), `max_tool_calls`, server-side compaction (`context_management`) and `previous_response_id`, which a `Response` carries no id for.
+Options whose output litellm drops are not offered: Anthropic server tools (`tools`), `mcp_servers`, `container` and `context_management`; OpenAI Responses hosted tools other than `image_generation`, `max_tool_calls`, server-side compaction (`context_management`) and `previous_response_id`, which a `Response` carries no id for.

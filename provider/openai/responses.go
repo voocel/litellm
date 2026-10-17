@@ -65,6 +65,9 @@ func buildResponsesRequest(req *litellm.Request, provider string, stream bool) (
 	if err := wire.CheckOptions(opts, responsesOptions); err != nil {
 		return nil, err
 	}
+	if err := checkHostedTools(opts[ProviderOptionTools]); err != nil {
+		return nil, err
+	}
 	// Chat returns a completed reply; it has no asynchronous job handle or
 	// polling API. A background stream still delivers the terminal result.
 	if !stream && opts[ProviderOptionBackground] == true {
@@ -159,6 +162,18 @@ func responsesFormat(format *litellm.ResponseFormat) map[string]any {
 	return out
 }
 
+// checkHostedTools accepts image generation alone among the hosted tools of the
+// tools option: the items of the others have no block.
+func checkHostedTools(option any) error {
+	tools, _ := option.([]any)
+	for _, tool := range tools {
+		if t, _ := tool.(map[string]any); t["type"] != "image_generation" {
+			return fmt.Errorf("provider option %q: hosted tool %v is not supported; only image_generation is", ProviderOptionTools, t["type"])
+		}
+	}
+	return nil
+}
+
 func responsesTools(tools []litellm.Tool) []any {
 	out := make([]any, 0, len(tools))
 	for _, tool := range tools {
@@ -188,7 +203,7 @@ func responsesInput(messages []litellm.Message, provider, model string) (string,
 		case litellm.RoleUser:
 			items, err = appendMessage(items, "user", msg.Blocks)
 		case litellm.RoleAssistant:
-			items, err = appendAssistant(items, wire.WithoutAssistantImages(msg), provider, model)
+			items, err = appendAssistant(items, msg.Blocks, provider, model)
 		case litellm.RoleTool:
 			items, err = appendToolResults(items, msg.Blocks)
 		}
@@ -268,6 +283,10 @@ func inputContent(blocks []litellm.Block) ([]map[string]any, error) {
 // model is replayed whole, reasoning items and ids included; any other is sent
 // as plain content, without reasoning or ids. Reasoning from other providers
 // is never sent: an input reasoning item needs the id the API assigned to it.
+// A generated image is sent as its image generation call, by id alone, as
+// multi-turn editing does: the API finds the image in the stored response.
+// Images without that id, from a response not stored or from elsewhere, have
+// no place in an assistant turn.
 func appendAssistant(items []any, blocks []litellm.Block, provider, model string) ([]any, error) {
 	replay := slices.ContainsFunc(blocks, func(block litellm.Block) bool {
 		b, ok := block.(litellm.ReasoningBlock)
@@ -287,6 +306,10 @@ func appendAssistant(items []any, blocks []litellm.Block, provider, model string
 		case litellm.ReasoningBlock:
 			if item, ok := wire.ReadState[json.RawMessage](b.State, provider); ok && replay {
 				items = append(items, item)
+			}
+		case litellm.ImageBlock:
+			if state, ok := wire.ReadState[itemState](b.State, provider); ok && state.ID != "" {
+				items = append(items, map[string]any{"type": "image_generation_call", "id": state.ID})
 			}
 		case litellm.ToolUseBlock:
 			call := map[string]any{"type": "function_call", "call_id": b.ID, "name": b.Name, "arguments": b.Arguments}
